@@ -1,13 +1,182 @@
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { publishToPage, cloneAdCampaign } from "@/lib/facebook";
 import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 
-// Ad creative creation retries with backoff (freshly-published videos aren't
-// immediately ad-eligible) — default 10s Vercel timeout isn't enough.
-export const maxDuration = 60;
+// Ads are created ~1 minute after the post publishes (see waitUntil below) so
+// this route itself returns fast — maxDuration just needs to cover the
+// synchronous publish + the deferred work waitUntil keeps alive afterward.
+export const maxDuration = 90;
+
+interface AutoAdsParams {
+  postId: string;
+  pageId: string;
+  fbPostId: string;
+  fbConnAccessToken: string;
+  templateId?: string;
+  adAccountId?: string;
+  ageMinFrom?: string; ageMinTo?: string;
+  ageMaxFrom?: string; ageMaxTo?: string;
+  gender?: string;
+}
+
+// Runs ~1 minute after a successful publish (scheduled via waitUntil so the
+// HTTP response doesn't block on it) — a post just published, especially
+// video, often isn't immediately ad-eligible on Facebook's side yet.
+async function runAutoAds(p: AutoAdsParams): Promise<void> {
+  let autoAdsResult: { campaignId?: string; pickedAccount?: string; error?: string } | null = null;
+  try {
+    const configs = await prisma.appConfig.findMany({
+      where: { key: { in: ["autoAdsTemplateId", "autoAdsAdAccountId", "autoAdsStatus",
+                           "autoAdsAgeMinFrom", "autoAdsAgeMinTo", "autoAdsAgeMaxFrom", "autoAdsAgeMaxTo", "autoAdsGender",
+                           "autoAdsBudgetMin", "autoAdsBudgetMax", "autoAdsBudgetStep"] } },
+    });
+    const cfg: Record<string, string> = {};
+    for (const c of configs) cfg[c.key] = c.value;
+
+    const batchTemplateId = p.templateId ?? null;
+    const adsEnabled = !!batchTemplateId;
+    if (!adsEnabled) {
+      autoAdsResult = { error: "Bỏ qua tạo ads: không có templateId (cột \"Chạy ads\" tắt hoặc chưa chọn template)." };
+    } else if (!p.fbPostId) {
+      autoAdsResult = { error: "Bỏ qua tạo ads: không lấy được fbPostId sau khi đăng bài." };
+    } else if (!p.pageId) {
+      autoAdsResult = { error: "Bỏ qua tạo ads: thiếu pageId." };
+    }
+    if (adsEnabled && batchTemplateId && p.fbPostId && p.pageId) {
+      // --- Load multi-account rows ---
+      interface AdsAccountRow {
+        id: string; accountId: string; weight: number; assignedCount: number;
+        budgetMin: string; budgetMax: string; budgetStep: string; templateId: string | null;
+      }
+      const accountRows = await prisma.$queryRawUnsafe<AdsAccountRow[]>(
+        `SELECT * FROM "AutoAdsAccount" ORDER BY "sortOrder" ASC, "id" ASC`
+      );
+
+      let pickedAccountId: string;
+      let pickedBudgetMin: number;
+      let pickedBudgetMax: number;
+      let pickedBudgetStep: number;
+      let pickedTemplateId: string;
+      let pickedRowId: string | null = null;
+
+      const rowOverride = p.adAccountId ? accountRows.find(r => r.accountId === p.adAccountId) : undefined;
+
+      if (rowOverride) {
+        pickedAccountId  = rowOverride.accountId;
+        pickedBudgetMin  = Number(rowOverride.budgetMin)  || 100000;
+        pickedBudgetMax  = Number(rowOverride.budgetMax)  || 200000;
+        pickedBudgetStep = Number(rowOverride.budgetStep) || 10000;
+        pickedTemplateId = rowOverride.templateId ?? cfg.autoAdsTemplateId;
+        pickedRowId      = rowOverride.id;
+      } else if (accountRows.length > 0) {
+        // Deficit-based weighted round-robin:
+        // Pick the account with the largest gap between expected share and actual assigned count.
+        const totalWeight = accountRows.reduce((s, r) => s + (Number(r.weight) || 1), 0);
+        const totalAssigned = accountRows.reduce((s, r) => s + (Number(r.assignedCount) || 0), 0);
+
+        let maxDeficit = -Infinity;
+        let picked = accountRows[0];
+        for (const row of accountRows) {
+          const expectedShare = (Number(row.weight) / totalWeight) * (totalAssigned + 1);
+          const deficit = expectedShare - (Number(row.assignedCount) || 0);
+          if (deficit > maxDeficit) { maxDeficit = deficit; picked = row; }
+        }
+
+        pickedAccountId  = picked.accountId;
+        pickedBudgetMin  = Number(picked.budgetMin)  || 100000;
+        pickedBudgetMax  = Number(picked.budgetMax)  || 200000;
+        pickedBudgetStep = Number(picked.budgetStep) || 10000;
+        pickedTemplateId = picked.templateId ?? cfg.autoAdsTemplateId;
+        pickedRowId      = picked.id;
+        console.log(`[auto-ads] picked account: ${pickedAccountId} (deficit ${maxDeficit.toFixed(2)}, assigned ${picked.assignedCount}/${totalAssigned + 1})`);
+      } else {
+        if (!cfg.autoAdsAdAccountId) {
+          autoAdsResult = { error: "No ad account configured" };
+          throw new Error("No ad account configured for auto-ads");
+        }
+        pickedAccountId  = cfg.autoAdsAdAccountId;
+        pickedBudgetMin  = Number(cfg.autoAdsBudgetMin  ?? 100000);
+        pickedBudgetMax  = Number(cfg.autoAdsBudgetMax  ?? 200000);
+        pickedBudgetStep = Number(cfg.autoAdsBudgetStep ?? 10000);
+        pickedTemplateId = cfg.autoAdsTemplateId;
+      }
+
+      const rawAdAccountId = pickedAccountId.replace(/^act_/, "");
+      const adAccount = await prisma.fbAdAccount.findUnique({ where: { accountId: pickedAccountId } });
+      const adsAccessToken = adAccount?.accessToken ?? p.fbConnAccessToken;
+
+      const postFull = await prisma.post.findUnique({
+        where: { id: p.postId },
+        include: { extractedLinks: { orderBy: { order: "asc" } } },
+      });
+      const affUrl = postFull?.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
+      let campaignName = "";
+      try {
+        const parsed = new URL(affUrl);
+        campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
+      } catch { /* ignore */ }
+
+      const dailyBudget = String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
+
+      const ageMinFrom = Number(p.ageMinFrom ?? cfg.autoAdsAgeMinFrom ?? 18);
+      const ageMinTo   = Number(p.ageMinTo   ?? cfg.autoAdsAgeMinTo   ?? 25);
+      const ageMaxFrom = Number(p.ageMaxFrom ?? cfg.autoAdsAgeMaxFrom ?? 45);
+      const ageMaxTo   = Number(p.ageMaxTo   ?? cfg.autoAdsAgeMaxTo   ?? 65);
+      const ageMin = randomInteger(ageMinFrom, ageMinTo);
+      const ageMax = randomInteger(Math.max(ageMinTo, ageMaxFrom), ageMaxTo);
+      const effGender = p.gender ?? cfg.autoAdsGender ?? "";
+
+      const finalTemplateId = batchTemplateId ?? pickedTemplateId;
+
+      const result = await cloneAdCampaign(
+        finalTemplateId,
+        p.pageId,
+        p.fbPostId,
+        rawAdAccountId,
+        adsAccessToken,
+        dailyBudget,
+        p.fbConnAccessToken,
+        campaignName || undefined,
+        ageMin,
+        ageMax,
+        effGender,
+        (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED"
+      );
+      autoAdsResult = { campaignId: result.campaignId, pickedAccount: pickedAccountId };
+      console.log("[auto-ads] created campaign:", result.campaignId, "budget:", dailyBudget);
+
+      await prisma.$executeRawUnsafe(
+        `UPDATE "Post" SET "adCampaignId" = $1, "adBudget" = $2, "adAgeMin" = $3, "adAgeMax" = $4, "adGender" = $5 WHERE "id" = $6`,
+        result.campaignId, dailyBudget, ageMin, ageMax, cfg.autoAdsGender ?? "", p.postId
+      );
+
+      if (pickedRowId) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "AutoAdsAccount" SET "assignedCount" = "assignedCount" + 1 WHERE "id" = $1`,
+          pickedRowId
+        );
+      }
+    }
+  } catch (adsErr) {
+    console.error("[auto-ads] failed:", adsErr);
+    if (!autoAdsResult?.error) {
+      autoAdsResult = { error: adsErr instanceof Error ? adsErr.message : "auto-ads failed" };
+    }
+  }
+
+  // Post itself published fine even if ads failed — persist the ads error
+  // onto the post (without touching status="done") so it's inspectable
+  // later instead of only existing in server logs.
+  if (autoAdsResult?.error) {
+    await prisma.post.update({ where: { id: p.postId }, data: { errorMsg: `[ads] ${autoAdsResult.error}` } }).catch(() => {});
+  } else if (autoAdsResult?.campaignId) {
+    await prisma.post.update({ where: { id: p.postId }, data: { errorMsg: null } }).catch(() => {});
+  }
+}
 
 export async function POST(
   req: Request,
@@ -153,167 +322,28 @@ export async function POST(
       data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null },
     });
 
-    // Auto-ads: create campaign immediately if configured
-    let autoAdsResult: { campaignId?: string; pickedAccount?: string; error?: string } | null = null;
-    try {
-      const configs = await prisma.appConfig.findMany({
-        where: { key: { in: ["autoAdsTemplateId", "autoAdsAdAccountId", "autoAdsStatus",
-                             "autoAdsAgeMinFrom", "autoAdsAgeMinTo", "autoAdsAgeMaxFrom", "autoAdsAgeMaxTo", "autoAdsGender",
-                             "autoAdsBudgetMin", "autoAdsBudgetMax", "autoAdsBudgetStep"] } },
-      });
-      const cfg: Record<string, string> = {};
-      for (const c of configs) cfg[c.key] = c.value;
-
-      // Only run ads if templateId explicitly passed (runAds=true at publish time)
-      const batchTemplateId = body.templateId ?? null;
-      const adsEnabled = !!batchTemplateId;
-      const effectiveTemplateId = batchTemplateId;
-      if (!adsEnabled) {
-        autoAdsResult = { error: "Bỏ qua tạo ads: không có templateId (cột \"Chạy ads\" tắt hoặc chưa chọn template)." };
-      } else if (!fbPostId) {
-        autoAdsResult = { error: "Bỏ qua tạo ads: không lấy được fbPostId sau khi đăng bài." };
-      } else if (!pageId) {
-        autoAdsResult = { error: "Bỏ qua tạo ads: thiếu pageId." };
-      }
-      if (adsEnabled && effectiveTemplateId && fbPostId && pageId) {
-        // --- Load multi-account rows ---
-        interface AdsAccountRow {
-          id: string; accountId: string; weight: number; assignedCount: number;
-          budgetMin: string; budgetMax: string; budgetStep: string; templateId: string | null;
-        }
-        const accountRows = await prisma.$queryRawUnsafe<AdsAccountRow[]>(
-          `SELECT * FROM "AutoAdsAccount" ORDER BY "sortOrder" ASC, "id" ASC`
-        );
-
-        // Determine which account + budget to use
-        let pickedAccountId: string;
-        let pickedBudgetMin: number;
-        let pickedBudgetMax: number;
-        let pickedBudgetStep: number;
-        let pickedTemplateId: string;
-        let pickedRowId: string | null = null;
-
-        const rowOverride = body.adAccountId ? accountRows.find(r => r.accountId === body.adAccountId) : undefined;
-
-        if (rowOverride) {
-          // Explicit TKQC chosen client-side (e.g. per-row pick in the batch table) — use it directly.
-          pickedAccountId  = rowOverride.accountId;
-          pickedBudgetMin  = Number(rowOverride.budgetMin)  || 100000;
-          pickedBudgetMax  = Number(rowOverride.budgetMax)  || 200000;
-          pickedBudgetStep = Number(rowOverride.budgetStep) || 10000;
-          pickedTemplateId = rowOverride.templateId ?? cfg.autoAdsTemplateId;
-          pickedRowId      = rowOverride.id;
-        } else if (accountRows.length > 0) {
-          // Deficit-based weighted round-robin:
-          // Pick the account with the largest gap between expected share and actual assigned count.
-          // This guarantees exact ratios over any number of posts, regardless of rounding.
-          const totalWeight = accountRows.reduce((s, r) => s + (Number(r.weight) || 1), 0);
-          const totalAssigned = accountRows.reduce((s, r) => s + (Number(r.assignedCount) || 0), 0);
-
-          let maxDeficit = -Infinity;
-          let picked = accountRows[0];
-          for (const row of accountRows) {
-            const expectedShare = (Number(row.weight) / totalWeight) * (totalAssigned + 1);
-            const deficit = expectedShare - (Number(row.assignedCount) || 0);
-            if (deficit > maxDeficit) { maxDeficit = deficit; picked = row; }
-          }
-
-          pickedAccountId  = picked.accountId;
-          pickedBudgetMin  = Number(picked.budgetMin)  || 100000;
-          pickedBudgetMax  = Number(picked.budgetMax)  || 200000;
-          pickedBudgetStep = Number(picked.budgetStep) || 10000;
-          pickedTemplateId = picked.templateId ?? cfg.autoAdsTemplateId;
-          pickedRowId      = picked.id;
-          console.log(`[auto-ads] picked account: ${pickedAccountId} (deficit ${maxDeficit.toFixed(2)}, assigned ${picked.assignedCount}/${totalAssigned + 1})`);
-        } else {
-          // Fallback: old single-account config
-          if (!cfg.autoAdsAdAccountId) {
-            autoAdsResult = { error: "No ad account configured" };
-            throw new Error("No ad account configured for auto-ads");
-          }
-          pickedAccountId  = cfg.autoAdsAdAccountId;
-          pickedBudgetMin  = Number(cfg.autoAdsBudgetMin  ?? 100000);
-          pickedBudgetMax  = Number(cfg.autoAdsBudgetMax  ?? 200000);
-          pickedBudgetStep = Number(cfg.autoAdsBudgetStep ?? 10000);
-          pickedTemplateId = cfg.autoAdsTemplateId;
-        }
-
-        const rawAdAccountId = pickedAccountId.replace(/^act_/, "");
-        const adAccount = await prisma.fbAdAccount.findUnique({ where: { accountId: pickedAccountId } });
-        const adsAccessToken = adAccount?.accessToken ?? fbConn.accessToken;
-
-        // Extract campaign name from utm_content
-        const postFull = await prisma.post.findUnique({
-          where: { id: params.id },
-          include: { extractedLinks: { orderBy: { order: "asc" } } },
-        });
-        const affUrl = postFull?.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
-        let campaignName = "";
-        try {
-          const parsed = new URL(affUrl);
-          campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
-        } catch { /* ignore */ }
-
-        // Per-TKQC budget wins; batch panel is fallback (already stored in row defaults)
-        const dailyBudget = String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
-
-        // Randomize age — body overrides AppConfig
-        const ageMinFrom = Number(body.ageMinFrom ?? cfg.autoAdsAgeMinFrom ?? 18);
-        const ageMinTo   = Number(body.ageMinTo   ?? cfg.autoAdsAgeMinTo   ?? 25);
-        const ageMaxFrom = Number(body.ageMaxFrom ?? cfg.autoAdsAgeMaxFrom ?? 45);
-        const ageMaxTo   = Number(body.ageMaxTo   ?? cfg.autoAdsAgeMaxTo   ?? 65);
-        const ageMin = randomInteger(ageMinFrom, ageMinTo);
-        const ageMax = randomInteger(Math.max(ageMinTo, ageMaxFrom), ageMaxTo);
-        const effGender = body.gender ?? cfg.autoAdsGender ?? "";
-
-        // Use body templateId for batch, else picked from account row
-        const finalTemplateId = batchTemplateId ?? pickedTemplateId;
-
-        const result = await cloneAdCampaign(
-          finalTemplateId,
-          pageId,
-          fbPostId,
-          rawAdAccountId,
-          adsAccessToken,
-          dailyBudget,
-          fbConn.accessToken,
-          campaignName || undefined,
-          ageMin,
-          ageMax,
-          effGender,
-          (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED"
-        );
-        autoAdsResult = { campaignId: result.campaignId, pickedAccount: pickedAccountId };
-        console.log("[auto-ads] created campaign:", result.campaignId, "budget:", dailyBudget);
-
-        // Save campaign ID + ad params to post
-        await prisma.$executeRawUnsafe(
-          `UPDATE "Post" SET "adCampaignId" = $1, "adBudget" = $2, "adAgeMin" = $3, "adAgeMax" = $4, "adGender" = $5 WHERE "id" = $6`,
-          result.campaignId, dailyBudget, ageMin, ageMax, cfg.autoAdsGender ?? "", params.id
-        );
-
-        if (pickedRowId) {
-          await prisma.$executeRawUnsafe(
-            `UPDATE "AutoAdsAccount" SET "assignedCount" = "assignedCount" + 1 WHERE "id" = $1`,
-            pickedRowId
-          );
-        }
-      }
-    } catch (adsErr) {
-      console.error("[auto-ads] failed:", adsErr);
-      if (!autoAdsResult?.error) {
-        autoAdsResult = { error: adsErr instanceof Error ? adsErr.message : "auto-ads failed" };
-      }
+    // Ads are created ~1 minute after the post publishes, in the background —
+    // this doesn't block the response. See runAutoAds's doc comment for why.
+    const adsWillRun = !!body.templateId;
+    if (adsWillRun) {
+      waitUntil(
+        new Promise<void>((resolve) => setTimeout(resolve, 60_000)).then(() =>
+          runAutoAds({
+            postId: params.id,
+            pageId,
+            fbPostId,
+            fbConnAccessToken: fbConn.accessToken,
+            templateId: body.templateId,
+            adAccountId: body.adAccountId,
+            ageMinFrom: body.ageMinFrom, ageMinTo: body.ageMinTo,
+            ageMaxFrom: body.ageMaxFrom, ageMaxTo: body.ageMaxTo,
+            gender: body.gender,
+          })
+        )
+      );
     }
 
-    // Post itself published fine even if ads failed — persist the ads error
-    // onto the post (without touching status="done") so it's inspectable
-    // later instead of only existing in server logs.
-    if (autoAdsResult?.error) {
-      await prisma.post.update({ where: { id: params.id }, data: { errorMsg: `[ads] ${autoAdsResult.error}` } }).catch(() => {});
-    }
-
-    return NextResponse.json({ ok: true, fbPostUrl, autoAds: autoAdsResult });
+    return NextResponse.json({ ok: true, fbPostUrl, autoAds: adsWillRun ? { scheduled: true } : null });
   } catch (err) {
     console.error("[publish] FULL ERROR:", JSON.stringify(err, null, 2), err);
     const msg = err instanceof Error ? err.message : (typeof err === "object" ? JSON.stringify(err) : String(err));

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import useSWR, { type KeyedMutator } from "swr";
+import useSWR, { mutate as globalMutate, type KeyedMutator } from "swr";
 import * as XLSX from "xlsx";
 import type { Post, ExtractedLink, FbConnection } from "@prisma/client";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -365,6 +365,10 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      // The create response already has the full batch — seed SWR's cache
+      // with it directly instead of letting the hook do a second GET
+      // round-trip just to re-fetch data we already have in hand.
+      globalMutate(`/api/batches/${data.batchId}`, { id: data.batchId, posts: data.posts }, false);
       setBatchId(data.batchId);
       setUrlText("");
     } catch (err: unknown) {
@@ -830,7 +834,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
     setBulkRunning(true);
     let ok = 0;
-    const adsErrors: string[] = [];
+    let adsScheduled = 0;
     for (const id of targets) {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id] ?? genRowParams(adConfig);
@@ -855,15 +859,16 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       if (res.ok) {
         ok++;
         const data = await res.json().catch(() => null);
-        if (runAdsForRow && data?.autoAds?.error) adsErrors.push(data.autoAds.error as string);
+        if (data?.autoAds?.scheduled) adsScheduled++;
       }
     }
     setBulkRunning(false);
-    if (adsErrors.length) {
-      onToast(`Đã đăng ${ok}/${targets.length} bài, nhưng ${adsErrors.length} bài LỖI TẠO ADS: ${adsErrors[0]}`, "error");
-    } else {
-      onToast(`Đã đăng ${ok}/${targets.length} bài`, "success");
-    }
+    onToast(
+      adsScheduled
+        ? `Đã đăng ${ok}/${targets.length} bài — quảng cáo sẽ tự tạo sau khoảng 1 phút (đăng ngay lúc bài vừa xong dễ bị Facebook từ chối vì chưa xử lý xong bài).`
+        : `Đã đăng ${ok}/${targets.length} bài`,
+      "success"
+    );
     setCheckedIds(new Set());
   }
 
