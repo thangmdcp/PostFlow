@@ -171,13 +171,16 @@ export async function cloneAdCampaign(
   const useCBO = !!(camp.daily_budget || camp.lifetime_budget);
 
   // 2. Create campaign
+  // is_adset_budget_sharing_enabled is a distinct, mutually-exclusive
+  // alternative to setting daily_budget directly on the campaign (classic
+  // CBO) — FB rejects the request if both are present, so it must stay
+  // false/omitted whenever we're setting an explicit campaign daily_budget.
   const campBody: Record<string, unknown> = {
     name: campaignName || `${camp.name} [PostFlow]`,
     objective: camp.objective,
     status: adStatus,
     special_ad_categories: camp.special_ad_categories ?? [],
     buying_type: "AUCTION",
-    is_adset_budget_sharing_enabled: useCBO,
     access_token: accessToken,
   };
   if (useCBO) campBody.daily_budget = dailyBudget;
