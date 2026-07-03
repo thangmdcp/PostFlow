@@ -38,6 +38,7 @@ model Post {
   adAgeMin       Int?
   adAgeMax       Int?
   adGender       String?
+  ctaHeadline    String?
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

@@ -19,6 +19,7 @@ export async function POST(
       gender?: string;
       budgetMin?: string; budgetMax?: string; budgetStep?: string;
       adAccountId?: string;
+      ctaHeadline?: string;
     };
     const { pageId } = body;
 
@@ -73,7 +74,18 @@ export async function POST(
       }
     } catch { /* ignore — default to published */ }
 
-    await prisma.post.update({ where: { id: params.id }, data: { status: "publishing", pageId } });
+    await prisma.post.update({
+      where: { id: params.id },
+      data: { status: "publishing", pageId, ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}) },
+    });
+
+    // Dark-post ads have no separate headline field in the FB creative (the
+    // ad just reuses this post's own message via object_story_id) — so the
+    // CTA phrase gets prepended directly onto the message sent to Facebook.
+    const ctaHeadline = body.ctaHeadline ?? post.ctaHeadline;
+    const captionToPost = (!publishToPageFlag && ctaHeadline)
+      ? `${ctaHeadline}\n\n${post.finalCaption}`
+      : post.finalCaption;
 
     // Auto-upload to Cloudinary if still using fbcdn URL (FB rejects its own CDN links)
     // Skip for carousel/image — FB Graph API accepts direct URLs for photos
@@ -115,7 +127,7 @@ export async function POST(
     const result = await publishToPage(
       pageId,
       fbConn.accessToken,
-      post.finalCaption,
+      captionToPost,
       mediaUrl,
       mediaType,
       post.mediaUrls ?? null,

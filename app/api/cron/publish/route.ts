@@ -86,8 +86,15 @@ export async function GET(req: Request) {
         }
       }
 
+      // Dark-post ads have no separate headline field in the FB creative (the
+      // ad just reuses this post's own message via object_story_id) — so the
+      // CTA phrase chosen at schedule time gets prepended onto the message.
+      const captionToPost = (!publishToPageFlag && post.ctaHeadline)
+        ? `${post.ctaHeadline}\n\n${post.finalCaption}`
+        : post.finalCaption;
+
       const result = await publishToPage(
-        post.pageId, fbConn.accessToken, post.finalCaption,
+        post.pageId, fbConn.accessToken, captionToPost,
         mediaUrl, mediaType, post.mediaUrls ?? null, publishToPageFlag
       );
 

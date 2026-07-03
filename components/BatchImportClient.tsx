@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
+import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import { ScheduleModeSelector, type ScheduleMode } from "@/components/ScheduleModeSelector";
 import { AdParametersForm } from "@/components/AdParametersForm";
 import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
@@ -39,15 +40,16 @@ interface BatchAdConfig {
   budgetMin: string; budgetMax: string; budgetStep: string;
 }
 
-interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; }
+interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
 
-type RandomField = "age" | "gender" | "budget" | "page" | "account";
+type RandomField = "age" | "gender" | "budget" | "page" | "account" | "cta";
 const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
   { key: "page",    label: "Random Page" },
   { key: "age",     label: "Random Tuổi" },
   { key: "gender",  label: "Random Giới tính" },
   { key: "budget",  label: "Random Ngân sách" },
   { key: "account", label: "Random TKQC" },
+  { key: "cta",     label: "Random tiêu đề CTA" },
 ];
 
 interface Props { connections: FbConnection[]; initialBatch: BatchData | null; }
@@ -58,7 +60,7 @@ function genRowParams(cfg: BatchAdConfig): RowAdParams {
   const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
   const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
   const budget = randomStep(Number(cfg.budgetMin), Number(cfg.budgetMax), Number(cfg.budgetStep));
-  return { ageMin, ageMax, budget, gender: cfg.gender };
+  return { ageMin, ageMax, budget, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
 }
 
 // Simple weighted-random TKQC account pick for the batch preview table (the
@@ -159,7 +161,7 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "thumbnail" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
+type ColKey = "status" | "thumbnail" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
@@ -175,6 +177,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "account",     label: "TKQC",          defaultWidth: 130, minWidth: 90,  defaultVisible: true },
   { key: "runAds",      label: "Chạy ads",      defaultWidth: 90,  minWidth: 75,  defaultVisible: true },
   { key: "darkOverride",label: "Đăng trang",   defaultWidth: 100, minWidth: 80,  defaultVisible: true },
+  { key: "ctaHeadline", label: "Tiêu đề CTA",   defaultWidth: 150, minWidth: 100, defaultVisible: true },
 ];
 
 const BATCH_COLS_KEY = "postflow_batch_cols_v1";
@@ -518,7 +521,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
   const [randomFieldsOpen, setRandomFieldsOpen] = useState(false);
-  const [randomFields, setRandomFields] = useState<Set<RandomField>>(new Set(["age", "gender", "budget", "page", "account"]));
+  const [randomFields, setRandomFields] = useState<Set<RandomField>>(new Set(["age", "gender", "budget", "page", "account", "cta"]));
   const randomPanelRef = useRef<HTMLDivElement>(null);
 
   // ── Sub_id export/import (Batch Custom Links) ───────────────────────────────
@@ -650,7 +653,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const targets = [...checkedIds].filter(id => readyIds.includes(id));
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     if (randomFields.size === 0) { onToast("Chọn ít nhất 1 thông số để random", "error"); return; }
-    if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget")) {
+    if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget") || randomFields.has("cta")) {
       setRowAdParams(prev => {
         const n = { ...prev };
         targets.forEach(id => {
@@ -661,6 +664,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             ageMax: randomFields.has("age") ? fresh.ageMax : cur.ageMax,
             gender: randomFields.has("gender") ? fresh.gender : cur.gender,
             budget: randomFields.has("budget") ? fresh.budget : cur.budget,
+            ctaHeadline: randomFields.has("cta") ? fresh.ctaHeadline : cur.ctaHeadline,
           };
         });
         return n;
@@ -803,9 +807,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     let ok = 0;
     for (const id of targets) {
       const pageId = rowPageId[id] || pickPage();
+      const rp = rowAdParams[id];
       const res = await fetch(`/api/posts/${id}/schedule`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined }),
+        body: JSON.stringify({
+          pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
+          ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
+        }),
       });
       if (res.ok) ok++;
     }
@@ -833,6 +841,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           pageId,
           templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
           ...(adConfig.postType === "dark" && rowOvr ? { publishToPage: true } : {}),
+          ...(adConfig.postType === "dark" && rp.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
           ...(runAdsForRow ? {
             ageMinFrom: String(rp.ageMin), ageMinTo: String(rp.ageMin),
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
@@ -1290,6 +1299,12 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       {cell("darkOverride",
         adConfig.postType === "dark" && editable
           ? <span className="text-[10px] text-slate-500">{rowOverride ? "Đăng trang" : "Chạy ẩn"}</span>
+          : <span className="text-slate-300 text-xs">–</span>
+      )}
+
+      {cell("ctaHeadline",
+        adConfig.postType === "dark" && rowAdParams?.ctaHeadline
+          ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{rowAdParams.ctaHeadline}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
     </tr>
