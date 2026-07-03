@@ -183,7 +183,13 @@ export async function cloneAdCampaign(
     buying_type: "AUCTION",
     access_token: accessToken,
   };
-  if (useCBO) campBody.daily_budget = dailyBudget;
+  // With CBO, bid_strategy belongs on the campaign — setting it on the ad set
+  // instead makes FB fall back to a bid-cap strategy that then demands a
+  // bid_amount we never provide (OAuthException 1815857).
+  if (useCBO) {
+    campBody.daily_budget = dailyBudget;
+    campBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+  }
 
   const newCampRes = await fetch(`${FB_API}/act_${adAccountId}/campaigns`, {
     method: "POST",
@@ -193,18 +199,21 @@ export async function cloneAdCampaign(
   const newCamp = await newCampRes.json();
   if (newCamp.error) throw new Error(`[create campaign] ${JSON.stringify(newCamp.error)}`);
 
-  // 3. Create adset — budget only at adset level when not CBO
+  // 3. Create adset — budget + bid_strategy only at adset level when not CBO
+  // (with CBO both live on the campaign instead, see above).
   const adSetBody: Record<string, unknown> = {
     name: campaignName || `${templateAdSet.name} [PostFlow]`,
     campaign_id: newCamp.id,
     targeting,
     billing_event: templateAdSet.billing_event ?? "IMPRESSIONS",
     optimization_goal: templateAdSet.optimization_goal ?? "LINK_CLICKS",
-    bid_strategy: "LOWEST_COST_WITHOUT_CAP",
     status: adStatus,
     access_token: accessToken,
   };
-  if (!useCBO) adSetBody.daily_budget = dailyBudget;
+  if (!useCBO) {
+    adSetBody.daily_budget = dailyBudget;
+    adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+  }
 
   const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
     method: "POST",
