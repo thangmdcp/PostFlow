@@ -146,6 +146,7 @@ export function SetupClient() {
   const [savedKeys, setSavedKeys] = useState<Set<string>>(new Set());
   const [copiedSQL, setCopiedSQL] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [envWritable, setEnvWritable] = useState(true);
   const { show, ToastComponent } = useToast();
 
   useEffect(() => {
@@ -154,6 +155,7 @@ export function SetupClient() {
       fetch("/api/app-config").then((r) => r.json()),
     ])
       .then(([envRes, dbConfig]) => {
+        setEnvWritable(envRes.writable !== false);
         const vars: Record<string, string> = { ...(envRes.vars ?? {}) };
         for (const f of FIELDS) {
           if (f.storage === "db") {
@@ -197,7 +199,11 @@ export function SetupClient() {
         }));
       }
       const results = await Promise.all(requests);
-      if (results.some((r) => !r.ok)) throw new Error();
+      const failed = results.find((r) => !r.ok);
+      if (failed) {
+        const body = await failed.json().catch(() => null);
+        throw new Error(body?.error || "Lỗi khi lưu");
+      }
 
       setSavedKeys(new Set([...Object.keys(envUpdates), ...Object.keys(dbUpdates)]));
       show(
@@ -206,8 +212,8 @@ export function SetupClient() {
           : "Đã lưu! Áp dụng ngay, không cần restart.",
         "success"
       );
-    } catch {
-      show("Lỗi khi lưu", "error");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Lỗi khi lưu", "error");
     } finally {
       setSaving(false);
     }
@@ -284,6 +290,7 @@ export function SetupClient() {
           const val = values[field.key] ?? "";
           const filled = val.length > 0;
           const isVisible = showSecret[field.key];
+          const locked = field.storage === "env" && !envWritable;
 
           return (
             <div key={field.key}>
@@ -297,24 +304,31 @@ export function SetupClient() {
                 {filled && <CheckCircle2 size={13} className="text-green-600" />}
               </div>
               <p className="text-xs text-muted-foreground mb-1.5">{field.hint}</p>
+              {locked && (
+                <p className="text-xs text-amber-600 mb-1.5">
+                  Không sửa được qua web trên production — sửa trong Vercel Dashboard → Settings → Environment Variables rồi Redeploy.
+                </p>
+              )}
               <div className="relative">
                 {field.multiline ? (
                   <textarea
                     id={field.key}
                     value={val}
+                    disabled={locked}
                     onChange={(e) => setValues((s) => ({ ...s, [field.key]: e.target.value }))}
                     placeholder={field.placeholder}
                     rows={3}
-                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 resize-y focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 ) : (
                   <input
                     id={field.key}
                     type={field.secret && !isVisible ? "password" : "text"}
                     value={val}
+                    disabled={locked}
                     onChange={(e) => setValues((s) => ({ ...s, [field.key]: e.target.value }))}
                     placeholder={field.placeholder}
-                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 )}
                 {field.secret && !field.multiline && (

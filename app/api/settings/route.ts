@@ -27,16 +27,28 @@ function serializeEnv(vars: Record<string, string>): string {
 }
 
 export async function GET() {
+  const writable = !process.env.VERCEL;
   try {
     const content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf-8") : "";
     const vars = parseEnv(content);
-    return NextResponse.json({ vars });
+    return NextResponse.json({ vars, writable });
   } catch {
-    return NextResponse.json({ vars: {} });
+    return NextResponse.json({ vars: {}, writable });
   }
 }
 
 export async function POST(req: Request) {
+  // Vercel's filesystem is read-only outside /tmp — writing .env.local there
+  // always fails and can never take effect anyway (env vars are baked in at
+  // build/deploy time). Fail fast with a clear message instead of a raw
+  // filesystem error.
+  if (process.env.VERCEL) {
+    return NextResponse.json(
+      { error: "Không thể lưu qua web trên môi trường production. Vào Vercel Dashboard → Settings → Environment Variables để sửa, rồi Redeploy." },
+      { status: 400 }
+    );
+  }
+
   try {
     const updates = (await req.json()) as Record<string, string>;
 
