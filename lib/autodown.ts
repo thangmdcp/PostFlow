@@ -1,9 +1,21 @@
+import { prisma } from "@/lib/prisma";
+
 const BASE_URL = "https://autodown.vibevic.com";
 
-function headers() {
+// Key can be set via the web UI (stored in AppConfig, works on Vercel without
+// a redeploy) or fall back to the env var for local/manual setups.
+async function getApiKey(): Promise<string> {
+  try {
+    const row = await prisma.appConfig.findUnique({ where: { key: "autodownApiKey" } });
+    if (row?.value) return row.value;
+  } catch { /* DB not reachable — fall back to env */ }
+  return process.env.AUTODOWN_API_KEY ?? "";
+}
+
+async function headers() {
   return {
     "Content-Type": "application/json",
-    "X-API-Key": process.env.AUTODOWN_API_KEY ?? "",
+    "X-API-Key": await getApiKey(),
   };
 }
 
@@ -36,7 +48,7 @@ export async function autodownExtract(url: string): Promise<AutoDownExtractResul
   try {
     const res = await fetch(`${BASE_URL}/api/extract`, {
       method: "POST",
-      headers: headers(),
+      headers: await headers(),
       body: JSON.stringify({ url }),
     });
     if (!res.ok) return null;
@@ -54,7 +66,7 @@ export async function autodownDownload(url: string): Promise<AutoDownDownloadRes
   try {
     const res = await fetch(`${BASE_URL}/api/download`, {
       method: "POST",
-      headers: headers(),
+      headers: await headers(),
       body: JSON.stringify({ url }),
       signal: AbortSignal.timeout(90_000),
     });
@@ -75,7 +87,7 @@ export async function autodownCleanup(publicIds: string[]): Promise<void> {
   try {
     await fetch(`${BASE_URL}/api/cleanup`, {
       method: "POST",
-      headers: headers(),
+      headers: await headers(),
       body: JSON.stringify({ public_ids: publicIds }),
     });
   } catch { /* best-effort */ }

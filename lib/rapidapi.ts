@@ -1,4 +1,5 @@
 import { autodownExtract, autodownDownload } from "@/lib/autodown";
+import { prisma } from "@/lib/prisma";
 
 export interface RapidApiMedia {
   url: string;
@@ -22,18 +23,27 @@ function isTikTokUrl(url: string) {
   return /tiktok\.com/i.test(url);
 }
 
-function getRapidApiKeys(): string[] {
-  return (process.env.RAPIDAPI_KEY ?? "")
+// Keys can be set via the web UI (stored in AppConfig, works on Vercel
+// without a redeploy) or fall back to the env var for local/manual setups.
+async function getRapidApiKeys(): Promise<string[]> {
+  let raw = "";
+  try {
+    const row = await prisma.appConfig.findUnique({ where: { key: "rapidApiKeys" } });
+    raw = row?.value ?? "";
+  } catch { /* DB not reachable — fall back to env */ }
+  if (!raw) raw = process.env.RAPIDAPI_KEY ?? "";
+
+  return raw
     .split(/[\n,]+/)
     .map((k) => k.trim())
     .filter(Boolean);
 }
 
 // Free-tier RapidAPI keys hit a monthly/rate quota fast. When the user supplies
-// several comma-separated keys, rotate to the next one on 429/403 instead of
-// failing the whole fetch — only throw once every key has been exhausted.
+// several keys, rotate to the next one on 429/403 instead of failing the whole
+// fetch — only throw once every key has been exhausted.
 async function withKeyRotation<T>(fn: (key: string) => Promise<T>): Promise<T> {
-  const keys = getRapidApiKeys();
+  const keys = await getRapidApiKeys();
   if (keys.length === 0) throw new Error("Chưa cấu hình RAPIDAPI_KEY");
 
   let lastErr: unknown;

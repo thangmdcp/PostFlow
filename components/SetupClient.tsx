@@ -75,6 +75,10 @@ DROP TRIGGER IF EXISTS post_updated_at ON "Post";
 CREATE TRIGGER post_updated_at BEFORE UPDATE ON "Post"
   FOR EACH ROW EXECUTE PROCEDURE update_updated_at();`;
 
+// "env" fields are written to .env.local — needed to even boot / connect to
+// the DB, so they require a manual restart (or a Vercel redeploy) to apply.
+// "db" fields are stored in AppConfig — read fresh on every request, so they
+// apply immediately with no restart, and work on Vercel's read-only filesystem.
 const FIELDS = [
   {
     key: "DATABASE_URL",
@@ -83,23 +87,7 @@ const FIELDS = [
     hint: "Supabase → Settings → Database → Connection string → URI",
     secret: true,
     required: true,
-  },
-  {
-    key: "RAPIDAPI_KEY",
-    label: "RAPIDAPI_KEY",
-    placeholder: "key1\nkey2\nkey3\n(dùng gói free thì nhập nhiều key, mỗi dòng 1 key)",
-    hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi). Có thể nhập NHIỀU key, MỖI DÒNG 1 KEY — hệ thống tự xoay vòng khi 1 key hết lượt.',
-    secret: true,
-    required: true,
-    multiline: true,
-  },
-  {
-    key: "AUTODOWN_API_KEY",
-    label: "AUTODOWN_API_KEY",
-    placeholder: "fbdl-...",
-    hint: "Key của dịch vụ AutoDown (autodown.vibevic.com) — ưu tiên dùng cho video FB/TikTok công khai, không watermark.",
-    secret: true,
-    required: false,
+    storage: "env" as const,
   },
   {
     key: "CLOUDINARY_CLOUD_NAME",
@@ -108,6 +96,7 @@ const FIELDS = [
     hint: "cloudinary.com/console → Cloud Name",
     secret: false,
     required: true,
+    storage: "env" as const,
   },
   {
     key: "CLOUDINARY_API_KEY",
@@ -116,6 +105,7 @@ const FIELDS = [
     hint: "cloudinary.com/console → API Key",
     secret: false,
     required: true,
+    storage: "env" as const,
   },
   {
     key: "CLOUDINARY_API_SECRET",
@@ -124,6 +114,28 @@ const FIELDS = [
     hint: "cloudinary.com/console → API Secret (nhấn Reveal)",
     secret: true,
     required: true,
+    storage: "env" as const,
+  },
+  {
+    key: "RAPIDAPI_KEY",
+    configKey: "rapidApiKeys",
+    label: "RAPIDAPI_KEY",
+    placeholder: "key1\nkey2\nkey3\n(dùng gói free thì nhập nhiều key, mỗi dòng 1 key)",
+    hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi). Có thể nhập NHIỀU key, MỖI DÒNG 1 KEY — hệ thống tự xoay vòng khi 1 key hết lượt. Áp dụng ngay, không cần restart.',
+    secret: true,
+    required: true,
+    multiline: true,
+    storage: "db" as const,
+  },
+  {
+    key: "AUTODOWN_API_KEY",
+    configKey: "autodownApiKey",
+    label: "AUTODOWN_API_KEY",
+    placeholder: "fbdl-...",
+    hint: "Key của dịch vụ AutoDown (autodown.vibevic.com) — ưu tiên dùng cho video FB/TikTok công khai, không watermark. Áp dụng ngay, không cần restart.",
+    secret: true,
+    required: false,
+    storage: "db" as const,
   },
 ];
 
@@ -137,15 +149,20 @@ export function SetupClient() {
   const { show, ToastComponent } = useToast();
 
   useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d.vars) return;
-        const vars: Record<string, string> = { ...d.vars };
-        // Multiline fields are stored with a literal "\n" escape (single-line .env format);
-        // unescape back to real newlines for the textarea.
+    Promise.all([
+      fetch("/api/settings").then((r) => r.json()),
+      fetch("/api/app-config").then((r) => r.json()),
+    ])
+      .then(([envRes, dbConfig]) => {
+        const vars: Record<string, string> = { ...(envRes.vars ?? {}) };
         for (const f of FIELDS) {
-          if (f.multiline && vars[f.key]) vars[f.key] = vars[f.key].replace(/\\n/g, "\n");
+          if (f.storage === "db") {
+            const raw = (dbConfig?.[f.configKey] ?? "") as string;
+            // Multiline values are stored with a literal "\n" escape (single-line
+            // .env format for the historical env fields shares this convention);
+            // unescape back to real newlines for the textarea.
+            vars[f.key] = f.multiline ? raw.replace(/\\n/g, "\n") : raw;
+          }
         }
         setValues(vars);
       })
@@ -155,21 +172,40 @@ export function SetupClient() {
   async function handleSave() {
     setSaving(true);
     try {
-      const updates: Record<string, string> = {};
+      const envUpdates: Record<string, string> = {};
+      const dbUpdates: Record<string, string> = {};
       for (const f of FIELDS) {
-        if (values[f.key] !== undefined) {
-          updates[f.key] = f.multiline ? values[f.key].replace(/\r?\n/g, "\\n") : values[f.key];
-        }
+        if (values[f.key] === undefined) continue;
+        const val = f.multiline ? values[f.key].replace(/\r?\n/g, "\\n") : values[f.key];
+        if (f.storage === "db") dbUpdates[f.configKey] = val;
+        else envUpdates[f.key] = val;
       }
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-      if (!res.ok) throw new Error();
-      const keys = new Set(Object.keys(updates));
-      setSavedKeys(keys);
-      show("Đã lưu! Hãy restart server: Ctrl+C → npm run dev", "success");
+
+      const requests: Promise<Response>[] = [];
+      if (Object.keys(envUpdates).length) {
+        requests.push(fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(envUpdates),
+        }));
+      }
+      if (Object.keys(dbUpdates).length) {
+        requests.push(fetch("/api/app-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(dbUpdates),
+        }));
+      }
+      const results = await Promise.all(requests);
+      if (results.some((r) => !r.ok)) throw new Error();
+
+      setSavedKeys(new Set([...Object.keys(envUpdates), ...Object.keys(dbUpdates)]));
+      show(
+        Object.keys(envUpdates).length
+          ? "Đã lưu! Các mục DATABASE_URL/Cloudinary cần restart server: Ctrl+C → npm run dev"
+          : "Đã lưu! Áp dụng ngay, không cần restart.",
+        "success"
+      );
     } catch {
       show("Lỗi khi lưu", "error");
     } finally {
