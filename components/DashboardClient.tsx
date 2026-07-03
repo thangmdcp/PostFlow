@@ -81,6 +81,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [adDialogOpen, setAdDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [localPosts, setLocalPosts] = useState(posts);
+  // `posts` only seeds initial state — router.refresh() re-renders this
+  // component with a fresh `posts` prop, but useState's initializer is only
+  // used on first mount, so without this the table stayed stuck on whatever
+  // it had at mount time no matter how many times router.refresh() ran
+  // (only a full page reload picked up new data). This is what actually
+  // makes every refresh() call in this file effective.
+  useEffect(() => { setLocalPosts(posts); }, [posts]);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(
@@ -277,6 +284,16 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [router]);
+
+  // Refresh on every mount too — clicking "Dashboard" in the sidebar is a
+  // client-side navigation, not a full page load, so Next.js can serve this
+  // dynamic route from its client-side router cache (stale up to 30s) unless
+  // explicitly told to refetch. Without this, posts scheduled/published from
+  // the batch page a moment ago wouldn't show up here until a hard refresh.
+  useEffect(() => {
+    router.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch templates once on mount; auto-set publishToPage based on active template postType
   useEffect(() => {

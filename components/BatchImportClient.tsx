@@ -162,12 +162,11 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "thumbnail" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
+type ColKey = "status" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
-  { key: "thumbnail",   label: "Ảnh",           defaultWidth: 60,  minWidth: 50,  defaultVisible: true },
-  { key: "title",       label: "Bài viết",      defaultWidth: 200, minWidth: 100, defaultVisible: true },
+  { key: "title",       label: "Bài viết",      defaultWidth: 230, minWidth: 130, defaultVisible: true },
   { key: "caption",     label: "Nội dung",      defaultWidth: 200, minWidth: 100, defaultVisible: true },
   { key: "linkAff",     label: "Link aff",      defaultWidth: 200, minWidth: 120, defaultVisible: true },
   { key: "scheduledAt", label: "Giờ đăng",     defaultWidth: 170, minWidth: 100, defaultVisible: true },
@@ -1298,30 +1297,27 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             </div>
       )}
 
-      {cell("thumbnail",
-        status === "fetching"
-          ? <Skeleton className="h-10 w-10 rounded" />
-          : post.thumbnailUrl
-            ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={post.thumbnailUrl} alt="" className="h-10 w-10 rounded object-cover border" />
-            )
-            : (
-              <div className="h-10 w-10 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center">
-                <ImageIcon size={14} className="text-slate-300" />
-              </div>
-            )
-      )}
-
       {cell("title",
         status === "fetching"
-          ? <div className="space-y-1"><Skeleton className="h-2 w-24 rounded" /><Skeleton className="h-2 w-16 rounded" /></div>
-          : <a href={post.sourceUrl} target="_blank" rel="noopener noreferrer"
-              className="font-medium text-slate-800 dark:text-slate-100 hover:text-blue-600 flex items-center gap-1 text-xs"
-              title={post.title ?? post.sourceUrl}>
-              <span className="truncate">{post.title || truncate(post.sourceUrl, 40)}</span>
-              <ExternalLink size={10} className="shrink-0 text-slate-400" />
-            </a>
+          ? <div className="flex items-center gap-2"><Skeleton className="h-9 w-9 rounded shrink-0" /><div className="space-y-1 flex-1"><Skeleton className="h-2 w-24 rounded" /><Skeleton className="h-2 w-16 rounded" /></div></div>
+          : <div className="flex items-center gap-2">
+              {post.thumbnailUrl
+                ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={post.thumbnailUrl} alt="" className="h-9 w-9 rounded object-cover border shrink-0" />
+                )
+                : (
+                  <div className="h-9 w-9 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0">
+                    <ImageIcon size={13} className="text-slate-300" />
+                  </div>
+                )}
+              <a href={post.sourceUrl} target="_blank" rel="noopener noreferrer"
+                className="font-medium text-slate-800 dark:text-slate-100 hover:text-blue-600 flex items-center gap-1 text-xs min-w-0"
+                title={post.title ?? post.sourceUrl}>
+                <span className="truncate">{post.title || truncate(post.sourceUrl, 40)}</span>
+                <ExternalLink size={10} className="shrink-0 text-slate-400" />
+              </a>
+            </div>
       )}
 
       {cell("caption",
