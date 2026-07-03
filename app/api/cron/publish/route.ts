@@ -123,6 +123,13 @@ export async function GET(req: Request) {
           templateId: post.adTemplateId,
           isBatchPost: !!post.adTemplateId,
           adStatus: (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+          // Collapse the exact age/budget rolled at schedule time into a
+          // single-value "range" (min=max) so it's used as-is instead of
+          // being re-rolled from the TKQC account's own range.
+          ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
+          ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
+          ...(post.adGender != null ? { gender: post.adGender } : {}),
+          ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
         });
       }
 

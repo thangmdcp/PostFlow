@@ -33,6 +33,7 @@ export interface AutoAdsRunParams {
   ageMinFrom?: string; ageMinTo?: string;
   ageMaxFrom?: string; ageMaxTo?: string;
   gender?: string;
+  budgetMin?: string; budgetMax?: string; budgetStep?: string; // explicit per-row budget — the batch table already rolled and displayed this value, so it must be the one actually used, not re-rolled from the TKQC account's own range
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
 }
 
@@ -229,7 +230,13 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     if (affUrl) campaignName = (await resolveUtmContent(affUrl)) ?? "";
   }
 
-  const dailyBudget = String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
+  // The batch table already rolled and showed a specific budget for this
+  // post — use it exactly instead of re-rolling from the TKQC account row's
+  // own range, which is what caused the ad's actual budget to end up
+  // different from what the table displayed.
+  const dailyBudget = p.budgetMin
+    ? String(randomStep(Number(p.budgetMin), Number(p.budgetMax ?? p.budgetMin), Number(p.budgetStep ?? 1)))
+    : String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
 
   const pfx = p.isBatchPost ? "batch" : "autoAds";
   const ageMinFrom = Number(p.ageMinFrom ?? cfg[`${pfx}AgeMinFrom`] ?? cfg.autoAdsAgeMinFrom ?? 18);

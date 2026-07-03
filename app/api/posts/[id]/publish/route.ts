@@ -177,6 +177,7 @@ export async function POST(
         ageMinFrom: body.ageMinFrom, ageMinTo: body.ageMinTo,
         ageMaxFrom: body.ageMaxFrom, ageMaxTo: body.ageMaxTo,
         gender: body.gender,
+        budgetMin: body.budgetMin, budgetMax: body.budgetMax, budgetStep: body.budgetStep,
         adStatus: body.adStatus,
       });
     }

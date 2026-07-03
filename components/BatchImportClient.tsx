@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -352,7 +352,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     fetcher,
     {
       refreshInterval: (data) => data?.posts.some((p) =>
-        p.status === "fetching" || p.adStatus === "pending" || p.adStatus === "creating"
+        p.status === "fetching" || p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating"
       ) ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
     }
@@ -823,12 +823,19 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     for (const id of targets) {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id];
+      const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
       const res = await fetch(`/api/posts/${id}/schedule`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
           ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
           adStatus: adConfig.adStatus,
+          // The table already rolled and displayed this row's budget/age/
+          // gender — persist it now so the cron-triggered ad creation later
+          // uses the exact same values instead of re-rolling its own.
+          ...(runAdsForRow && rp ? {
+            adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
+          } : {}),
         }),
       });
       if (res.ok) ok++;
@@ -1168,8 +1175,8 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
 
   if (adStatus === "creating") {
     return (
-      <div className="flex items-center gap-1 text-[9px] text-blue-600">
-        <Loader2 size={8} className="animate-spin" /> Đang set ads...
+      <div className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 whitespace-nowrap">
+        <Loader2 size={8} className="animate-spin shrink-0" /> Đang tạo ads
       </div>
     );
   }
@@ -1179,8 +1186,8 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
       ? `https://www.facebook.com/adsmanager/manage/campaigns?act=${adAccountUsed.replace(/^act_/, "")}&selected_campaign_ids=${adCampaignId}`
       : null;
     return (
-      <div className="flex items-center gap-1 text-[9px] text-emerald-600">
-        <CheckCircle2 size={8} /> Đã tạo ads
+      <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600 whitespace-nowrap">
+        <CheckCircle2 size={8} className="shrink-0" /> Đã tạo ads
         {adsManagerUrl && (
           <a href={adsManagerUrl} target="_blank" rel="noopener noreferrer" className="underline hover:text-emerald-700">
             Xem
@@ -1192,25 +1199,38 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
 
   if (adStatus === "failed") {
     return (
-      <span className="text-[9px] text-red-500 leading-tight line-clamp-2" title={errorMsg ?? undefined}>
-        Lỗi tạo ads (đã thử {adAttempt ?? 0} lần)
-      </span>
+      <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
+        title={errorMsg ?? undefined}>
+        <span className="truncate">Lỗi tạo ads (lần {adAttempt ?? 0})</span>
+      </div>
     );
   }
 
   if (adStatus === "pending" && adNextAttemptAt) {
-    if (now === null) return <span className="text-[9px] text-amber-600">Set ads sau...</span>;
+    if (now === null) {
+      return (
+        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
+          <Clock size={8} className="shrink-0" /> Chờ tạo ads
+        </div>
+      );
+    }
     const remainingMs = new Date(adNextAttemptAt).getTime() - now;
     if (remainingMs <= 0) {
-      return <span className="text-[9px] text-amber-600">Đang chờ set ads...</span>;
+      return (
+        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
+          <Loader2 size={8} className="animate-spin shrink-0" /> Sắp tạo ads
+        </div>
+      );
     }
     const totalSec = Math.ceil(remainingMs / 1000);
     const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
     return (
-      <span className="text-[9px] text-amber-600 tabular-nums">
-        Set ads sau {m}:{String(s).padStart(2, "0")}
-      </span>
+      <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
+        title="Thời gian còn lại tới lần tạo ads tiếp theo">
+        <Clock size={8} className="shrink-0" />
+        <span className="tabular-nums">{m}:{String(s).padStart(2, "0")}</span>
+      </div>
     );
   }
 

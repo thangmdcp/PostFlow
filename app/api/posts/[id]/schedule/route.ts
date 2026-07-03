@@ -6,12 +6,16 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adAgeMin, adAgeMax, adGender, adBudget } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
       ctaHeadline?: string;
       adStatus?: "ACTIVE" | "PAUSED";
+      adAgeMin?: number;
+      adAgeMax?: number;
+      adGender?: string;
+      adBudget?: string;
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id } });
@@ -36,6 +40,14 @@ export async function PATCH(
         ...(templateId ? { adTemplateId: templateId } : {}),
         ...(ctaHeadline ? { ctaHeadline } : {}),
         ...(adStatus ? { adPublishStatus: adStatus } : {}),
+        // The batch table already rolled and displayed this row's ad
+        // params — persist them so the cron-triggered ad creation later
+        // (once this post actually publishes) uses the exact same values
+        // instead of re-rolling its own from the TKQC account's range.
+        ...(adAgeMin !== undefined ? { adAgeMin } : {}),
+        ...(adAgeMax !== undefined ? { adAgeMax } : {}),
+        ...(adGender !== undefined ? { adGender } : {}),
+        ...(adBudget !== undefined ? { adBudget } : {}),
       },
     });
 
