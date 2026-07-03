@@ -213,12 +213,21 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     where: { id: p.postId },
     include: { extractedLinks: { orderBy: { order: "asc" } } },
   });
-  const affUrl = postFull?.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
-  let campaignName = "";
-  try {
-    const parsed = new URL(affUrl);
-    campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
-  } catch { /* ignore */ }
+  // Post.campaignName is persisted at link-save time (either an explicit
+  // Sub_id-derived name from the file-import flow, or auto-detected from a
+  // manually-pasted long-form link's ?utm_content=). Most real affiliate
+  // links are shortened (s.shopee.vn/xxx) and carry no visible query string
+  // at all, so re-parsing utm_content from the link here — after the fact —
+  // essentially never finds anything; that's why this reads the persisted
+  // field instead. The URL-parse below is only a last-resort fallback.
+  let campaignName = postFull?.campaignName ?? "";
+  if (!campaignName) {
+    const affUrl = postFull?.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
+    try {
+      const parsed = new URL(affUrl);
+      campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
+    } catch { /* ignore */ }
+  }
 
   const dailyBudget = String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
 

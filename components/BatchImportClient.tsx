@@ -772,16 +772,19 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       if (!colOrigin || !colMyUrl) { onToast("File thiếu cột 'Liên kết gốc' hoặc 'Liên kết chuyển đổi'", "error"); return; }
 
       // Pool of this batch's links, in the same order the export used, so duplicate
-      // competitorUrls resolve to the first not-yet-matched link.
-      const pool: { linkId: string; competitorUrl: string }[] = [];
-      batch.posts.forEach(post => {
+      // competitorUrls resolve to the first not-yet-matched link. Same postNumber
+      // math as buildExportRows, so the campaign name matches what was exported.
+      const pool: { linkId: string; competitorUrl: string; campaignName: string }[] = [];
+      batch.posts.forEach((post, postIdx) => {
+        const postNumber = postIdx + 1;
+        const campaignName = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}${postNumber}` : cfg.text).join("-");
         [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl });
+          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName });
         });
       });
       const used = new Set<string>();
 
-      const toApply: { linkId: string; myUrl: string }[] = [];
+      const toApply: { linkId: string; myUrl: string; campaignName: string }[] = [];
       let skipped = 0;
       for (const row of rows) {
         const origin = String(row[colOrigin] ?? "").trim();
@@ -791,13 +794,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         const match = pool.find(p => p.competitorUrl === origin && !used.has(p.linkId));
         if (!match) { skipped++; continue; }
         used.add(match.linkId);
-        toApply.push({ linkId: match.linkId, myUrl });
+        toApply.push({ linkId: match.linkId, myUrl, campaignName: match.campaignName });
       }
 
-      const results = await Promise.all(toApply.map(({ linkId, myUrl }) =>
+      const results = await Promise.all(toApply.map(({ linkId, myUrl, campaignName }) =>
         fetch(`/api/links/${linkId}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ myUrl }),
+          body: JSON.stringify({ myUrl, campaignName }),
         }).then(r => r.ok).catch(() => false)
       ));
       const ok = results.filter(Boolean).length;
@@ -874,19 +877,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       return { ok: true, adsScheduled: !!data?.autoAds?.scheduled };
     }));
     const ok = outcomes.filter((o) => o.ok).length;
-    const adsScheduled = outcomes.filter((o) => o.adsScheduled).length;
     setBulkRunning(false);
     // The publish response only returns once the initial ad "pending" state
     // (with its countdown target) is actually persisted, so this refetch
     // reliably shows it right away instead of waiting for the next poll —
     // which, before a post has any adStatus locally, wouldn't even start.
     await mutateBatch();
-    onToast(
-      adsScheduled
-        ? `Đã đăng ${ok}/${targets.length} bài — quảng cáo sẽ tự tạo sau khoảng 1 phút (đăng ngay lúc bài vừa xong dễ bị Facebook từ chối vì chưa xử lý xong bài).`
-        : `Đã đăng ${ok}/${targets.length} bài`,
-      "success"
-    );
+    onToast(`Đã đăng ${ok}/${targets.length} bài`, "success");
     setCheckedIds(new Set());
   }
 

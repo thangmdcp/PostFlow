@@ -40,6 +40,7 @@ model Post {
   adAgeMax       Int?
   adGender       String?
   ctaHeadline    String?
+  campaignName   String?
   adStatus       String?
   adPublishStatus String?
   adNextAttemptAt DateTime?

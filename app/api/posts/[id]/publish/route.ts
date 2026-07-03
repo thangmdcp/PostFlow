@@ -148,8 +148,10 @@ export async function POST(
 
     if (isAutoDownAsset(cloudinaryId)) {
       await autodownCleanup([cloudinaryId]);
+      console.log(`[cleanup] post ${params.id}: deleted AutoDown asset ${cloudinaryId}`);
     } else if (cloudinaryId) {
       await deleteFile(cloudinaryId, mediaType ?? "image");
+      console.log(`[cleanup] post ${params.id}: deleted Cloudinary asset ${cloudinaryId}`);
     }
 
     await prisma.post.update({

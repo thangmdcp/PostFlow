@@ -98,8 +98,13 @@ export async function GET(req: Request) {
       const fbPostId = result.post_id ?? result.id ?? "";
       const fbPostUrl = (publishToPageFlag && fbPostId) ? `https://www.facebook.com/${fbPostId.replace("_", "/posts/")}` : "";
 
-      if (isAutoDownAsset(cloudinaryId)) await autodownCleanup([cloudinaryId]);
-      else if (cloudinaryId) await deleteFile(cloudinaryId, mediaType ?? "image");
+      if (isAutoDownAsset(cloudinaryId)) {
+        await autodownCleanup([cloudinaryId]);
+        console.log(`[cleanup] post ${post.id}: deleted AutoDown asset ${cloudinaryId}`);
+      } else if (cloudinaryId) {
+        await deleteFile(cloudinaryId, mediaType ?? "image");
+        console.log(`[cleanup] post ${post.id}: deleted Cloudinary asset ${cloudinaryId}`);
+      }
 
       await prisma.post.update({
         where: { id: post.id },
