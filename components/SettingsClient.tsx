@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import type { FbConnection, FbAdAccount } from "@prisma/client";
 import { Link2, SlidersHorizontal, Wrench, Palette } from "lucide-react";
 import { ConnectionsClient } from "@/components/ConnectionsClient";
@@ -25,14 +24,17 @@ interface SettingsClientProps {
 }
 
 export function SettingsClient({ initialTab, connections, savedAdAccounts }: SettingsClientProps) {
-  const router = useRouter();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [visited, setVisited] = useState<Set<SettingsTab>>(new Set([initialTab]));
 
   function selectTab(next: SettingsTab) {
     setTab(next);
     setVisited(v => new Set(v).add(next));
-    router.replace(TABS.find(t => t.key === next)!.href, { scroll: false });
+    // All 4 tabs receive the exact same server data — switching tabs is a
+    // pure client-side state change. Update the URL for bookmarking via the
+    // History API directly (not router.replace), so it doesn't re-navigate
+    // to a different route and re-run that route's Prisma queries.
+    window.history.replaceState(null, "", TABS.find(t => t.key === next)!.href);
   }
 
   return (

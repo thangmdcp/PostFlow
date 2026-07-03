@@ -82,6 +82,9 @@ async function fetchViaAutoDown(url: string): Promise<RapidApiPostData | null> {
     url: m.url,
     type: m.type,
     publicId: m.public_id,
+    // AutoDown's /download response has no thumbnail field — carry over the
+    // one from /extract so the batch table can still show a preview image.
+    thumbnail: m.type === "video" ? meta.thumbnail || undefined : undefined,
   }));
   return { caption: downloaded.caption ?? meta.caption ?? "", media };
 }

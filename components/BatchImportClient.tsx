@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -159,10 +159,11 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
+type ColKey = "status" | "thumbnail" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
+  { key: "thumbnail",   label: "Ảnh",           defaultWidth: 60,  minWidth: 50,  defaultVisible: true },
   { key: "title",       label: "Bài viết",      defaultWidth: 200, minWidth: 100, defaultVisible: true },
   { key: "caption",     label: "Nội dung",      defaultWidth: 200, minWidth: 100, defaultVisible: true },
   { key: "linkAff",     label: "Link aff",      defaultWidth: 200, minWidth: 120, defaultVisible: true },
@@ -607,13 +608,16 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   const readyPosts = batch.posts.filter((p) => p.status === "ready" || p.status === "failed");
   const readyIds = readyPosts.map(p => p.id);
+  const allIds = batch.posts.map(p => p.id);
 
-  // Auto-fill defaults once per post as soon as it becomes ready (never clobbers rows the user already touched)
+  // Auto-fill defaults (page/tuổi/giới tính/ngân sách/TKQC/giờ đăng) as soon as
+  // a row exists — don't wait for caption/media to finish fetching, those fill
+  // in separately once ready. Never clobbers rows the user already touched.
   useEffect(() => {
-    const freshIds = readyIds.filter(id => !(id in rowAdParams));
+    const freshIds = allIds.filter(id => !(id in rowAdParams));
     if (freshIds.length) applyDefaultsToRows(freshIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readyIds.join(",")]);
+  }, [allIds.join(",")]);
 
   function patchAdConfig(patch: Partial<BatchAdConfig>) {
     // Handle batch-local side effects first
@@ -1176,6 +1180,21 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                 </div>
               )}
             </div>
+      )}
+
+      {cell("thumbnail",
+        status === "fetching"
+          ? <Skeleton className="h-10 w-10 rounded" />
+          : post.thumbnailUrl
+            ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={post.thumbnailUrl} alt="" className="h-10 w-10 rounded object-cover border" />
+            )
+            : (
+              <div className="h-10 w-10 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center">
+                <ImageIcon size={14} className="text-slate-300" />
+              </div>
+            )
       )}
 
       {cell("title",
