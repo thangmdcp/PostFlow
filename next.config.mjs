@@ -1,7 +1,14 @@
 
 
 const nextConfig = {
-  experimental: { instrumentationHook: true },
+  experimental: {
+    instrumentationHook: true,
+    // Auto tree-shakes barrel imports (import { X, Y } from "lucide-react")
+    // per-icon instead of pulling the whole package into the client bundle —
+    // smaller JS to download/parse/hydrate on every page, especially the
+    // batch table which imports 20+ icons.
+    optimizePackageImports: ["lucide-react"],
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "res.cloudinary.com" },

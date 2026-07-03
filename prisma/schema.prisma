@@ -39,6 +39,9 @@ model Post {
   adAgeMax       Int?
   adGender       String?
   ctaHeadline    String?
+  adStatus       String?
+  adNextAttemptAt DateTime?
+  adAttempt      Int?            @default(0)
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

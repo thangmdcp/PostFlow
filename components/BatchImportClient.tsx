@@ -347,7 +347,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
     {
-      refreshInterval: (data) => data?.posts.some((p) => p.status === "fetching") ? 2000 : 0,
+      refreshInterval: (data) => data?.posts.some((p) =>
+        p.status === "fetching" || p.adStatus === "pending" || p.adStatus === "creating"
+      ) ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
     }
   );
@@ -1126,6 +1128,73 @@ interface PostRowProps {
   colWidths: Record<ColKey, number>;
 }
 
+// Ticks its own 1s interval — isolated so a live countdown doesn't force the
+// whole table to re-render every second, just this one badge.
+function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg }: {
+  adStatus: string | null | undefined;
+  adNextAttemptAt: Date | string | null | undefined;
+  adAttempt: number | null | undefined;
+  errorMsg: string | null | undefined;
+}) {
+  // Start null (not Date.now()) so SSR and the client's first render agree —
+  // computing "now" during render would make server and client disagree by
+  // however many ms passed between the two, causing a hydration mismatch
+  // whenever that gap crosses a whole-second boundary. Only start ticking
+  // after mount (client-only).
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (adStatus !== "pending" || !adNextAttemptAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [adStatus, adNextAttemptAt]);
+
+  if (!adStatus || adStatus === "skipped") return null;
+
+  if (adStatus === "creating") {
+    return (
+      <div className="flex items-center gap-1 text-[9px] text-blue-600">
+        <Loader2 size={8} className="animate-spin" /> Đang set ads...
+      </div>
+    );
+  }
+
+  if (adStatus === "done") {
+    return (
+      <div className="flex items-center gap-1 text-[9px] text-emerald-600">
+        <CheckCircle2 size={8} /> Đã tạo ads
+      </div>
+    );
+  }
+
+  if (adStatus === "failed") {
+    return (
+      <span className="text-[9px] text-red-500 leading-tight line-clamp-2" title={errorMsg ?? undefined}>
+        Lỗi tạo ads (đã thử {adAttempt ?? 0} lần)
+      </span>
+    );
+  }
+
+  if (adStatus === "pending" && adNextAttemptAt) {
+    if (now === null) return <span className="text-[9px] text-amber-600">Set ads sau...</span>;
+    const remainingMs = new Date(adNextAttemptAt).getTime() - now;
+    if (remainingMs <= 0) {
+      return <span className="text-[9px] text-amber-600">Đang chờ set ads...</span>;
+    }
+    const totalSec = Math.ceil(remainingMs / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return (
+      <span className="text-[9px] text-amber-600 tabular-nums">
+        Set ads sau {m}:{String(s).padStart(2, "0")}
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
@@ -1202,6 +1271,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                   </button>
                 </div>
               )}
+              <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} />
             </div>
       )}
 
