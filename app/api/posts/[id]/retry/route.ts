@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
-import { fetchPostData } from "@/lib/rapidapi";
-import { extractLinks } from "@/lib/extractLinks";
+import { fetchPostFields } from "@/lib/postProcessing";
 
 export async function POST(
   _req: Request,
@@ -18,7 +18,7 @@ export async function POST(
       data: { status: "fetching", errorMsg: null },
     });
 
-    setImmediate(() => retryPost(post.id, post.sourceUrl));
+    waitUntil(retryPost(post.id, post.sourceUrl));
 
     return NextResponse.json({ ok: true });
   } catch (err) {
@@ -28,9 +28,7 @@ export async function POST(
 
 async function retryPost(postId: string, sourceUrl: string) {
   try {
-    const data = await fetchPostData(sourceUrl);
-    const caption = data.caption ?? "";
-    const links = extractLinks(caption);
+    const fields = await fetchPostFields(sourceUrl);
 
     // Delete old extracted links first
     await prisma.extractedLink.deleteMany({ where: { postId } });
@@ -38,12 +36,17 @@ async function retryPost(postId: string, sourceUrl: string) {
     await prisma.post.update({
       where: { id: postId },
       data: {
-        title: data.title ?? null,
-        rawCaption: caption,
+        title: fields.title,
+        rawCaption: fields.rawCaption,
         finalCaption: null,
+        stableMediaUrl: fields.stableMediaUrl,
+        thumbnailUrl: fields.thumbnailUrl,
+        mediaUrls: fields.mediaUrls,
+        mediaType: fields.mediaType,
+        cloudinaryId: fields.cloudinaryId,
         status: "ready",
         extractedLinks: {
-          create: links.map((url, i) => ({
+          create: fields.links.map((url, i) => ({
             order: i + 1,
             competitorUrl: url,
           })),

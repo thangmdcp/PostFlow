@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
-import { fetchPostData } from "@/lib/rapidapi";
-import { extractLinks } from "@/lib/extractLinks";
+import { fetchPostFields } from "@/lib/postProcessing";
 
 export async function POST(req: Request) {
   try {
@@ -36,8 +36,10 @@ export async function POST(req: Request) {
       },
     });
 
-    // Fire-and-forget: process all posts in parallel
-    setImmediate(() => processBatch(batch.posts.map((p) => ({ id: p.id, sourceUrl: p.sourceUrl }))));
+    // Background work — waitUntil keeps the serverless function alive until
+    // this finishes. A plain setImmediate/fire-and-forget gets killed the
+    // moment the response is sent on Vercel, leaving posts stuck "fetching".
+    waitUntil(processBatch(batch.posts.map((p) => ({ id: p.id, sourceUrl: p.sourceUrl }))));
 
 
     return NextResponse.json({ batchId: batch.id, posts: batch.posts });
@@ -49,57 +51,21 @@ export async function POST(req: Request) {
 
 async function processOne(post: { id: string; sourceUrl: string }) {
   try {
-    const data = await fetchPostData(post.sourceUrl);
-    const caption = data.caption ?? "";
-    const links = extractLinks(caption);
-
-    // Pick best video URL — store raw URL only, Cloudinary upload happens at publish time
-    const videos = data.media.filter((m) => m.type === "video");
-    const photos = data.media.filter((m) => m.type === "photo");
-    const bestVideo =
-      videos.find((m) => m.quality === "hd_no_watermark") ??
-      videos.find((m) => m.quality === "no_watermark") ??
-      videos.find((m) => (m.quality ?? "").toLowerCase().includes("hd")) ??
-      videos[0];
-
-    let stableMediaUrl: string | null = null;
-    let mediaType: string | null = null;
-    let thumbnailUrl: string | null = null;
-    let mediaUrls: string | null = null;
-    // Set only for AutoDown-sourced videos — they're already on Cloudinary
-    // (temp/ prefix), so publish-time skips re-uploading and cleanup routes
-    // to AutoDown's own /api/cleanup instead of our Cloudinary account.
-    let cloudinaryId: string | null = null;
-
-    if (bestVideo) {
-      stableMediaUrl = bestVideo.url ?? null;
-      mediaType = "video";
-      thumbnailUrl = photos[0]?.url ?? bestVideo.thumbnail ?? null;
-      cloudinaryId = bestVideo.publicId ?? null;
-    } else if (photos.length === 1) {
-      stableMediaUrl = photos[0].url;
-      mediaType = "image";
-      thumbnailUrl = photos[0].url;
-    } else if (photos.length > 1) {
-      stableMediaUrl = photos[0].url;
-      mediaType = "carousel";
-      thumbnailUrl = photos[0].url;
-      mediaUrls = JSON.stringify(photos.map((p) => p.url));
-    }
+    const fields = await fetchPostFields(post.sourceUrl);
 
     await prisma.post.update({
       where: { id: post.id },
       data: {
-        title: data.title ?? null,
-        rawCaption: caption,
-        stableMediaUrl,
-        thumbnailUrl,
-        mediaUrls,
-        mediaType,
-        cloudinaryId,
+        title: fields.title,
+        rawCaption: fields.rawCaption,
+        stableMediaUrl: fields.stableMediaUrl,
+        thumbnailUrl: fields.thumbnailUrl,
+        mediaUrls: fields.mediaUrls,
+        mediaType: fields.mediaType,
+        cloudinaryId: fields.cloudinaryId,
         status: "ready",
         extractedLinks: {
-          create: links.map((url, i) => ({ order: i + 1, competitorUrl: url })),
+          create: fields.links.map((url, i) => ({ order: i + 1, competitorUrl: url })),
         },
       },
     });
