@@ -168,10 +168,10 @@ export async function POST(
         autoAdsResult = { error: "Bỏ qua tạo ads: không có templateId (cột \"Chạy ads\" tắt hoặc chưa chọn template)." };
       } else if (!fbPostId) {
         autoAdsResult = { error: "Bỏ qua tạo ads: không lấy được fbPostId sau khi đăng bài." };
-      } else if (!post.pageId) {
+      } else if (!pageId) {
         autoAdsResult = { error: "Bỏ qua tạo ads: thiếu pageId." };
       }
-      if (adsEnabled && effectiveTemplateId && fbPostId && post.pageId) {
+      if (adsEnabled && effectiveTemplateId && fbPostId && pageId) {
         // --- Load multi-account rows ---
         interface AdsAccountRow {
           id: string; accountId: string; weight: number; assignedCount: number;
@@ -267,7 +267,7 @@ export async function POST(
 
         const result = await cloneAdCampaign(
           finalTemplateId,
-          post.pageId,
+          pageId,
           fbPostId,
           rawAdAccountId,
           adsAccessToken,
