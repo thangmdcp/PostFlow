@@ -7,7 +7,16 @@ import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodo
 
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const querySecret = new URL(req.url).searchParams.get("secret")?.trim();
+  const envSecret = process.env.CRON_SECRET?.trim();
+  const isAuthorized =
+    !!envSecret && (authHeader === `Bearer ${envSecret}` || querySecret === envSecret);
+  console.log("[cron] auth check", {
+    hasEnvSecret: !!envSecret, envSecretLen: envSecret?.length ?? 0,
+    hasQuerySecret: !!querySecret, querySecretLen: querySecret?.length ?? 0,
+    hasAuthHeader: !!authHeader, isAuthorized,
+  });
+  if (!isAuthorized) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
