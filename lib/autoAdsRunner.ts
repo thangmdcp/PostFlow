@@ -2,6 +2,7 @@ import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { cloneAdCampaign } from "@/lib/facebook";
 import { randomStep, randomInteger } from "@/lib/adSettings";
+import { resolveUtmContent } from "@/lib/resolveUtmContent";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -222,11 +223,10 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   // field instead. The URL-parse below is only a last-resort fallback.
   let campaignName = postFull?.campaignName ?? "";
   if (!campaignName) {
+    // Safety net for links saved before campaignName started getting
+    // persisted at save time — resolve it now the same way.
     const affUrl = postFull?.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
-    try {
-      const parsed = new URL(affUrl);
-      campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
-    } catch { /* ignore */ }
+    if (affUrl) campaignName = (await resolveUtmContent(affUrl)) ?? "";
   }
 
   const dailyBudget = String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));

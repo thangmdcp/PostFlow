@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildCaption } from "@/lib/buildCaption";
+import { resolveUtmContent } from "@/lib/resolveUtmContent";
 
 export async function PATCH(
   req: Request,
@@ -16,17 +17,12 @@ export async function PATCH(
       return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
     }
 
-    // Campaign/adset/ad naming: an explicit name (from the Sub_id file
-    // import) always wins. Otherwise, if the user pasted a long-form link
-    // with a visible ?utm_content= param by hand, use that — most real
-    // affiliate links are shortened (s.shopee.vn/xxx) and carry no visible
-    // query string at all, so this often won't find anything, which is fine.
-    let campaignName = explicitCampaignName;
-    if (!campaignName) {
-      try {
-        campaignName = decodeURIComponent(new URL(myUrl).searchParams.get("utm_content") ?? "").trim() || undefined;
-      } catch { /* not a valid absolute URL — ignore */ }
-    }
+    // Campaign/adset/ad naming: resolve the real ?utm_content= Shopee itself
+    // assigned first — real links are shortened (s.shopee.vn/xxx) and don't
+    // show it directly, it only appears on the page the short link redirects
+    // to. Fall back to the Sub_id-derived name from the file-import flow
+    // (our own guess) if resolving fails for any reason.
+    const campaignName = (await resolveUtmContent(myUrl)) ?? explicitCampaignName;
 
     // Update this link
     const link = await prisma.extractedLink.update({
