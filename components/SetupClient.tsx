@@ -288,6 +288,11 @@ export function SetupClient() {
 
       {/* Fields */}
       <div className="space-y-4">
+        {loaded && dbFilled && (
+          <p className="text-xs text-muted-foreground -mb-2">
+            Tài khoản Database (Supabase) và Cloudinary đang dùng: <span className="font-medium">adsonandre270@gmail.com</span>
+          </p>
+        )}
         {FIELDS.map((field) => {
           const val = values[field.key] ?? "";
           const filled = val.length > 0;
