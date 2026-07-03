@@ -87,10 +87,11 @@ const FIELDS = [
   {
     key: "RAPIDAPI_KEY",
     label: "RAPIDAPI_KEY",
-    placeholder: "Dán API key từ rapidapi.com",
-    hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi).',
+    placeholder: "key1\nkey2\nkey3\n(dùng gói free thì nhập nhiều key, mỗi dòng 1 key)",
+    hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi). Có thể nhập NHIỀU key, MỖI DÒNG 1 KEY — hệ thống tự xoay vòng khi 1 key hết lượt.',
     secret: true,
     required: true,
+    multiline: true,
   },
   {
     key: "AUTODOWN_API_KEY",
@@ -124,14 +125,6 @@ const FIELDS = [
     secret: true,
     required: true,
   },
-  {
-    key: "NEXTAUTH_URL",
-    label: "NEXTAUTH_URL",
-    placeholder: "http://localhost:3000",
-    hint: "Dev: http://localhost:3000 | Production: https://yourdomain.com",
-    secret: false,
-    required: false,
-  },
 ];
 
 export function SetupClient() {
@@ -146,7 +139,16 @@ export function SetupClient() {
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())
-      .then((d) => { if (d.vars) setValues(d.vars); })
+      .then((d) => {
+        if (!d.vars) return;
+        const vars: Record<string, string> = { ...d.vars };
+        // Multiline fields are stored with a literal "\n" escape (single-line .env format);
+        // unescape back to real newlines for the textarea.
+        for (const f of FIELDS) {
+          if (f.multiline && vars[f.key]) vars[f.key] = vars[f.key].replace(/\\n/g, "\n");
+        }
+        setValues(vars);
+      })
       .finally(() => setLoaded(true));
   }, []);
 
@@ -155,7 +157,9 @@ export function SetupClient() {
     try {
       const updates: Record<string, string> = {};
       for (const f of FIELDS) {
-        if (values[f.key] !== undefined) updates[f.key] = values[f.key];
+        if (values[f.key] !== undefined) {
+          updates[f.key] = f.multiline ? values[f.key].replace(/\r?\n/g, "\\n") : values[f.key];
+        }
       }
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -205,7 +209,7 @@ export function SetupClient() {
       {ToastComponent}
 
       <h1 className="text-xl font-bold mb-1">Cài đặt</h1>
-      <p className="text-sm text-muted-foreground mb-6">Điền đủ 5 thông tin bên dưới → Lưu → Restart server</p>
+      <p className="text-sm text-muted-foreground mb-6">Điền các thông tin bắt buộc bên dưới → Lưu → Restart server</p>
 
       {/* DB warning */}
       {loaded && !dbFilled && (
@@ -258,19 +262,30 @@ export function SetupClient() {
               </div>
               <p className="text-xs text-muted-foreground mb-1.5">{field.hint}</p>
               <div className="relative">
-                <input
-                  id={field.key}
-                  type={field.secret && !isVisible ? "password" : "text"}
-                  value={val}
-                  onChange={(e) => setValues((s) => ({ ...s, [field.key]: e.target.value }))}
-                  placeholder={field.placeholder}
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                {field.secret && (
+                {field.multiline ? (
+                  <textarea
+                    id={field.key}
+                    value={val}
+                    onChange={(e) => setValues((s) => ({ ...s, [field.key]: e.target.value }))}
+                    placeholder={field.placeholder}
+                    rows={3}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                ) : (
+                  <input
+                    id={field.key}
+                    type={field.secret && !isVisible ? "password" : "text"}
+                    value={val}
+                    onChange={(e) => setValues((s) => ({ ...s, [field.key]: e.target.value }))}
+                    placeholder={field.placeholder}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                )}
+                {field.secret && !field.multiline && (
                   <button
                     type="button"
                     onClick={() => setShowSecret((s) => ({ ...s, [field.key]: !s[field.key] }))}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
                   >
                     {isVisible ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>

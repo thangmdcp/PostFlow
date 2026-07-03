@@ -22,6 +22,42 @@ function isTikTokUrl(url: string) {
   return /tiktok\.com/i.test(url);
 }
 
+function getRapidApiKeys(): string[] {
+  return (process.env.RAPIDAPI_KEY ?? "")
+    .split(/[\n,]+/)
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+
+// Free-tier RapidAPI keys hit a monthly/rate quota fast. When the user supplies
+// several comma-separated keys, rotate to the next one on 429/403 instead of
+// failing the whole fetch — only throw once every key has been exhausted.
+async function withKeyRotation<T>(fn: (key: string) => Promise<T>): Promise<T> {
+  const keys = getRapidApiKeys();
+  if (keys.length === 0) throw new Error("Chưa cấu hình RAPIDAPI_KEY");
+
+  let lastErr: unknown;
+  for (const key of keys) {
+    try {
+      return await fn(key);
+    } catch (err) {
+      lastErr = err;
+      const status = err instanceof RapidApiQuotaError ? err.status : undefined;
+      if (status === 429 || status === 403) continue;
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Tất cả RAPIDAPI_KEY đều hết lượt");
+}
+
+class RapidApiQuotaError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 // AutoDown is the preferred path for public FB/TikTok videos (no watermark,
 // already hosted on Cloudinary). It only supports that one case, so any
 // failure or non-video result falls straight through to RapidAPI unchanged.
@@ -41,18 +77,25 @@ async function fetchViaAutoDown(url: string): Promise<RapidApiPostData | null> {
 }
 
 async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
+  return withKeyRotation(async (key) => fetchFacebookPostWithKey(url, key));
+}
+
+async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
   const res = await fetch(
     `https://facebook-scraper3.p.rapidapi.com/post?post_url=${encodeURIComponent(url)}`,
     {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
-        "x-rapidapi-key": process.env.RAPIDAPI_KEY!,
+        "x-rapidapi-key": apiKey,
         "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
       },
     }
   );
 
+  if (res.status === 429 || res.status === 403) {
+    throw new RapidApiQuotaError(res.status, `FB API error: ${res.status} ${res.statusText}`);
+  }
   if (!res.ok) throw new Error(`FB API error: ${res.status} ${res.statusText}`);
 
   const data = await res.json();
@@ -90,19 +133,26 @@ async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
 }
 
 async function fetchGenericPost(url: string): Promise<RapidApiPostData> {
+  return withKeyRotation(async (key) => fetchGenericPostWithKey(url, key));
+}
+
+async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
   const res = await fetch(
     "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink",
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-rapidapi-key": process.env.RAPIDAPI_KEY!,
+        "x-rapidapi-key": apiKey,
         "x-rapidapi-host": process.env.RAPIDAPI_HOST!,
       },
       body: JSON.stringify({ url }),
     }
   );
 
+  if (res.status === 429 || res.status === 403) {
+    throw new RapidApiQuotaError(res.status, `RapidAPI error: ${res.status} ${res.statusText}`);
+  }
   if (!res.ok) throw new Error(`RapidAPI error: ${res.status} ${res.statusText}`);
 
   const data = await res.json();

@@ -3,16 +3,18 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { FbConnection, FbAdAccount } from "@prisma/client";
-import { Link2, SlidersHorizontal, Wrench } from "lucide-react";
+import { Link2, SlidersHorizontal, Wrench, Palette } from "lucide-react";
 import { ConnectionsClient } from "@/components/ConnectionsClient";
 import { AdSettingsClient } from "@/components/AdSettingsClient";
 import { SetupClient } from "@/components/SetupClient";
+import { BrandingClient } from "@/components/BrandingClient";
 
-export type SettingsTab = "connections" | "ads" | "setup";
+export type SettingsTab = "connections" | "ads" | "branding" | "setup";
 
 const TABS: { key: SettingsTab; label: string; href: string; icon: typeof Link2 }[] = [
   { key: "connections", label: "Kết nối FB", href: "/settings/connections", icon: Link2 },
   { key: "ads", label: "Cài đặt Ads", href: "/settings/ads", icon: SlidersHorizontal },
+  { key: "branding", label: "Giao diện", href: "/settings/branding", icon: Palette },
   { key: "setup", label: "Hệ thống", href: "/settings/setup", icon: Wrench },
 ];
 
@@ -55,6 +57,9 @@ export function SettingsClient({ initialTab, connections, savedAdAccounts }: Set
       </div>
       <div className={tab === "ads" ? "" : "hidden"}>
         {visited.has("ads") && <AdSettingsClient />}
+      </div>
+      <div className={tab === "branding" ? "" : "hidden"}>
+        {visited.has("branding") && <BrandingClient />}
       </div>
       <div className={tab === "setup" ? "" : "hidden"}>
         {visited.has("setup") && <SetupClient />}

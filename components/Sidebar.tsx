@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -30,6 +31,16 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
+  const [brand, setBrand] = useState<{ logoUrl?: string; siteName?: string }>({});
+
+  useEffect(() => {
+    fetch("/api/app-config")
+      .then(r => r.json())
+      .then((cfg: Record<string, string>) => setBrand({ logoUrl: cfg.logoUrl, siteName: cfg.siteTitle }))
+      .catch(() => {});
+  }, []);
+
+  const displayName = brand.siteName?.split(/[—-]/)[0]?.trim() || "PostFlow";
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -48,15 +59,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="flex h-14 items-center border-b border-slate-700/60 px-3 justify-between">
         {!collapsed && (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm flex-shrink-0">
-              <Zap size={15} strokeWidth={2.5} />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm flex-shrink-0 overflow-hidden">
+              {brand.logoUrl
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={brand.logoUrl} alt={displayName} className="w-full h-full object-cover" />
+                : <Zap size={15} strokeWidth={2.5} />}
             </div>
-            <span className="text-base font-bold tracking-tight text-white">PostFlow</span>
+            <span className="text-base font-bold tracking-tight text-white truncate">{displayName}</span>
           </div>
         )}
         {collapsed && (
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm mx-auto">
-            <Zap size={15} strokeWidth={2.5} />
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm mx-auto overflow-hidden">
+            {brand.logoUrl
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={brand.logoUrl} alt={displayName} className="w-full h-full object-cover" />
+              : <Zap size={15} strokeWidth={2.5} />}
           </div>
         )}
         <button

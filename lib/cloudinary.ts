@@ -45,6 +45,23 @@ export async function uploadFromUrl(
   return { publicId: result.public_id, secureUrl: result.secure_url, resourceType: result.resource_type };
 }
 
+export async function uploadBuffer(
+  buffer: Buffer,
+  folder = "postflow/branding"
+): Promise<{ publicId: string; secureUrl: string }> {
+  const result = await new Promise<{ public_id: string; secure_url: string }>((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: "image", folder },
+      (err, res) => {
+        if (err || !res) return reject(err ?? new Error("Upload thất bại"));
+        resolve(res as { public_id: string; secure_url: string });
+      }
+    );
+    stream.end(buffer);
+  });
+  return { publicId: result.public_id, secureUrl: result.secure_url };
+}
+
 export async function deleteFile(publicId: string, resourceType = "image") {
   await cloudinary.uploader.destroy(publicId, {
     resource_type: resourceType as "image" | "video" | "raw",
