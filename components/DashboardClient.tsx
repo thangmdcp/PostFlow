@@ -1,0 +1,890 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import type { Post, ExtractedLink, FbConnection, FbAdAccount } from "@prisma/client";
+import { StatusBadge } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { formatDate, truncate } from "@/lib/utils";
+import {
+  ExternalLink, RefreshCw, Megaphone, PlusCircle,
+  Trash2, CheckSquare, Square, Loader2, Clock, CalendarDays,
+  Columns3, Check, ChevronDown, ChevronLeft, ChevronRight,
+} from "lucide-react";
+import { useToast } from "@/components/ui/toast";
+import { CreateAdDialog } from "@/components/CreateAdDialog";
+import { loadAdSettings, randomizeFromSettings } from "@/lib/adSettings";
+import { PageMultiSelect, PresetPanel, pickRandomPage } from "@/components/PageSelector";
+import { EmptyState } from "@/components/EmptyState";
+
+type PostWithLinks = Post & { extractedLinks: ExtractedLink[] };
+
+interface Props {
+  posts: PostWithLinks[];
+  connections: FbConnection[];
+  adAccounts: FbAdAccount[];
+}
+
+function ScheduledTime({ date }: { date: Date | string }) {
+  const d = new Date(date);
+  const now = new Date();
+  const diffMs = d.getTime() - now.getTime();
+
+  const timeStr = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  const dateStr = d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+  const isOverdue = diffMs < 0;
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Clock size={12} className={isOverdue ? "text-red-400" : "text-slate-400"} />
+      <span className={`text-xs tabular-nums ${isOverdue ? "text-red-500" : "text-slate-700 dark:text-slate-300"}`}>
+        {timeStr} · {dateStr}
+      </span>
+      {isOverdue && <span className="text-xs text-red-400">Đã qua</span>}
+    </div>
+  );
+}
+
+const STATUS_FILTERS = ["all", "pending", "done", "failed"] as const;
+type StatusFilter = typeof STATUS_FILTERS[number];
+
+const FILTER_LABELS: Record<StatusFilter, string> = {
+  all: "Tất cả",
+  pending: "Chờ đăng",
+  done: "Đã đăng",
+  failed: "Thất bại",
+};
+
+// ── Column config ─────────────────────────────────────────────────────────────
+type ColKey = "campaign" | "content" | "budget" | "age" | "gender" | "start" | "page" | "status" | "actions";
+
+const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
+  { key: "campaign",  label: "Tên chiến dịch",    defaultWidth: 210, minWidth: 100, defaultVisible: true },
+  { key: "content",   label: "Nội dung bài viết",  defaultWidth: 260, minWidth: 120, defaultVisible: true },
+  { key: "budget",    label: "Ngân sách",           defaultWidth: 105, minWidth: 70,  defaultVisible: true },
+  { key: "age",       label: "Độ tuổi",             defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
+  { key: "gender",    label: "Giới tính",           defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
+  { key: "start",     label: "Bắt đầu",             defaultWidth: 155, minWidth: 100, defaultVisible: true },
+  { key: "page",      label: "Page",                defaultWidth: 145, minWidth: 80,  defaultVisible: true },
+  { key: "status",    label: "Trạng thái",          defaultWidth: 105, minWidth: 75,  defaultVisible: true },
+  { key: "actions",   label: "Hành động",           defaultWidth: 145, minWidth: 90,  defaultVisible: true },
+];
+
+const COLS_STORAGE_KEY = "postflow_dashboard_cols_v1";
+
+export function DashboardClient({ posts, connections, adAccounts }: Props) {
+  const router = useRouter();
+  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [selectedPost, setSelectedPost] = useState<PostWithLinks | null>(null);
+  const [adDialogOpen, setAdDialogOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [localPosts, setLocalPosts] = useState(posts);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [selectedPageIds, setSelectedPageIds] = useState<string[]>(
+    connections[0] ? [connections[0].pageId] : []
+  );
+  const [templates, setTemplates] = useState<{ id: string; templateName: string; campaignId: string; settings?: Record<string, unknown> }[]>([]);
+  const { show, ToastComponent } = useToast();
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Column widths & visibility ────────────────────────────────────────────
+  const defaultWidths = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultWidth])) as Record<ColKey, number>;
+  const defaultVisible = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible])) as Record<ColKey, boolean>;
+
+  const [colWidths, setColWidths] = useState<Record<ColKey, number>>(defaultWidths);
+  const [colVisible, setColVisible] = useState<Record<ColKey, boolean>>(defaultVisible);
+  const [colPanelOpen, setColPanelOpen] = useState(false);
+  const colPanelRef = useRef<HTMLDivElement>(null);
+
+  // ── Date range filter ─────────────────────────────────────────────────────
+  type DatePreset = "today" | "yesterday" | "last7" | "last30" | "thisMonth" | "custom";
+  const [datePreset, setDatePreset] = useState<DatePreset | null>(null);
+  const [dateFrom, setDateFrom] = useState<Date | null>(null);
+  const [dateTo, setDateTo] = useState<Date | null>(null);
+  const [datePanelOpen, setDatePanelOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [calPickingEnd, setCalPickingEnd] = useState(false);
+  const datePanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!datePanelOpen) return;
+    function handler(e: MouseEvent) {
+      if (datePanelRef.current && !datePanelRef.current.contains(e.target as Node)) setDatePanelOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [datePanelOpen]);
+
+  // pendingFrom/To = draft while panel is open; dateFrom/To = applied filter
+  const [pendingFrom, setPendingFrom] = useState<Date | null>(null);
+  const [pendingTo, setPendingTo] = useState<Date | null>(null);
+
+  function openDatePanel() {
+    setPendingFrom(dateFrom); setPendingTo(dateTo); setDatePanelOpen(true);
+  }
+
+  function applyPreset(preset: DatePreset) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
+    setDatePreset(preset);
+    if (preset === "today") { setPendingFrom(today); setPendingTo(endToday); setDateFrom(today); setDateTo(endToday); setDatePanelOpen(false); }
+    else if (preset === "yesterday") {
+      const y = new Date(today); y.setDate(y.getDate() - 1);
+      const ye = new Date(y); ye.setHours(23, 59, 59, 999);
+      setPendingFrom(y); setPendingTo(ye); setDateFrom(y); setDateTo(ye); setDatePanelOpen(false);
+    } else if (preset === "last7") {
+      const f = new Date(today); f.setDate(f.getDate() - 6);
+      setPendingFrom(f); setPendingTo(endToday); setDateFrom(f); setDateTo(endToday); setDatePanelOpen(false);
+    } else if (preset === "last30") {
+      const f = new Date(today); f.setDate(f.getDate() - 29);
+      setPendingFrom(f); setPendingTo(endToday); setDateFrom(f); setDateTo(endToday); setDatePanelOpen(false);
+    } else if (preset === "thisMonth") {
+      const f = new Date(today.getFullYear(), today.getMonth(), 1);
+      setPendingFrom(f); setPendingTo(endToday); setDateFrom(f); setDateTo(endToday); setDatePanelOpen(false);
+    } else if (preset === "custom") {
+      setPendingFrom(null); setPendingTo(null); setCalPickingEnd(false);
+    }
+  }
+
+  function clearDateFilter() { setDatePreset(null); setDateFrom(null); setDateTo(null); setPendingFrom(null); setPendingTo(null); }
+
+  function onCalDayClick(day: Date) {
+    if (!calPickingEnd) {
+      setPendingFrom(day); setPendingTo(null); setCalPickingEnd(true);
+    } else {
+      if (pendingFrom && day < pendingFrom) { setPendingFrom(day); setPendingTo(null); setCalPickingEnd(true); return; }
+      const end = new Date(day); end.setHours(23, 59, 59, 999);
+      setPendingTo(end); setCalPickingEnd(false);
+    }
+  }
+
+  function commitDateFilter() {
+    setDateFrom(pendingFrom); setDateTo(pendingTo); setDatePanelOpen(false);
+  }
+
+  function cancelDatePanel() {
+    setPendingFrom(dateFrom); setPendingTo(dateTo); setDatePanelOpen(false);
+  }
+
+  const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+    { key: "today", label: "Hôm nay" },
+    { key: "yesterday", label: "Hôm qua" },
+    { key: "last7", label: "7 ngày qua" },
+    { key: "last30", label: "30 ngày qua" },
+    { key: "thisMonth", label: "Tháng này" },
+    { key: "custom", label: "Tuỳ chỉnh..." },
+  ];
+
+  function fmtDate(d: Date | null) {
+    if (!d) return "";
+    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
+  }
+
+  const dateLabel = dateFrom && dateTo
+    ? (datePreset && datePreset !== "custom"
+        ? DATE_PRESETS.find(p => p.key === datePreset)?.label ?? `${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`
+        : `${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`)
+    : "Tất cả thời gian";
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(COLS_STORAGE_KEY) ?? "{}");
+      if (saved.widths) setColWidths((prev) => ({ ...prev, ...saved.widths }));
+      if (saved.visible) setColVisible((prev) => ({ ...prev, ...saved.visible }));
+    } catch { /* ignore */ }
+  }, []);
+
+  function saveColState(widths: Record<ColKey, number>, visible: Record<ColKey, boolean>) {
+    localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify({ widths, visible }));
+  }
+
+  // Close panel on outside click
+  useEffect(() => {
+    if (!colPanelOpen) return;
+    function handler(e: MouseEvent) {
+      if (colPanelRef.current && !colPanelRef.current.contains(e.target as Node)) setColPanelOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [colPanelOpen]);
+
+  // Use refs so event handlers always see latest values without stale closures
+  const colWidthsRef = useRef(colWidths);
+  useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
+  const colVisibleRef = useRef(colVisible);
+  useEffect(() => { colVisibleRef.current = colVisible; }, [colVisible]);
+
+  function onResizeMouseDown(key: ColKey, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = colWidthsRef.current[key];
+    const minW = COLUMN_DEFS.find((c) => c.key === key)!.minWidth;
+
+    function onMove(ev: MouseEvent) {
+      const newW = Math.max(minW, startW + ev.clientX - startX);
+      setColWidths((prev) => ({ ...prev, [key]: newW }));
+    }
+
+    function onUp() {
+      saveColState(colWidthsRef.current, colVisibleRef.current);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  const dateFiltered = (dateFrom && dateTo)
+    ? localPosts.filter((p) => {
+        const d = new Date(p.createdAt);
+        return d >= dateFrom! && d <= dateTo!;
+      })
+    : localPosts;
+
+  const counts = {
+    all: dateFiltered.filter((p) => p.status !== "failed").length,
+    pending: dateFiltered.filter((p) => p.status === "pending").length,
+    publishing: dateFiltered.filter((p) => p.status === "publishing").length,
+    done: dateFiltered.filter((p) => p.status === "done").length,
+    failed: dateFiltered.filter((p) => p.status === "failed").length,
+    fetching: dateFiltered.filter((p) => p.status === "fetching").length,
+  };
+
+  const filtered = filter === "all"
+    ? dateFiltered.filter((p) => p.status !== "failed")
+    : dateFiltered.filter((p) => p.status === filter);
+
+  // Auto-refresh when posts are in a transient state (fetching or publishing)
+  useEffect(() => {
+    if (counts.publishing > 0 || counts.fetching > 0) {
+      refreshTimerRef.current = setInterval(() => router.refresh(), 3000);
+    }
+    return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
+  }, [counts.publishing, counts.fetching, router]);
+
+  // Refresh when user comes back to this tab (e.g. after creating a batch)
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") router.refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [router]);
+
+  // Fetch templates once on mount; auto-set publishToPage based on active template postType
+  useEffect(() => {
+    fetch("/api/campaign-templates").then((r) => r.json()).then((data) => {
+      if (Array.isArray(data)) setTemplates(data);
+    }).catch(() => {});
+  }, []);
+
+  const checkedPosts = filtered.filter((p) => checkedIds.has(p.id));
+  const checkedPending = checkedPosts.filter((p) => p.status === "pending");
+  const checkedDone = checkedPosts.filter((p) => p.status === "done");
+  const checkedForAds = checkedPosts.filter((p) => p.status === "done" || p.status === "pending");
+  const allChecked = filtered.length > 0 && filtered.every((p) => checkedIds.has(p.id));
+  const hasSelection = checkedPosts.length > 0;
+
+  function toggleCheck(id: string) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allChecked) {
+      setCheckedIds((prev) => { const n = new Set(prev); filtered.forEach((p) => n.delete(p.id)); return n; });
+    } else {
+      setCheckedIds((prev) => { const n = new Set(prev); filtered.forEach((p) => n.add(p.id)); return n; });
+    }
+  }
+
+  async function deletePost(postId: string) {
+    setDeletingId(postId);
+    const res = await fetch(`/api/posts/${postId}`, { method: "DELETE" });
+    if (res.ok) { setLocalPosts((prev) => prev.filter((p) => p.id !== postId)); show("Đã xoá bài", "success"); }
+    else show("Xoá thất bại", "error");
+    setDeletingId(null);
+  }
+
+  async function retryPost(postId: string) {
+    const res = await fetch(`/api/posts/${postId}/retry`, { method: "POST" });
+    if (res.ok) { show("Đang thử lại...", "info"); setTimeout(() => router.refresh(), 1500); }
+    else show("Retry thất bại", "error");
+  }
+
+  // ── Bulk delete ──────────────────────────────────────────────────────────────
+  async function bulkDelete() {
+    if (!hasSelection || !confirm(`Xoá ${checkedPosts.length} bài đã chọn?`)) return;
+    let ok = 0;
+    for (const p of checkedPosts) {
+      const res = await fetch(`/api/posts/${p.id}`, { method: "DELETE" });
+      if (res.ok) { setLocalPosts((prev) => prev.filter((x) => x.id !== p.id)); ok++; }
+    }
+    show(`Đã xoá ${ok} bài`, "success");
+    setCheckedIds(new Set());
+  }
+
+  // ── Bulk publish ─────────────────────────────────────────────────────────────
+  async function bulkPublish(postList = checkedPending): Promise<Map<string, string>> {
+    const fbPostIdMap = new Map<string, string>();
+    if (selectedPageIds.length === 0 || postList.length === 0) return fbPostIdMap;
+    for (const p of postList) {
+      const pageId = pickRandomPage(selectedPageIds, connections);
+      const res = await fetch(`/api/posts/${p.id}/publish`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        fbPostIdMap.set(p.id, data.fbPostId ?? "");
+        setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x));
+      }
+    }
+    return fbPostIdMap;
+  }
+
+  async function handleBulkPublishOnly() {
+    if (!hasSelection || checkedPending.length === 0 || bulkRunning) return;
+    if (selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
+    const missing = checkedPending.filter((p) => p.extractedLinks.some((l) => !l.myUrl));
+    if (missing.length > 0) {
+      show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi đăng`, "error");
+      return;
+    }
+    setBulkRunning(true);
+    const map = await bulkPublish(checkedPending);
+    setBulkRunning(false);
+    show(`Đã đăng ${map.size}/${checkedPending.length} bài`, map.size > 0 ? "success" : "error");
+    setCheckedIds(new Set());
+  }
+
+  // ── Bulk ads (auto-publish pending first, then create ads) ───────────────────
+  async function handleBulkAds() {
+    if (!hasSelection || checkedForAds.length === 0 || bulkRunning) return;
+    const firstTemplate = templates[0];
+    if (!firstTemplate) { show("Chưa có campaign template", "error"); return; }
+    if (selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
+    const missing = checkedForAds.filter((p) => p.extractedLinks.some((l) => !l.myUrl));
+    if (missing.length > 0) {
+      show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi đăng`, "error");
+      return;
+    }
+
+    setBulkRunning(true);
+    const settings = loadAdSettings();
+
+    // Step 1: publish pending posts first
+    if (checkedPending.length > 0) {
+      show(`Đang đăng ${checkedPending.length} bài chờ...`, "info");
+      await bulkPublish(checkedPending);
+    }
+
+    // Step 2: create ads for all (done + just-published)
+    const toAds = [
+      ...checkedDone,
+      ...checkedPending, // now published
+    ];
+    let adsOk = 0;
+    let adsFail = 0;
+    for (const p of toAds) {
+      try {
+        const { budget, ageMin, ageMax, gender, adStatus } = randomizeFromSettings(settings);
+        const res = await fetch("/api/ads/create", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            postId: p.id,
+            templateCampaignId: firstTemplate.campaignId,
+            adAccountId: adAccounts[0]?.accountId,
+            dailyBudget: budget, ageMin, ageMax, gender, adStatus,
+          }),
+        });
+        if (res.ok) {
+          adsOk++;
+          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, adCampaignId: "created" } : x));
+        } else adsFail++;
+      } catch { adsFail++; }
+    }
+
+    setBulkRunning(false);
+    show(
+      `Tạo ads: ${adsOk} thành công${adsFail > 0 ? `, ${adsFail} lỗi` : ""}`,
+      adsOk > 0 ? "success" : "error"
+    );
+    setCheckedIds(new Set());
+  }
+
+  // ── Single post: publish then ads ───────────────────────────────────────────
+  const [singleAdsRunningId, setSingleAdsRunningId] = useState<string | null>(null);
+
+  async function publishThenAds(post: PostWithLinks) {
+    if (selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
+    const firstTemplate = templates[0];
+    if (!firstTemplate) { show("Chưa có campaign template", "error"); return; }
+
+    // Guard: all extracted links must have affiliate URL filled
+    const missingAff = post.extractedLinks.filter((l) => !l.myUrl);
+    if (missingAff.length > 0) {
+      show(`Còn ${missingAff.length} link chưa điền link aff — vào batch điền trước khi đăng`, "error");
+      return;
+    }
+
+    setSingleAdsRunningId(post.id);
+    try {
+      // Step 1: publish
+      const pageId = pickRandomPage(selectedPageIds, connections);
+      show("Đang đăng bài...", "info");
+      const pubRes = await fetch(`/api/posts/${post.id}/publish`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId }),
+      });
+      const pubData = await pubRes.json();
+      if (!pubRes.ok) throw new Error(pubData.error ?? "Đăng bài thất bại");
+      setLocalPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, status: "done", fbPostUrl: pubData.fbPostUrl } : p));
+
+      // Step 2: create ads
+      show("Đang tạo ads...", "info");
+      const settings = loadAdSettings();
+      const { budget, ageMin, ageMax, gender, adStatus } = randomizeFromSettings(settings);
+      const adsRes = await fetch("/api/ads/create", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          postId: post.id,
+          templateCampaignId: firstTemplate.campaignId,
+          adAccountId: adAccounts[0]?.accountId,
+          dailyBudget: budget, ageMin, ageMax, gender, adStatus,
+        }),
+      });
+      if (!adsRes.ok) {
+        const d = await adsRes.json();
+        throw new Error(d.error ?? "Tạo ads thất bại");
+      }
+      setLocalPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, adCampaignId: "created" } : p));
+      show("Đã đăng bài và tạo ads thành công", "success");
+    } catch (err: unknown) {
+      show(err instanceof Error ? err.message : "Thất bại", "error");
+    }
+    setSingleAdsRunningId(null);
+  }
+
+  const btnBase = "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all";
+  const btnActive = (color: string) => `${btnBase} ${color} text-white`;
+  const btnDim = `${btnBase} bg-muted text-muted-foreground opacity-50 cursor-not-allowed`;
+
+  return (
+    <div className="pb-10">
+      {ToastComponent}
+
+      {/* Header */}
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+
+        <div className="flex items-center gap-2">
+          <Link href="/posts/new">
+            <Button className="gap-2 shadow-sm"><PlusCircle size={15} />Tạo batch mới</Button>
+          </Link>
+
+          {/* Date range picker */}
+          <div className="relative" ref={datePanelRef}>
+            <button
+              onClick={openDatePanel}
+              className="flex items-center gap-2 rounded-lg border bg-white dark:bg-slate-900 px-3 py-2 text-sm shadow-sm hover:border-blue-400 transition-colors">
+              <CalendarDays size={15} className="text-slate-400" />
+              <span className="font-medium text-slate-700 dark:text-slate-200">{dateLabel}</span>
+              {dateFrom && <button onClick={(e) => { e.stopPropagation(); clearDateFilter(); }} className="text-slate-300 hover:text-slate-500 text-xs leading-none ml-0.5">✕</button>}
+              <ChevronDown size={14} className="text-slate-400" />
+            </button>
+
+            {datePanelOpen && (
+              <div className="absolute right-0 top-full mt-1 z-50 bg-white dark:bg-slate-900 border rounded-xl shadow-xl">
+                <div className="flex">
+                  {/* Presets */}
+                  <div className="w-44 border-r p-3 flex flex-col gap-0.5 shrink-0">
+                    {DATE_PRESETS.map((p) => (
+                      <button key={p.key} onClick={() => applyPreset(p.key)}
+                        className={["w-full text-left px-3 py-2 rounded-lg text-sm transition-colors",
+                          datePreset === p.key ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 font-medium" : "hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300",
+                        ].join(" ")}>
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Two-month calendar */}
+                  <div className="p-5 flex gap-8">
+                    {[calMonth, new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1)].map((month, mi) => {
+                      const dayLabels = ["CN","T2","T3","T4","T5","T6","T7"];
+                      const firstDow = month.getDay();
+                      const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+                      const cells: (Date | null)[] = Array(firstDow).fill(null);
+                      for (let i = 1; i <= daysInMonth; i++) cells.push(new Date(month.getFullYear(), month.getMonth(), i));
+                      const today = new Date(); today.setHours(0,0,0,0);
+                      const fromT = pendingFrom ? new Date(pendingFrom.getFullYear(), pendingFrom.getMonth(), pendingFrom.getDate()).getTime() : null;
+                      const toT = pendingTo ? new Date(pendingTo.getFullYear(), pendingTo.getMonth(), pendingTo.getDate()).getTime() : null;
+                      return (
+                        <div key={mi} style={{ width: 252 }}>
+                          <div className="flex items-center justify-between mb-3">
+                            {mi === 0
+                              ? <button onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><ChevronLeft size={15} /></button>
+                              : <div className="w-8" />}
+                            <span className="text-sm font-bold">
+                              Tháng {month.getMonth() + 1} · {month.getFullYear()}
+                            </span>
+                            {mi === 1
+                              ? <button onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><ChevronRight size={15} /></button>
+                              : <div className="w-8" />}
+                          </div>
+                          <div className="grid grid-cols-7 mb-1">
+                            {dayLabels.map(d => <div key={d} className="text-center text-xs text-slate-400 py-1">{d}</div>)}
+                          </div>
+                          <div className="grid grid-cols-7">
+                            {cells.map((day, i) => {
+                              if (!day) return <div key={i} className="h-9" />;
+                              const t = day.getTime();
+                              const isFrom = fromT !== null && t === fromT;
+                              const isTo = toT !== null && t === toT;
+                              const inRange = fromT !== null && toT !== null && t > fromT && t < toT;
+                              const isToday = t === today.getTime();
+                              return (
+                                <button key={i} onClick={() => { setDatePreset("custom"); onCalDayClick(day); }}
+                                  className={["h-9 w-full text-sm transition-colors flex items-center justify-center",
+                                    isFrom ? "bg-blue-600 text-white font-bold rounded-l-full" :
+                                    isTo   ? "bg-blue-600 text-white font-bold rounded-r-full" :
+                                    inRange ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40" :
+                                    isToday ? "border border-blue-400 text-blue-600 rounded-full" :
+                                    "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-full",
+                                  ].join(" ")}>
+                                  {day.getDate()}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="border-t px-5 py-3 flex items-center justify-between gap-4">
+                  <p className="text-sm text-slate-500 min-w-0 truncate">
+                    {!pendingFrom ? "Chọn ngày bắt đầu" : !pendingTo ? `Từ ${fmtDate(pendingFrom)} · Chọn ngày kết thúc` : `${fmtDate(pendingFrom)} – ${fmtDate(pendingTo)}`}
+                  </p>
+                  <div className="flex gap-2 shrink-0">
+                    <button onClick={cancelDatePanel}
+                      className="px-4 py-1.5 rounded-lg border text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                      Huỷ
+                    </button>
+                    <button onClick={commitDateFilter} disabled={!pendingFrom || !pendingTo}
+                      className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                      Cập nhật
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+
+      {/* Filter tabs + action buttons */}
+      <div className="flex flex-col gap-2.5 mb-4 lg:flex-row lg:items-center lg:justify-between">
+        {/* Tabs */}
+        <div className="flex gap-1 overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden">
+          {STATUS_FILTERS.map((s) => (
+            <button key={s} onClick={() => { setFilter(s); setCheckedIds(new Set()); }}
+              className={["shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
+                filter === s
+                  ? "bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900"
+                  : "bg-muted text-muted-foreground hover:bg-accent",
+              ].join(" ")}>
+              {FILTER_LABELS[s]} ({s === "all" ? counts.all : counts[s]})
+            </button>
+          ))}
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-1.5 overflow-x-auto min-w-0 [&::-webkit-scrollbar]:hidden lg:justify-end">
+          {/* Page multi-select + preset */}
+          <div className="w-40 shrink-0">
+            <PageMultiSelect connections={connections} selected={selectedPageIds} onChange={setSelectedPageIds} />
+          </div>
+          <div className="shrink-0">
+            <PresetPanel connections={connections} selected={selectedPageIds} onLoad={setSelectedPageIds} />
+          </div>
+
+          {/* Xóa */}
+          <button onClick={bulkDelete} disabled={!hasSelection || bulkRunning}
+            className={`${hasSelection && !bulkRunning ? btnActive("bg-red-500 hover:bg-red-600") : btnDim} shrink-0`}>
+            <Trash2 size={12} />
+            Xoá{hasSelection ? ` (${checkedPosts.length})` : ""}
+          </button>
+
+          {/* Đăng ngay */}
+          <button onClick={handleBulkPublishOnly} disabled={checkedPending.length === 0 || bulkRunning}
+            className={`${checkedPending.length > 0 && !bulkRunning ? btnActive("bg-amber-500 hover:bg-amber-600") : btnDim} shrink-0`}>
+            {bulkRunning ? <Loader2 size={12} className="animate-spin" /> : null}
+            Đăng ngay{checkedPending.length > 0 ? ` (${checkedPending.length})` : ""}
+          </button>
+
+          {/* Tạo ads */}
+          <button onClick={handleBulkAds} disabled={checkedForAds.length === 0 || bulkRunning}
+            className={`${checkedForAds.length > 0 && !bulkRunning ? btnActive("bg-blue-600 hover:bg-blue-700") : btnDim} shrink-0`}>
+            {bulkRunning ? <Loader2 size={12} className="animate-spin" /> : <Megaphone size={12} />}
+            Tạo ads{checkedForAds.length > 0 ? ` (${checkedForAds.length})` : ""}
+          </button>
+
+          {/* Column visibility */}
+          <div className="relative shrink-0" ref={colPanelRef}>
+            <button onClick={() => setColPanelOpen((v) => !v)}
+              title="Ẩn/hiện cột"
+              className={`${btnBase} border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0`}>
+              <Columns3 size={13} />
+              Cột
+            </button>
+            {colPanelOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-2 min-w-[180px]">
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-2 pt-1 pb-2">Hiển thị cột</p>
+                {COLUMN_DEFS.map((col) => (
+                  <button key={col.key}
+                    onClick={() => {
+                      const next = { ...colVisible, [col.key]: !colVisible[col.key] };
+                      setColVisible(next);
+                      saveColState(colWidths, next);
+                    }}
+                    className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-sm text-slate-700 dark:text-slate-300 transition-colors">
+                    <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${colVisible[col.key] ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+                      {colVisible[col.key] && <Check size={10} strokeWidth={3} />}
+                    </span>
+                    {col.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Table — FB Ads Manager style */}
+      {filtered.length === 0 ? (
+        <EmptyState title="Chưa có bài nào"
+          action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
+      ) : (
+        <div className="rounded-xl border overflow-x-auto shadow-sm bg-white dark:bg-slate-900">
+          <table className="text-sm border-collapse" style={{
+              tableLayout: "fixed",
+              width: COLUMN_DEFS.filter((c) => colVisible[c.key]).reduce((s, c) => s + colWidths[c.key], 40),
+              minWidth: "100%",
+            }}>
+            <colgroup>
+              <col style={{ width: 40 }} />
+              {COLUMN_DEFS.filter((c) => colVisible[c.key]).map((col) => (
+                <col key={col.key} style={{ width: colWidths[col.key] }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
+                <th className="w-10 px-3 py-3 sticky left-0 bg-slate-50 dark:bg-slate-800/80 z-10">
+                  <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">
+                    {allChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
+                  </button>
+                </th>
+                {COLUMN_DEFS.filter((c) => colVisible[c.key]).map((col) => (
+                  <th key={col.key}
+                    className="relative text-left px-3 py-3 font-semibold text-slate-600 dark:text-slate-300 text-xs whitespace-nowrap border-l border-slate-100 dark:border-slate-700/50"
+                    style={{ width: colWidths[col.key], maxWidth: colWidths[col.key] }}>
+                    {/* Label — padded right so it doesn't overlap the resize handle */}
+                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", paddingRight: 16 }}>
+                      {col.label}
+                    </span>
+                    {/* Resize handle — inline style so overflow:hidden on parent can't clip it */}
+                    <div
+                      onMouseDown={(e) => onResizeMouseDown(col.key, e)}
+                      title="Kéo để thay đổi độ rộng"
+                      style={{
+                        position: "absolute", right: 0, top: 0, bottom: 0, width: 10,
+                        cursor: "col-resize", zIndex: 50,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                      className="group/resize hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+                    >
+                      <div style={{ width: 2, height: 16, borderRadius: 9999, backgroundColor: "currentColor" }}
+                        className="opacity-0 group-hover/resize:opacity-40 text-blue-500 transition-opacity" />
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((post) => {
+                const isChecked = checkedIds.has(post.id);
+                const conn = connections.find((c) => c.pageId === post.pageId);
+                const pageName = conn?.pageName ?? post.pageId ?? "—";
+                const genderLabel = (post as PostWithLinks & { adGender?: string }).adGender === "male" ? "Nam"
+                  : (post as PostWithLinks & { adGender?: string }).adGender === "female" ? "Nữ" : "Tất cả";
+                const budget = (post as PostWithLinks & { adBudget?: string }).adBudget;
+                const ageMin = (post as PostWithLinks & { adAgeMin?: number }).adAgeMin;
+                const ageMax = (post as PostWithLinks & { adAgeMax?: number }).adAgeMax;
+
+                return (
+                  <tr key={post.id}
+                    className={["border-b last:border-0 transition-colors group",
+                      isChecked ? "bg-blue-50 dark:bg-blue-900/10" : "hover:bg-slate-50/70 dark:hover:bg-slate-800/30",
+                    ].join(" ")}>
+
+                    {/* Checkbox */}
+                    <td className={`px-3 py-2.5 sticky left-0 z-20 ${isChecked ? "bg-blue-50 dark:bg-blue-900/10" : "bg-white dark:bg-slate-900 group-hover:bg-slate-50/70 dark:group-hover:bg-slate-800/30"}`}>
+                      <button onClick={() => toggleCheck(post.id)} className="text-slate-400 hover:text-blue-600 transition-colors">
+                        {isChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
+                      </button>
+                    </td>
+
+                    {colVisible.campaign && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <div className="flex items-center gap-2">
+                          {post.thumbnailUrl ? (
+                            <img src={post.thumbnailUrl} alt="" referrerPolicy="no-referrer"
+                              className="w-9 h-9 rounded object-cover flex-shrink-0 border bg-slate-100" />
+                          ) : (
+                            <div className="w-9 h-9 rounded border bg-slate-100 dark:bg-slate-800 flex-shrink-0" />
+                          )}
+                          <a href={post.sourceUrl} target="_blank" rel="noopener noreferrer"
+                            className="font-medium text-blue-700 dark:text-blue-400 hover:underline text-xs leading-tight truncate min-w-0 flex-1">
+                            {post.title || post.sourceUrl}
+                          </a>
+                        </div>
+                      </td>
+                    )}
+
+                    {colVisible.content && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed break-words whitespace-pre-wrap">
+                          {post.finalCaption ?? post.rawCaption ?? "Chưa có nội dung"}
+                        </p>
+                      </td>
+                    )}
+
+                    {colVisible.budget && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {budget ? (
+                          <span className="text-xs font-medium text-slate-700 dark:text-slate-300 tabular-nums">
+                            đ {Number(budget).toLocaleString("vi-VN")}
+                          </span>
+                        ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                    )}
+
+                    {colVisible.age && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {ageMin && ageMax
+                          ? <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums">{ageMin} – {ageMax}</span>
+                          : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                    )}
+
+                    {colVisible.gender && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {(post as PostWithLinks & { adGender?: string }).adGender
+                          ? <span className="text-xs text-slate-700 dark:text-slate-300">{genderLabel}</span>
+                          : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                    )}
+
+                    {colVisible.start && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.fbPostUrl ? (
+                          <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+                            <ExternalLink size={10} />Xem bài
+                          </a>
+                        ) : post.scheduledAt ? (
+                          <ScheduledTime date={post.scheduledAt} />
+                        ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                    )}
+
+
+                    {colVisible.page && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <span className="text-xs text-slate-600 dark:text-slate-400 truncate block" title={pageName}>
+                          {pageName}
+                        </span>
+                      </td>
+                    )}
+
+                    {colVisible.status && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <StatusBadge status={post.status} />
+                        {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.errorMsg}</p>}
+                      </td>
+                    )}
+
+                    {colVisible.actions && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <div className="flex items-center gap-1">
+                          {post.status === "done" && (
+                            post.adCampaignId
+                              ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
+                                  <Megaphone size={10} />Ads ✓
+                                </span>
+                              : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
+                                  onClick={() => { setSelectedPost(post); setAdDialogOpen(true); }}>
+                                  <Megaphone size={11} />Ads
+                                </Button>
+                          )}
+                          {post.status === "pending" && (
+                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
+                              disabled={singleAdsRunningId === post.id}
+                              onClick={() => publishThenAds(post)}>
+                              {singleAdsRunningId === post.id
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <Megaphone size={11} />}
+                              Ads
+                            </Button>
+                          )}
+                          {post.status === "failed" && (
+                            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground"
+                              onClick={() => retryPost(post.id)}>
+                              <RefreshCw size={11} />Retry
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground hover:text-red-500"
+                            onClick={() => deletePost(post.id)} disabled={deletingId === post.id}>
+                            {deletingId === post.id ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                          </Button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Single post ad dialog */}
+      {selectedPost && (
+        <CreateAdDialog
+          open={adDialogOpen}
+          onClose={() => setAdDialogOpen(false)}
+          post={selectedPost}
+          connections={connections}
+          adAccounts={adAccounts}
+          onSuccess={(msg) => show(msg, "success")}
+          onError={(msg) => show(msg, "error")}
+        />
+      )}
+    </div>
+  );
+}

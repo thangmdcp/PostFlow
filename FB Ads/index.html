@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="AdsFlow Studio giúp tạo chiến dịch quảng cáo từ bài đăng Page và xuất file nhập Ads Manager."
+    />
+    <meta property="og:title" content="AdsFlow Studio" />
+    <meta property="og:description" content="Tạo chiến dịch từ bài đăng Page." />
+    <meta property="og:image" content="/assets/adsflow-thumbnail.png" />
+    <link rel="icon" type="image/png" href="/assets/adsflow-logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>AdsFlow Studio</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <img class="brand-logo" src="/assets/adsflow-logo.png" alt="" />
+          <div class="brand-copy"><strong>AdsFlow Studio</strong></div>
+        </div>
+        <button class="sidebar-toggle" id="sidebarClose" type="button" aria-label="Đóng cài đặt" title="Đóng cài đặt">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 7-5 5 5 5"/></svg>
+        </button>
+
+        <section class="side-section">
+          <h2>Kết nối Meta</h2>
+          <label class="compact-field">
+            <span>User Access Token</span>
+            <input id="userAccessToken" type="password" autocomplete="off" placeholder="Dán token" />
+          </label>
+          <div class="side-grid token-app-fields">
+            <label class="compact-field">
+              <span>Meta App ID</span>
+              <input id="metaAppId" inputmode="numeric" autocomplete="off" placeholder="App ID" />
+            </label>
+            <label class="compact-field">
+              <span>App Secret</span>
+              <input id="metaAppSecret" type="password" autocomplete="new-password" placeholder="Chỉ dùng một lần" />
+            </label>
+          </div>
+          <label class="remember-token">
+            <input id="rememberToken" type="checkbox" checked />
+            <span>Lưu token trên máy</span>
+          </label>
+          <div class="side-actions">
+            <a class="button explorer-link" href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+              <span>Mở Graph API Explorer</span>
+            </a>
+            <button class="button fetch-pages" id="loadPages" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+              <span>Tải Page</span>
+            </button>
+            <button class="button long-lived-token-button" id="exchangeLongLivedToken" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 8.5 6M12 7v5l3 2M17 3h4v4M21 3l-5 5"/></svg>
+              <span>Lấy Long-lived Token</span>
+            </button>
+          </div>
+          <details class="permission-guide">
+            <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6l-8-3Zm-3 9 2 2 4-5"/></svg><span>Quyền cần thêm</span></summary>
+            <div class="permission-items">
+              <ol>
+                <li>Mở Explorer và chọn App.</li>
+                <li>Chọn <b>Add a Permission</b>.</li>
+                <li>Thêm các quyền bên dưới rồi tạo User Token mới.</li>
+                <li>Dán token mới vào app và bấm <b>Tải Page</b> để lấy lại Page Access Token.</li>
+              </ol>
+              <p><code>pages_show_list</code><span>Lấy danh sách Page</span></p>
+              <p><code>pages_read_engagement</code><span>Đọc bài đăng Page</span></p>
+              <p><code>pages_manage_engagement</code><span>Đăng và quản lý bình luận bằng Page</span></p>
+              <p><code>pages_read_user_content</code><span>Đọc bình luận người dùng</span></p>
+            </div>
+          </details>
+          <div class="hidden-config" id="pageStatus"></div>
+        </section>
+
+        <section class="side-section">
+          <h2>Chiến dịch</h2>
+          <label class="compact-field"><span>Tên Chiến Dịch mặc định</span><input id="commonName" value="Traffic - Bài đăng" /></label>
+          <div class="side-grid">
+            <label class="compact-field"><span>Loại tiền</span><select id="currency"><option value="VND">Việt Nam (₫)</option><option value="USD">Đô la Mỹ ($)</option></select></label>
+            <label class="compact-field"><span>Bước random</span><input id="budgetStep" type="number" min="0.01" step="0.01" value="1" /></label>
+          </div>
+          <div class="side-grid">
+            <label class="compact-field"><span>Ngân sách từ</span><input id="budgetMin" type="number" step="1" value="40000" /></label>
+            <label class="compact-field"><span>Đến</span><input id="budgetMax" type="number" step="1" value="60000" /></label>
+          </div>
+          <label class="compact-field"><span>Loại bài quảng cáo</span><select id="postFormat"><option value="AUTO">Tự nhận diện</option><option value="VIDEO">Video / Reel</option><option value="STATUS">Ảnh / bài viết / carousel</option></select></label>
+          <label class="compact-field"><span>Trạng thái</span><select id="status"><option value="PAUSED">Tạm dừng</option><option value="ACTIVE">Hoạt động</option></select></label>
+        </section>
+
+        <section class="side-section">
+          <h2>Đối tượng</h2>
+          <div class="side-grid">
+            <label class="compact-field"><span>Tuổi min từ</span><input id="ageMinFrom" type="number" value="18" /></label>
+            <label class="compact-field"><span>Đến</span><input id="ageMinTo" type="number" value="25" /></label>
+            <label class="compact-field"><span>Tuổi max từ</span><input id="ageMaxFrom" type="number" value="40" /></label>
+            <label class="compact-field"><span>Đến</span><input id="ageMaxTo" type="number" value="55" /></label>
+          </div>
+          <div class="side-grid">
+            <label class="compact-field"><span>Giới tính</span><select id="gender"><option value="">Tất cả</option><option value="Men">Nam</option><option value="Women">Nữ</option></select></label>
+            <label class="compact-field"><span>Quốc gia</span><input id="countries" value="VN" /></label>
+          </div>
+        </section>
+
+        <section class="side-section">
+          <h2>Phân phối</h2>
+          <label class="compact-field"><span>Mục tiêu</span><select id="objective"><option value="Traffic">Traffic</option><option value="Engagement">Engagement</option><option value="Leads">Leads</option><option value="Sales">Sales</option></select></label>
+          <label class="compact-field"><span>Tối ưu</span><select id="optimizationGoal"><option value="LINK_CLICKS">Link clicks</option><option value="LANDING_PAGE_VIEWS">Landing page views</option><option value="POST_ENGAGEMENT">Post engagement</option><option value="REACH">Reach</option></select></label>
+          <label class="compact-field"><span>Ngôn ngữ</span><input id="locales" value="Vietnamese" /></label>
+        </section>
+
+        <section class="side-section">
+          <h2>Thời gian bắt đầu</h2>
+          <label class="compact-field"><span>Cách xếp lịch</span><select id="scheduleMode"><option value="NOW">Thời gian hiện tại</option><option value="TOMORROW">0h ngày mai gần nhất</option><option value="DAILY">0h các ngày tiếp theo</option><option value="INTERVAL">Bước nhảy theo từng bài</option></select></label>
+          <label class="compact-field" id="postsPerDayField"><span>Số bài mỗi ngày</span><input id="postsPerDay" type="number" min="1" step="1" value="5" /></label>
+          <div id="scheduleIntervalFields">
+            <label class="compact-field"><span>Thời gian gốc</span><input id="scheduleBaseTime" type="datetime-local" /></label>
+            <label class="compact-field"><span>Bước nhảy mỗi bài (phút)</span><input id="scheduleStepMinutes" type="number" min="1" step="1" value="5" /></label>
+          </div>
+        </section>
+
+        <section class="side-section">
+          <h2>Bình luận tự động</h2>
+          <label class="feature-toggle">
+            <input id="commentAll" type="checkbox" />
+            <span>Áp dụng cho tất cả bài</span>
+          </label>
+          <label class="compact-field">
+            <span>Nội dung bình luận</span>
+            <select id="commentMode">
+              <option value="BODY">Nội dung bài viết</option>
+              <option value="DEFAULT">Chỉ nội dung mặc định</option>
+              <option value="DEFAULT_BODY">Mặc định + nội dung bài viết</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            <span>Nội dung mặc định</span>
+            <textarea id="commentText" rows="3" placeholder="Nhập nội dung bình luận"></textarea>
+          </label>
+        </section>
+
+        <select id="pageSelector" class="hidden-config"><option value="">Page</option></select>
+        <input id="pageId" class="hidden-config" />
+        <input id="pageAccessToken" class="hidden-config" />
+      </aside>
+      <button class="sidebar-backdrop" id="sidebarBackdrop" type="button" aria-label="Đóng lớp cài đặt"></button>
+
+      <main class="main-workspace">
+        <header class="topbar">
+          <div class="workspace-brand">
+            <img src="/assets/adsflow-logo.png" alt="" />
+            <div>
+              <h1>AdsFlow Studio</h1>
+              <span><strong id="adCountHero">0</strong> quảng cáo</span>
+            </div>
+          </div>
+        </header>
+
+        <section class="work-card">
+          <div class="sticky-actions">
+            <div class="multi-page-picker" id="multiPagePicker">
+              <button class="multi-page-trigger" id="bulkPageTrigger" type="button" aria-expanded="false">
+                <svg class="trigger-leading-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg>
+                <span id="bulkPageLabel">Chọn Page nhập link</span>
+                <svg class="trigger-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+              </button>
+              <div class="multi-page-popup" id="bulkPagePopup">
+                <input id="bulkPageSearch" type="search" autocomplete="off" placeholder="Tìm tên Page..." aria-label="Tìm Page" />
+                <div class="multi-page-options" id="bulkPageOptions"></div>
+              </div>
+            </div>
+            <div class="bulk-gender-control" aria-label="Đổi giới tính cho dòng đã chọn">
+              <select id="bulkGender" aria-label="Giới tính cho dòng đã chọn"><option value="">Tất cả</option><option value="Men">Nam</option><option value="Women">Nữ</option></select>
+            </div>
+            <button class="button button-secondary" id="randomAll" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 17l5-5 3 3 9-9M16 21h5v-5M15 15l6 6M4 7l4 4"/></svg><span>Random tất cả</span></button>
+            <button class="button button-secondary" id="scheduleAll" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v3M18 3v3M4 8h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1zM8 12h3M8 16h6"/></svg><span>Áp dụng lịch</span></button>
+            <button class="button button-primary" id="processAll" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg><span>Xử lý tất cả</span></button>
+            <button class="button button-danger-soft" id="clearAll" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><span>Xóa tất cả</span></button>
+            <details class="column-picker">
+              <summary class="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M9 3v18M16 3v18"/></svg><span>Hiện cột</span></summary>
+              <div id="columnOptions" class="column-options"></div>
+            </details>
+            <button class="button button-primary export-button" id="exportButton" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span>Xuất Excel</span></button>
+          </div>
+
+          <div class="paste-row">
+            <div class="page-link-inputs" id="linkInputArea"></div>
+          </div>
+
+          <div class="ads-table-wrap">
+            <table class="ads-table" id="adsTable">
+              <colgroup id="adsColgroup"></colgroup>
+              <thead><tr>
+                <th data-column="select"><input id="selectAllAds" class="row-check" type="checkbox" aria-label="Chọn tất cả bài"></th>
+                <th data-column="name">Tên chiến dịch<span class="resize-handle"></span></th>
+                <th data-column="body">Nội dung bài viết<span class="resize-handle"></span></th>
+                <th data-column="budget">Ngân sách<span class="resize-handle"></span></th>
+                <th data-column="age">Độ tuổi<span class="resize-handle"></span></th>
+                <th data-column="gender">Giới tính<span class="resize-handle"></span></th>
+                <th data-column="start">Bắt đầu<span class="resize-handle"></span></th>
+                <th data-column="link" aria-label="Link bài đăng">Link<span class="resize-handle"></span></th>
+                <th data-column="page">Page<span class="resize-handle"></span></th>
+                <th data-column="comment">Bình luận<span class="resize-handle"></span></th>
+                <th data-column="status">Trạng thái<span class="resize-handle"></span></th>
+                <th data-column="actions">Thao tác<span class="resize-handle"></span></th>
+              </tr></thead>
+              <tbody id="adsTableBody"></tbody>
+            </table>
+            <div class="table-empty" id="tableEmpty">Dán link để bắt đầu</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <button class="floating-sidebar-open" id="sidebarOpen" type="button" aria-label="Mở cài đặt" title="Mở cài đặt">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>
+    </button>
+    <div class="confirm-modal" id="clearAllModal" hidden>
+      <button class="confirm-modal-backdrop" type="button" data-close-clear-modal aria-label="Đóng cảnh báo"></button>
+      <section class="confirm-modal-card" role="alertdialog" aria-modal="true" aria-labelledby="clearAllTitle" aria-describedby="clearAllDescription">
+        <button class="confirm-modal-close" type="button" data-close-clear-modal aria-label="Đóng">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg>
+        </button>
+        <div class="confirm-modal-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5M12 17h.01M10.3 4.5 2.8 18a2 2 0 0 0 1.75 3h14.9a2 2 0 0 0 1.75-3L13.7 4.5a2 2 0 0 0-3.4 0Z"/></svg></div>
+        <h2 id="clearAllTitle">Xóa tất cả bài đăng?</h2>
+        <p id="clearAllDescription">Toàn bộ link và các dòng quảng cáo hiện có sẽ bị xóa. Danh sách Page, token và cài đặt vẫn được giữ nguyên.</p>
+        <div class="confirm-modal-actions">
+          <button class="button button-secondary" type="button" data-close-clear-modal><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><span>Hủy</span></button>
+          <button class="button button-danger" id="confirmClearAll" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg><span>Xóa tất cả</span></button>
+        </div>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
