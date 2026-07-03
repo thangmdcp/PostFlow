@@ -264,25 +264,27 @@ export function SetupClient() {
         </div>
       )}
 
-      {/* Supabase SQL block */}
-      <div className="mb-6 rounded-lg border bg-slate-50">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b">
-          <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">SQL tạo bảng — chạy trong Supabase SQL Editor</span>
-          <button
-            type="button"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); copySQL(); }}
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
-          >
-            {copiedSQL ? <><Check size={12} className="text-green-600" /> Đã copy</> : <><Copy size={12} /> Copy SQL</>}
-          </button>
+      {/* Supabase SQL block — only needed during first-time setup */}
+      {loaded && !dbFilled && (
+        <div className="mb-6 rounded-lg border bg-slate-50">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b">
+            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">SQL tạo bảng — chạy trong Supabase SQL Editor</span>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); copySQL(); }}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+            >
+              {copiedSQL ? <><Check size={12} className="text-green-600" /> Đã copy</> : <><Copy size={12} /> Copy SQL</>}
+            </button>
+          </div>
+          <textarea
+            readOnly
+            value={SUPABASE_SQL}
+            onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+            className="w-full text-[11px] font-mono text-slate-700 px-4 py-3 bg-transparent resize-none h-48 focus:outline-none"
+          />
         </div>
-        <textarea
-          readOnly
-          value={SUPABASE_SQL}
-          onClick={(e) => (e.target as HTMLTextAreaElement).select()}
-          className="w-full text-[11px] font-mono text-slate-700 px-4 py-3 bg-transparent resize-none h-48 focus:outline-none"
-        />
-      </div>
+      )}
 
       {/* Fields */}
       <div className="space-y-4">
@@ -291,6 +293,20 @@ export function SetupClient() {
           const filled = val.length > 0;
           const isVisible = showSecret[field.key];
           const locked = field.storage === "env" && !envWritable;
+          // Already-configured env fields rarely change — collapse them to a
+          // status line instead of a full editable box so the form stays short.
+          // Ask to change one and it'll be updated directly.
+          const fixedConfigured = field.storage === "env" && filled;
+
+          if (fixedConfigured) {
+            return (
+              <div key={field.key} className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                <span className="text-sm font-mono font-semibold">{field.label}</span>
+                <span className="text-xs text-muted-foreground">— đã cấu hình</span>
+              </div>
+            );
+          }
 
           return (
             <div key={field.key}>
