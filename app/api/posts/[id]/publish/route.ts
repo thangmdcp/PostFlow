@@ -158,10 +158,13 @@ export async function POST(
     });
 
     // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
-    // see lib/autoAdsRunner.ts. Doesn't block this response.
+    // see lib/autoAdsRunner.ts. Only the initial state write is awaited here
+    // (fast) so the response carries a post that's already "pending" and the
+    // batch table can show the countdown immediately — the actual 1-minute
+    // wait + attempt happens after via waitUntil, not blocking this request.
     const adsWillRun = !!body.templateId;
     if (adsWillRun) {
-      scheduleAutoAds({
+      await scheduleAutoAds({
         postId: params.id,
         pageId,
         fbPostId,

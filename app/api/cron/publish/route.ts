@@ -110,7 +110,7 @@ export async function GET(req: Request) {
       // see lib/autoAdsRunner.ts.
       const adsWillRun = !!post.adTemplateId && !!fbPostId;
       if (adsWillRun) {
-        scheduleAutoAds({
+        await scheduleAutoAds({
           postId: post.id,
           pageId: post.pageId,
           fbPostId,

@@ -832,6 +832,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       if (res.ok) ok++;
     }
     setBulkRunning(false);
+    await mutateBatch();
     onToast(`Đã lên lịch ${ok}/${targets.length} bài`, "success");
     setCheckedIds(new Set());
   }
@@ -875,6 +876,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const ok = outcomes.filter((o) => o.ok).length;
     const adsScheduled = outcomes.filter((o) => o.adsScheduled).length;
     setBulkRunning(false);
+    // The publish response only returns once the initial ad "pending" state
+    // (with its countdown target) is actually persisted, so this refetch
+    // reliably shows it right away instead of waiting for the next poll —
+    // which, before a post has any adStatus locally, wouldn't even start.
+    await mutateBatch();
     onToast(
       adsScheduled
         ? `Đã đăng ${ok}/${targets.length} bài — quảng cáo sẽ tự tạo sau khoảng 1 phút (đăng ngay lúc bài vừa xong dễ bị Facebook từ chối vì chưa xử lý xong bài).`

@@ -35,13 +35,16 @@ export interface AutoAdsRunParams {
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
 }
 
-// Call this right after a post publishes successfully. Schedules (and
-// persists) the first attempt — doesn't block the caller.
-export function scheduleAutoAds(params: AutoAdsRunParams): void {
+// Call this right after a post publishes successfully. AWAIT it — it only
+// persists the initial "pending"/"skipped" state (fast, a single DB write),
+// so the HTTP response doesn't go out until the batch table has something
+// real to poll for. The actual 1-minute wait + attempt happens in the
+// background afterward via waitUntil, which this does NOT block on.
+export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
   if (!params.templateId || !params.fbPostId || !params.pageId) {
     // Structural skip (ads not enabled / bad state) — record immediately,
     // nothing to wait for.
-    prisma.post.update({
+    await prisma.post.update({
       where: { id: params.postId },
       data: {
         adStatus: "skipped",
@@ -52,7 +55,7 @@ export function scheduleAutoAds(params: AutoAdsRunParams): void {
   }
 
   const nextAttemptAt = new Date(Date.now() + RETRY_DELAYS_MS[0]);
-  prisma.post.update({
+  await prisma.post.update({
     where: { id: params.postId },
     data: { adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: 0 },
   }).catch(() => {});
