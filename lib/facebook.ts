@@ -243,16 +243,30 @@ export async function cloneAdCampaign(
     }
   }
   console.log("[creative] using objectStoryId:", objectStoryId);
-  const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: "PostFlow Creative",
-      object_story_id: objectStoryId,
-      access_token: accessToken,
-    }),
-  });
-  const creative = await creativeRes.json();
+
+  // A post just published (especially video) often isn't immediately eligible
+  // for ads yet — FB needs a few seconds to finish processing it before it can
+  // be referenced by an ad creative. Retry with backoff instead of failing on
+  // the first attempt (OAuthException 2446187 "post cannot be advertised").
+  let creative: { id?: string; error?: unknown } = {};
+  const delaysMs = [3000, 5000, 8000, 10000];
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "PostFlow Creative",
+        object_story_id: objectStoryId,
+        access_token: accessToken,
+      }),
+    });
+    creative = await creativeRes.json();
+    if (!creative.error) break;
+    console.log(`[creative] attempt ${attempt + 1} failed:`, JSON.stringify(creative.error));
+    if (attempt < delaysMs.length) {
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    }
+  }
   if (creative.error) throw new Error(`[creative] ${JSON.stringify(creative.error)}`);
 
   // 6. Create ad

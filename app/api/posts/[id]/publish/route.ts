@@ -5,6 +5,10 @@ import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 
+// Ad creative creation retries with backoff (freshly-published videos aren't
+// immediately ad-eligible) — default 10s Vercel timeout isn't enough.
+export const maxDuration = 60;
+
 export async function POST(
   req: Request,
   { params }: { params: { id: string } }

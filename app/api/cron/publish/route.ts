@@ -5,6 +5,10 @@ import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 
+// Loops multiple posts, each possibly retrying ad creative creation with
+// backoff — default 10s Vercel timeout isn't enough.
+export const maxDuration = 60;
+
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
   const querySecret = new URL(req.url).searchParams.get("secret")?.trim();
