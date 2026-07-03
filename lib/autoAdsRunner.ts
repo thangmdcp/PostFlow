@@ -32,6 +32,7 @@ export interface AutoAdsRunParams {
   ageMinFrom?: string; ageMinTo?: string;
   ageMaxFrom?: string; ageMaxTo?: string;
   gender?: string;
+  adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
 }
 
 // Call this right after a post publishes successfully. Schedules (and
@@ -73,12 +74,12 @@ export async function attemptAutoAds(params: AutoAdsRunParams, attemptIndex: num
   }).catch(() => {});
 
   try {
-    const campaignId = await createAdCampaignForPost(params);
+    const { campaignId, adAccountId } = await createAdCampaignForPost(params);
     await prisma.post.update({
       where: { id: params.postId },
-      data: { adStatus: "done", adCampaignId: campaignId, adAttempt: attemptNumber, errorMsg: null, adNextAttemptAt: null },
+      data: { adStatus: "done", adCampaignId: campaignId, adAccountUsed: adAccountId, adAttempt: attemptNumber, errorMsg: null, adNextAttemptAt: null },
     });
-    console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created (attempt ${attemptNumber})`);
+    console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created in account ${adAccountId} (attempt ${attemptNumber})`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-ads failed";
     console.error(`[auto-ads] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
@@ -131,13 +132,14 @@ export async function processDueAdRetries(): Promise<void> {
         fbConnAccessToken: fbConn.accessToken,
         templateId: post.adTemplateId,
         isBatchPost: !!post.adTemplateId,
+        adStatus: (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
       },
       post.adAttempt ?? 0
     );
   }
 }
 
-async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<string> {
+async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignId: string; adAccountId: string }> {
   const configs = await prisma.appConfig.findMany({
     where: { key: { in: [
       "autoAdsTemplateId", "autoAdsAdAccountId", "autoAdsStatus",
@@ -241,7 +243,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<string> {
     ageMin,
     ageMax,
     effGender,
-    (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED"
+    p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED"
   );
 
   await prisma.$executeRawUnsafe(
@@ -256,5 +258,5 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<string> {
     );
   }
 
-  return result.campaignId;
+  return { campaignId: result.campaignId, adAccountId: pickedAccountId };
 }

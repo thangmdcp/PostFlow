@@ -55,6 +55,7 @@ export function AdSettingsClient() {
   const [batchBudgetMax, setBatchBudgetMax] = useState("200000");
   const [batchBudgetStep, setBatchBudgetStep] = useState("10000");
   const [batchRunAds, setBatchRunAds] = useState(false);
+  const [batchAdStatus, setBatchAdStatus] = useState<"ACTIVE" | "PAUSED">("PAUSED");
   const [batchDefaultPageIds, setBatchDefaultPageIds] = useState<string[]>([]);
   const [batchScheduleMode, setBatchScheduleMode] = useState<"manual"|"interval"|"daily">("interval");
   const [batchStepMinutes, setBatchStepMinutes] = useState("60");
@@ -135,6 +136,7 @@ export function AdSettingsClient() {
     if (cfg.batchBudgetMax)  setBatchBudgetMax(cfg.batchBudgetMax);
     if (cfg.batchBudgetStep) setBatchBudgetStep(cfg.batchBudgetStep);
     if (cfg.batchRunAds !== undefined) setBatchRunAds(cfg.batchRunAds === "true");
+    if (cfg.autoAdsStatus === "ACTIVE" || cfg.autoAdsStatus === "PAUSED") setBatchAdStatus(cfg.autoAdsStatus);
     if (cfg.batchDefaultPageIds) { try { setBatchDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
     if (cfg.batchScheduleMode) setBatchScheduleMode(cfg.batchScheduleMode as "manual"|"interval"|"daily");
     if (cfg.batchStepMinutes) setBatchStepMinutes(cfg.batchStepMinutes);
@@ -166,6 +168,7 @@ export function AdSettingsClient() {
           batchTemplateId, batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo,
           batchGender, batchBudgetMin, batchBudgetMax, batchBudgetStep,
           batchRunAds: String(batchRunAds),
+          autoAdsStatus: batchAdStatus,
           batchDefaultPageIds: JSON.stringify(batchDefaultPageIds),
           batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime,
         }),
@@ -233,7 +236,7 @@ export function AdSettingsClient() {
   function buildPresetData() {
     return {
       batchDefaultPageIds, batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime,
-      batchTemplateId, batchRunAds,
+      batchTemplateId, batchRunAds, autoAdsStatus: batchAdStatus,
       batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo, batchGender,
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
       accountRows: accountRows.map(r => ({
@@ -252,6 +255,7 @@ export function AdSettingsClient() {
     if (d.batchBaseTime) setBatchBaseTime(d.batchBaseTime);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
+    if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
     if (d.batchAgeMinFrom) setBatchAgeMinFrom(d.batchAgeMinFrom);
     if (d.batchAgeMinTo) setBatchAgeMinTo(d.batchAgeMinTo);
     if (d.batchAgeMaxFrom) setBatchAgeMaxFrom(d.batchAgeMaxFrom);
@@ -327,6 +331,28 @@ export function AdSettingsClient() {
               batchRunAds ? "translate-x-4" : "translate-x-0"].join(" ")} />
           </button>
         </div>
+
+        {/* Ads status mặc định: Active hay Pause khi vừa tạo */}
+        {batchRunAds && (
+          <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+            <div className="flex flex-col">
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Trạng thái ads mặc định sau khi tạo</span>
+              <span className="text-[10px] text-slate-400">Có thể ghi đè riêng ở từng batch trong "Cài đặt chi tiết"</span>
+            </div>
+            <div className="flex items-center rounded-lg border overflow-hidden shrink-0">
+              <button type="button" onClick={() => setBatchAdStatus("PAUSED")}
+                className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  batchAdStatus === "PAUSED" ? "bg-slate-700 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+                Tạm dừng
+              </button>
+              <button type="button" onClick={() => setBatchAdStatus("ACTIVE")}
+                className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  batchAdStatus === "ACTIVE" ? "bg-emerald-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+                Chạy ngay
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Ads params + TKQC — only when runAds */}
         {batchRunAds && (

@@ -117,6 +117,7 @@ export async function GET(req: Request) {
           fbConnAccessToken: fbConn.accessToken,
           templateId: post.adTemplateId,
           isBatchPost: !!post.adTemplateId,
+          adStatus: (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
         });
       }
 

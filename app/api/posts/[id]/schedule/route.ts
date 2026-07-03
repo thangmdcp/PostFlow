@@ -6,11 +6,12 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
       ctaHeadline?: string;
+      adStatus?: "ACTIVE" | "PAUSED";
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id } });
@@ -34,6 +35,7 @@ export async function PATCH(
         status: "pending",
         ...(templateId ? { adTemplateId: templateId } : {}),
         ...(ctaHeadline ? { ctaHeadline } : {}),
+        ...(adStatus ? { adPublishStatus: adStatus } : {}),
       },
     });
 

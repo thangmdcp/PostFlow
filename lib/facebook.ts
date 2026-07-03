@@ -255,7 +255,7 @@ export async function cloneAdCampaign(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "PostFlow Creative",
+        name: campaignName || "PostFlow Creative",
         object_story_id: objectStoryId,
         access_token: accessToken,
       }),
@@ -274,7 +274,7 @@ export async function cloneAdCampaign(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      name: "PostFlow Ad",
+      name: campaignName || "PostFlow Ad",
       adset_id: newAdSet.id,
       creative: { creative_id: creative.id },
       status: adStatus,

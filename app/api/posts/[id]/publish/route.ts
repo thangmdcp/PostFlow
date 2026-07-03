@@ -27,6 +27,7 @@ export async function POST(
       budgetMin?: string; budgetMax?: string; budgetStep?: string;
       adAccountId?: string;
       ctaHeadline?: string;
+      adStatus?: "ACTIVE" | "PAUSED";
     };
     const { pageId } = body;
 
@@ -171,6 +172,7 @@ export async function POST(
         ageMinFrom: body.ageMinFrom, ageMinTo: body.ageMinTo,
         ageMaxFrom: body.ageMaxFrom, ageMaxTo: body.ageMaxTo,
         gender: body.gender,
+        adStatus: body.adStatus,
       });
     }
 

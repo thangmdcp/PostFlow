@@ -34,12 +34,14 @@ model Post {
   fbPostUrl      String?
   adTemplateId   String?
   adCampaignId   String?
+  adAccountUsed  String?
   adBudget       String?
   adAgeMin       Int?
   adAgeMax       Int?
   adGender       String?
   ctaHeadline    String?
   adStatus       String?
+  adPublishStatus String?
   adNextAttemptAt DateTime?
   adAttempt      Int?            @default(0)
   errorMsg       String?

@@ -38,6 +38,7 @@ interface BatchAdConfig {
   ageMaxFrom: string; ageMaxTo: string;
   gender: string;
   budgetMin: string; budgetMax: string; budgetStep: string;
+  adStatus: "ACTIVE" | "PAUSED";
 }
 
 interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
@@ -187,6 +188,7 @@ const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65",
   gender: "", budgetMin: "100000", budgetMax: "200000", budgetStep: "10000",
+  adStatus: "PAUSED",
 };
 
 function loadSavedAdsConfig(): BatchAdConfig {
@@ -253,6 +255,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         budgetMin:  cfg.batchBudgetMin  ?? saved.budgetMin,
         budgetMax:  cfg.batchBudgetMax  ?? saved.budgetMax,
         budgetStep: cfg.batchBudgetStep ?? saved.budgetStep,
+        adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? saved.adStatus ?? "PAUSED",
       });
       if (cfg.batchDefaultPageIds) { try { setDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
       if (cfg.batchScheduleMode) setDefaultScheduleMode(cfg.batchScheduleMode as ScheduleMode);
@@ -316,6 +319,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchAgeMaxFrom: adConfig.ageMaxFrom, batchAgeMaxTo: adConfig.ageMaxTo,
       batchGender: adConfig.gender,
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
+      adStatus: adConfig.adStatus,
     };
   }
 
@@ -337,6 +341,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(d.batchBudgetMin ? { budgetMin: d.batchBudgetMin } : {}),
       ...(d.batchBudgetMax ? { budgetMax: d.batchBudgetMax } : {}),
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
+      ...(d.adStatus ? { adStatus: d.adStatus } : {}),
     });
   }
 
@@ -696,6 +701,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       batchAgeMaxFrom: adConfig.ageMaxFrom, batchAgeMaxTo: adConfig.ageMaxTo,
       batchGender: adConfig.gender,
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
+      adStatus: adConfig.adStatus,
     };
   }
 
@@ -720,6 +726,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       ...(d.batchBudgetMin ? { budgetMin: d.batchBudgetMin } : {}),
       ...(d.batchBudgetMax ? { budgetMax: d.batchBudgetMax } : {}),
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
+      ...(d.adStatus ? { adStatus: d.adStatus } : {}),
     });
   }
 
@@ -819,6 +826,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         body: JSON.stringify({
           pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
           ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
+          adStatus: adConfig.adStatus,
         }),
       });
       if (res.ok) ok++;
@@ -835,9 +843,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     });
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
     setBulkRunning(true);
-    let ok = 0;
-    let adsScheduled = 0;
-    for (const id of targets) {
+    // Publish every checked post in parallel instead of one-by-one — each
+    // call is its own FB upload/API round trip, so doing them sequentially
+    // multiplies the wait by however many posts are selected.
+    const outcomes = await Promise.all(targets.map(async (id) => {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id] ?? genRowParams(adConfig);
       const rowOvr = rowOverrides[id] ?? adConfig.overridePublish;
@@ -854,16 +863,17 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
             gender: rp.gender,
             budgetMin: String(rp.budget), budgetMax: String(rp.budget), budgetStep: "1",
+            adStatus: adConfig.adStatus,
             ...(rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
           } : {}),
         }),
-      });
-      if (res.ok) {
-        ok++;
-        const data = await res.json().catch(() => null);
-        if (data?.autoAds?.scheduled) adsScheduled++;
-      }
-    }
+      }).catch(() => null);
+      if (!res?.ok) return { ok: false, adsScheduled: false };
+      const data = await res.json().catch(() => null);
+      return { ok: true, adsScheduled: !!data?.autoAds?.scheduled };
+    }));
+    const ok = outcomes.filter((o) => o.ok).length;
+    const adsScheduled = outcomes.filter((o) => o.adsScheduled).length;
     setBulkRunning(false);
     onToast(
       adsScheduled
@@ -1130,11 +1140,13 @@ interface PostRowProps {
 
 // Ticks its own 1s interval — isolated so a live countdown doesn't force the
 // whole table to re-render every second, just this one badge.
-function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg }: {
+function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampaignId, adAccountUsed }: {
   adStatus: string | null | undefined;
   adNextAttemptAt: Date | string | null | undefined;
   adAttempt: number | null | undefined;
   errorMsg: string | null | undefined;
+  adCampaignId?: string | null;
+  adAccountUsed?: string | null;
 }) {
   // Start null (not Date.now()) so SSR and the client's first render agree —
   // computing "now" during render would make server and client disagree by
@@ -1161,9 +1173,17 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg }: {
   }
 
   if (adStatus === "done") {
+    const adsManagerUrl = adCampaignId && adAccountUsed
+      ? `https://www.facebook.com/adsmanager/manage/campaigns?act=${adAccountUsed.replace(/^act_/, "")}&selected_campaign_ids=${adCampaignId}`
+      : null;
     return (
       <div className="flex items-center gap-1 text-[9px] text-emerald-600">
         <CheckCircle2 size={8} /> Đã tạo ads
+        {adsManagerUrl && (
+          <a href={adsManagerUrl} target="_blank" rel="noopener noreferrer" className="underline hover:text-emerald-700">
+            Xem
+          </a>
+        )}
       </div>
     );
   }
@@ -1271,7 +1291,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                   </button>
                 </div>
               )}
-              <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} />
+              <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} />
             </div>
       )}
 
@@ -1438,6 +1458,25 @@ function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch 
             adConfig.runAds ? "translate-x-4" : "translate-x-0"].join(" ")} />
         </button>
       </div>
+
+      {/* Trạng thái ads sau khi tạo: Active hay Pause */}
+      {adConfig.runAds && (
+        <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+          <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Trạng thái sau khi tạo</span>
+          <div className="flex items-center rounded-lg border overflow-hidden">
+            <button type="button" onClick={() => onPatch({ adStatus: "PAUSED" })}
+              className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                adConfig.adStatus === "PAUSED" ? "bg-slate-700 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+              Tạm dừng
+            </button>
+            <button type="button" onClick={() => onPatch({ adStatus: "ACTIVE" })}
+              className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                adConfig.adStatus === "ACTIVE" ? "bg-emerald-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+              Chạy ngay
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* TKQC summary */}
       {adConfig.runAds && (
