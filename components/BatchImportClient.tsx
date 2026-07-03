@@ -863,9 +863,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
         <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
 
-        <span className="text-xs text-slate-500 shrink-0">
-          {checkedIds.size > 0 ? `Đã chọn ${checkedIds.size} dòng` : "Tích chọn bài để chỉnh sửa hàng loạt"}
-        </span>
+        {checkedIds.size > 0 && (
+          <span className="text-xs text-slate-500 shrink-0">
+            Đã chọn {checkedIds.size} dòng
+          </span>
+        )}
 
         {/* Random split-button */}
         <div className="relative flex items-center shrink-0" ref={randomPanelRef}>
