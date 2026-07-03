@@ -4,6 +4,16 @@ import path from "path";
 
 const ENV_PATH = path.join(process.cwd(), ".env.local");
 
+// On Vercel there is no .env.local file — these are set directly as
+// environment variables in the dashboard. Fall back to process.env for these
+// specific keys so the Setup UI can still tell whether they're configured.
+const KNOWN_ENV_KEYS = [
+  "DATABASE_URL",
+  "CLOUDINARY_CLOUD_NAME",
+  "CLOUDINARY_API_KEY",
+  "CLOUDINARY_API_SECRET",
+];
+
 function parseEnv(content: string): Record<string, string> {
   const result: Record<string, string> = {};
   for (const line of content.split("\n")) {
@@ -28,13 +38,17 @@ function serializeEnv(vars: Record<string, string>): string {
 
 export async function GET() {
   const writable = !process.env.VERCEL;
+  let vars: Record<string, string> = {};
   try {
     const content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf-8") : "";
-    const vars = parseEnv(content);
-    return NextResponse.json({ vars, writable });
-  } catch {
-    return NextResponse.json({ vars: {}, writable });
+    vars = parseEnv(content);
+  } catch { /* no .env.local — fine, fall through to process.env below */ }
+
+  for (const key of KNOWN_ENV_KEYS) {
+    if (!vars[key] && process.env[key]) vars[key] = process.env[key]!;
   }
+
+  return NextResponse.json({ vars, writable });
 }
 
 export async function POST(req: Request) {
