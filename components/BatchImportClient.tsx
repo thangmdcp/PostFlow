@@ -1286,7 +1286,10 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   }
 
   const editable = status === "ready" || status === "failed";
-  const effectivePageId = (editable ? (rowPageId || post.pageId) : post.pageId) ?? "";
+  // Page/schedule time get randomly pre-assigned the moment a row exists
+  // (same as age/gender/budget) — show them right away instead of waiting
+  // for "ready", which just left the cells blank for no real reason.
+  const effectivePageId = (rowPageId || post.pageId) ?? "";
   const pageName = connections.find(c => c.pageId === effectivePageId)?.pageName ?? effectivePageId ?? "";
   const accountName = adAccounts.find(a => a.accountId === rowAccountId)?.name ?? rowAccountId;
 
@@ -1341,18 +1344,20 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {cell("caption",
-        displayCaption ? (
-          <div>
-            <p className={["text-xs text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-words", showCaption ? "" : "line-clamp-2"].join(" ")}>
-              {displayCaption}
-            </p>
-            {displayCaption.length > 80 && (
-              <button onClick={() => setShowCaption(v => !v)} className="text-[10px] text-blue-500 hover:underline mt-0.5">
-                {showCaption ? "Thu gọn" : "Xem thêm"}
-              </button>
-            )}
-          </div>
-        ) : <span className="text-slate-300 text-xs">–</span>
+        status === "fetching"
+          ? <div className="space-y-1"><Skeleton className="h-2 w-full rounded" /><Skeleton className="h-2 w-3/4 rounded" /></div>
+          : displayCaption ? (
+            <div>
+              <p className={["text-xs text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-words", showCaption ? "" : "line-clamp-2"].join(" ")}>
+                {displayCaption}
+              </p>
+              {displayCaption.length > 80 && (
+                <button onClick={() => setShowCaption(v => !v)} className="text-[10px] text-blue-500 hover:underline mt-0.5">
+                  {showCaption ? "Thu gọn" : "Xem thêm"}
+                </button>
+              )}
+            </div>
+          ) : <span className="text-slate-300 text-xs">–</span>
       )}
 
       {cell("linkAff",
@@ -1375,7 +1380,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             <CheckCircle2 size={11} /> Đã đăng
             {fbPostUrl && <a href={fbPostUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">Xem</a>}
           </div>
-        ) : (editable && scheduledTime) ? (
+        ) : scheduledTime ? (
           <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums">{fmtVn7(scheduledTime)}</span>
         ) : <span className="text-slate-300 text-xs">–</span>
       )}
