@@ -830,6 +830,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
     setBulkRunning(true);
     let ok = 0;
+    const adsErrors: string[] = [];
     for (const id of targets) {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id] ?? genRowParams(adConfig);
@@ -851,10 +852,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           } : {}),
         }),
       });
-      if (res.ok) ok++;
+      if (res.ok) {
+        ok++;
+        const data = await res.json().catch(() => null);
+        if (runAdsForRow && data?.autoAds?.error) adsErrors.push(data.autoAds.error as string);
+      }
     }
     setBulkRunning(false);
-    onToast(`Đã đăng ${ok}/${targets.length} bài`, "success");
+    if (adsErrors.length) {
+      onToast(`Đã đăng ${ok}/${targets.length} bài, nhưng ${adsErrors.length} bài LỖI TẠO ADS: ${adsErrors[0]}`, "error");
+    } else {
+      onToast(`Đã đăng ${ok}/${targets.length} bài`, "success");
+    }
     setCheckedIds(new Set());
   }
 

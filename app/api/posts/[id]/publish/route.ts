@@ -164,6 +164,13 @@ export async function POST(
       const batchTemplateId = body.templateId ?? null;
       const adsEnabled = !!batchTemplateId;
       const effectiveTemplateId = batchTemplateId;
+      if (!adsEnabled) {
+        autoAdsResult = { error: "Bỏ qua tạo ads: không có templateId (cột \"Chạy ads\" tắt hoặc chưa chọn template)." };
+      } else if (!fbPostId) {
+        autoAdsResult = { error: "Bỏ qua tạo ads: không lấy được fbPostId sau khi đăng bài." };
+      } else if (!post.pageId) {
+        autoAdsResult = { error: "Bỏ qua tạo ads: thiếu pageId." };
+      }
       if (adsEnabled && effectiveTemplateId && fbPostId && post.pageId) {
         // --- Load multi-account rows ---
         interface AdsAccountRow {
@@ -293,6 +300,13 @@ export async function POST(
       if (!autoAdsResult?.error) {
         autoAdsResult = { error: adsErr instanceof Error ? adsErr.message : "auto-ads failed" };
       }
+    }
+
+    // Post itself published fine even if ads failed — persist the ads error
+    // onto the post (without touching status="done") so it's inspectable
+    // later instead of only existing in server logs.
+    if (autoAdsResult?.error) {
+      await prisma.post.update({ where: { id: params.id }, data: { errorMsg: `[ads] ${autoAdsResult.error}` } }).catch(() => {});
     }
 
     return NextResponse.json({ ok: true, fbPostUrl, autoAds: autoAdsResult });
