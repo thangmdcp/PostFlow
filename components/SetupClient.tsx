@@ -179,8 +179,18 @@ export function SetupClient() {
       for (const f of FIELDS) {
         if (values[f.key] === undefined) continue;
         const val = f.multiline ? values[f.key].replace(/\r?\n/g, "\\n") : values[f.key];
-        if (f.storage === "db") dbUpdates[f.configKey] = val;
-        else envUpdates[f.key] = val;
+        if (f.storage === "db") {
+          dbUpdates[f.configKey] = val;
+          continue;
+        }
+        // Collapsed ("đã cấu hình") and locked env fields aren't rendered as
+        // editable inputs — their state value is just the read-only display
+        // value, never something the user actually changed. Sending it would
+        // always fail on Vercel and mask whether the db fields above saved.
+        const filled = (values[f.key] ?? "").length > 0;
+        const locked = !envWritable;
+        if (filled || locked) continue;
+        envUpdates[f.key] = val;
       }
 
       const requests: Promise<Response>[] = [];
