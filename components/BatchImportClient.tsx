@@ -1306,8 +1306,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
       {/* ── Cài đặt chi tiết — drawer bên phải, giống 100% Cài đặt Ads nhưng chỉ áp dụng cho batch này ── */}
       {detailPanelOpen && checkedIds.size > 0 && (
-        <div className="w-[420px] shrink-0 sticky top-16 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm p-4 space-y-4 max-h-[calc(100vh-5rem)] overflow-y-auto">
-          <div className="flex items-center justify-between">
+        <div className="w-[420px] shrink-0 sticky top-16 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm flex flex-col max-h-[calc(100vh-5rem)]">
+          {/* Header stays outside the scroll area so the Preset dropdown never gets clipped */}
+          <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
             <div className="flex items-center gap-2">
               <p className="text-xs font-medium text-slate-500">Áp dụng cho {checkedIds.size} dòng</p>
               <FullSettingsPresetPanel getCurrentData={buildDetailPresetData} onLoad={applyDetailPresetData} />
@@ -1318,35 +1319,37 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             </button>
           </div>
 
-          <ScheduleModeSelector
-            connections={connections}
-            selectedPageIds={selectedPageIds} onPageIdsChange={setSelectedPageIds}
-            scheduleMode={scheduleMode} onScheduleModeChange={setScheduleMode}
-            stepMinutes={stepMinutes} onStepMinutesChange={setStepMinutes}
-            postsPerDay={postsPerDay} onPostsPerDayChange={setPostsPerDay}
-            baseTime={scheduleMode === "manual" ? manualApplyTime : baseTime}
-            onBaseTimeChange={scheduleMode === "manual" ? setManualApplyTime : setBaseTime}
-            endTime={endTime} onEndTimeChange={setEndTime}
-            onQuickNow={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7Now(0))}
-            onQuickMidnight={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7NextMidnight())}
-            hideInlinePreset
-          />
+          <div className="p-4 pt-3 space-y-4 overflow-y-auto">
+            <ScheduleModeSelector
+              connections={connections}
+              selectedPageIds={selectedPageIds} onPageIdsChange={setSelectedPageIds}
+              scheduleMode={scheduleMode} onScheduleModeChange={setScheduleMode}
+              stepMinutes={stepMinutes} onStepMinutesChange={setStepMinutes}
+              postsPerDay={postsPerDay} onPostsPerDayChange={setPostsPerDay}
+              baseTime={scheduleMode === "manual" ? manualApplyTime : baseTime}
+              onBaseTimeChange={scheduleMode === "manual" ? setManualApplyTime : setBaseTime}
+              endTime={endTime} onEndTimeChange={setEndTime}
+              onQuickNow={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7Now(0))}
+              onQuickMidnight={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7NextMidnight())}
+              hideInlinePreset
+            />
 
-          <AdsConfigPanel
-            adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={localAccountRows} onPatch={patchAdConfig}
-            onPatchRow={patchLocalRow} onDeleteRow={deleteLocalRow} onAddRow={addLocalRow}
-          />
+            <AdsConfigPanel
+              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={localAccountRows} onPatch={patchAdConfig}
+              onPatchRow={patchLocalRow} onDeleteRow={deleteLocalRow} onAddRow={addLocalRow}
+            />
 
-          <CommentSettingsPanel
-            enabled={commentEnabled} onEnabledChange={setCommentEnabled}
-            useCaption={commentUseCaption} onUseCaptionChange={setCommentUseCaption}
-            captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={setCommentCaptionAttachImage}
-            captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={setCommentCaptionImageUrls}
-            sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={setCommentSharedImageUrls}
-            randomCount={commentRandomCount} onRandomCountChange={setCommentRandomCount}
-            entries={commentCustomEntries} onEntriesChange={setCommentCustomEntries}
-            entryEnabled={commentCustomEntryEnabled} onEntryEnabledChange={(id, v) => setCommentCustomEntryEnabled(prev => ({ ...prev, [id]: v }))}
-          />
+            <CommentSettingsPanel
+              enabled={commentEnabled} onEnabledChange={setCommentEnabled}
+              useCaption={commentUseCaption} onUseCaptionChange={setCommentUseCaption}
+              captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={setCommentCaptionAttachImage}
+              captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={setCommentCaptionImageUrls}
+              sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={setCommentSharedImageUrls}
+              randomCount={commentRandomCount} onRandomCountChange={setCommentRandomCount}
+              entries={commentCustomEntries} onEntriesChange={setCommentCustomEntries}
+              entryEnabled={commentCustomEntryEnabled} onEntryEnabledChange={(id, v) => setCommentCustomEntryEnabled(prev => ({ ...prev, [id]: v }))}
+            />
+          </div>
         </div>
       )}
       </div>

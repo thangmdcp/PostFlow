@@ -16,11 +16,17 @@ export default async function DashboardPage() {
       prisma.fbConnection.findMany({ orderBy: { createdAt: "desc" } }),
       prisma.fbAdAccount.findMany({ orderBy: { createdAt: "desc" } }),
     ]);
-    // Display order: earliest scheduled/posted time on top, regardless of when the post was created.
+    // Display order: newest scheduled/posted DAY on top; within the same day,
+    // the earliest time of day goes first (VN, UTC+7 — no DST).
+    const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+    const vnDayKey = (d: Date) => Math.floor((d.getTime() + VN_OFFSET_MS) / 86400000);
+    const vnMinuteOfDay = (d: Date) => Math.floor(((d.getTime() + VN_OFFSET_MS) % 86400000) / 60000);
     const posts = [...rawPosts].sort((a, b) => {
-      const at = a.scheduledAt ? a.scheduledAt.getTime() : a.createdAt.getTime();
-      const bt = b.scheduledAt ? b.scheduledAt.getTime() : b.createdAt.getTime();
-      return at - bt;
+      const at = a.scheduledAt ?? a.createdAt;
+      const bt = b.scheduledAt ?? b.createdAt;
+      const dayDiff = vnDayKey(bt) - vnDayKey(at);
+      if (dayDiff !== 0) return dayDiff;
+      return vnMinuteOfDay(at) - vnMinuteOfDay(bt);
     });
     return <DashboardClient posts={posts} connections={connections} adAccounts={adAccounts} />;
   } catch {

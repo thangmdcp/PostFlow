@@ -316,7 +316,7 @@ export function AdSettingsClient() {
   }
 
   return (
-    <div className="space-y-4 w-full">
+    <div className="space-y-4 max-w-[480px]">
 
       {/* ── Preset cho toàn bộ cụm cài đặt bên dưới ── */}
       <div className="flex items-center justify-between rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 px-3 py-2">

@@ -19,6 +19,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
+import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[] };
 
@@ -178,6 +179,51 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       accountId: firstFree?.accountId ?? adAccountsFull[0]?.accountId ?? "",
       weight: 1, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
     }]);
+  }
+
+  // Same field names as BatchImportClient's buildDetailPresetData/applyDetailPresetData
+  // — shares the same preset store ("Cài đặt Ads" ⇄ batch drawer ⇄ this drawer).
+  // Schedule-only fields (page/mode/time) are ignored here since these posts
+  // already have a schedule/status of their own.
+  function buildDrawerPresetData() {
+    return {
+      batchTemplateId: drawerAdConfig.templateId, batchRunAds: drawerAdConfig.runAds,
+      batchAgeMinFrom: drawerAdConfig.ageMinFrom, batchAgeMinTo: drawerAdConfig.ageMinTo,
+      batchAgeMaxFrom: drawerAdConfig.ageMaxFrom, batchAgeMaxTo: drawerAdConfig.ageMaxTo,
+      batchGender: drawerAdConfig.gender,
+      batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
+      adStatus: drawerAdConfig.adStatus,
+      commentEnabled: drawerCommentEnabled, commentUseCaption: drawerCommentUseCaption,
+      commentCaptionAttachImage: drawerCommentCaptionAttachImage, commentCaptionImageUrls: drawerCommentCaptionImageUrls,
+      commentCustomEntries: drawerCommentEntries, commentSharedImageUrls: drawerCommentSharedImageUrls,
+      commentRandomCount: drawerCommentRandomCount,
+      accountRows: drawerAccountRows,
+    };
+  }
+
+  function applyDrawerPresetData(raw: unknown) {
+    const d = raw as Partial<ReturnType<typeof buildDrawerPresetData>>;
+    if (d.commentEnabled !== undefined) setDrawerCommentEnabled(d.commentEnabled);
+    if (d.commentUseCaption !== undefined) setDrawerCommentUseCaption(d.commentUseCaption);
+    if (d.commentCaptionAttachImage !== undefined) setDrawerCommentCaptionAttachImage(d.commentCaptionAttachImage);
+    if (d.commentCaptionImageUrls) setDrawerCommentCaptionImageUrls(d.commentCaptionImageUrls);
+    if (d.commentCustomEntries) setDrawerCommentEntries(d.commentCustomEntries);
+    if (d.commentSharedImageUrls) setDrawerCommentSharedImageUrls(d.commentSharedImageUrls);
+    if (d.commentRandomCount !== undefined) setDrawerCommentRandomCount(d.commentRandomCount);
+    if (d.accountRows) setDrawerAccountRows(d.accountRows);
+    patchDrawerAdConfig({
+      ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
+      ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
+      ...(d.batchAgeMinFrom ? { ageMinFrom: d.batchAgeMinFrom } : {}),
+      ...(d.batchAgeMinTo ? { ageMinTo: d.batchAgeMinTo } : {}),
+      ...(d.batchAgeMaxFrom ? { ageMaxFrom: d.batchAgeMaxFrom } : {}),
+      ...(d.batchAgeMaxTo ? { ageMaxTo: d.batchAgeMaxTo } : {}),
+      ...(d.batchGender !== undefined ? { gender: d.batchGender } : {}),
+      ...(d.batchBudgetMin ? { budgetMin: d.batchBudgetMin } : {}),
+      ...(d.batchBudgetMax ? { budgetMax: d.batchBudgetMax } : {}),
+      ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
+      ...(d.adStatus ? { adStatus: d.adStatus } : {}),
+    });
   }
 
   function resolveDrawerCommentJobs(post: PostWithLinks): { text: string; imageUrl?: string }[] {
@@ -963,33 +1009,40 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
       {/* Ads drawer — single post or bulk selection, editable before applying */}
       {adsDrawerOpen && (
-        <div className="w-[420px] shrink-0 sticky top-4 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm p-4 space-y-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-slate-500">Áp dụng cho {drawerPostIds.length} bài</p>
-            <button onClick={() => setAdsDrawerOpen(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
-              <X size={14} />
-            </button>
+        <div className="w-[420px] shrink-0 sticky top-4 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm flex flex-col max-h-[calc(100vh-2rem)]">
+          {/* Header stays outside the scroll area so the Preset dropdown never gets clipped */}
+          <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-medium text-slate-500">Áp dụng cho {drawerPostIds.length} bài</p>
+              <FullSettingsPresetPanel getCurrentData={buildDrawerPresetData} onLoad={applyDrawerPresetData} />
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={applyAdsDrawer} disabled={drawerApplying}
+                className="flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm disabled:opacity-50">
+                {drawerApplying ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />} Áp dụng
+              </button>
+              <button onClick={() => setAdsDrawerOpen(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                <X size={14} />
+              </button>
+            </div>
           </div>
 
-          <AdsConfigPanel
-            adConfig={drawerAdConfig} templates={templates} adAccounts={adAccountsFull} accountRows={drawerAccountRows}
-            onPatch={patchDrawerAdConfig} onPatchRow={patchDrawerRow} onDeleteRow={deleteDrawerRow} onAddRow={addDrawerRow}
-          />
+          <div className="p-4 pt-3 space-y-4 overflow-y-auto">
+            <AdsConfigPanel
+              adConfig={drawerAdConfig} templates={templates} adAccounts={adAccountsFull} accountRows={drawerAccountRows}
+              onPatch={patchDrawerAdConfig} onPatchRow={patchDrawerRow} onDeleteRow={deleteDrawerRow} onAddRow={addDrawerRow}
+            />
 
-          <CommentSettingsPanel
-            enabled={drawerCommentEnabled} onEnabledChange={setDrawerCommentEnabled}
-            useCaption={drawerCommentUseCaption} onUseCaptionChange={setDrawerCommentUseCaption}
-            captionAttachImage={drawerCommentCaptionAttachImage} onCaptionAttachImageChange={setDrawerCommentCaptionAttachImage}
-            captionImageUrls={drawerCommentCaptionImageUrls} onCaptionImageUrlsChange={setDrawerCommentCaptionImageUrls}
-            sharedImageUrls={drawerCommentSharedImageUrls} onSharedImageUrlsChange={setDrawerCommentSharedImageUrls}
-            randomCount={drawerCommentRandomCount} onRandomCountChange={setDrawerCommentRandomCount}
-            entries={drawerCommentEntries} onEntriesChange={setDrawerCommentEntries}
-          />
-
-          <button onClick={applyAdsDrawer} disabled={drawerApplying}
-            className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm font-semibold transition-colors shadow-sm disabled:opacity-50">
-            {drawerApplying ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />} Áp dụng
-          </button>
+            <CommentSettingsPanel
+              enabled={drawerCommentEnabled} onEnabledChange={setDrawerCommentEnabled}
+              useCaption={drawerCommentUseCaption} onUseCaptionChange={setDrawerCommentUseCaption}
+              captionAttachImage={drawerCommentCaptionAttachImage} onCaptionAttachImageChange={setDrawerCommentCaptionAttachImage}
+              captionImageUrls={drawerCommentCaptionImageUrls} onCaptionImageUrlsChange={setDrawerCommentCaptionImageUrls}
+              sharedImageUrls={drawerCommentSharedImageUrls} onSharedImageUrlsChange={setDrawerCommentSharedImageUrls}
+              randomCount={drawerCommentRandomCount} onRandomCountChange={setDrawerCommentRandomCount}
+              entries={drawerCommentEntries} onEntriesChange={setDrawerCommentEntries}
+            />
+          </div>
         </div>
       )}
       </div>

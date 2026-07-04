@@ -20,8 +20,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }
 
-  const sidebarW = collapsed ? "w-14" : "w-56";
-  const mainML = collapsed ? "ml-14" : "ml-56";
+  const mainML = collapsed ? "ml-16" : "ml-52";
 
   return (
     <>

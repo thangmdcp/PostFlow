@@ -15,9 +15,6 @@ import {
 const navLinks = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/posts/new", label: "Tạo batch", icon: PlusCircle },
-];
-
-const settingLinks = [
   { href: "/settings/ads", label: "Cài đặt", icon: Settings },
 ];
 
@@ -52,7 +49,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside
       className={cn(
         "fixed inset-y-0 left-0 z-40 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 shadow-[1px_0_0_0_rgba(0,0,0,0.02)] transition-all duration-200",
-        collapsed ? "w-16" : "w-60"
+        collapsed ? "w-16" : "w-52"
       )}
     >
       {/* Logo — collapsed: small square (favicon); expanded: wide logo spanning edge to edge */}
@@ -68,7 +65,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               ))
           : (brand.logoUrl
               // eslint-disable-next-line @next/next/no-img-element
-              ? <img src={brand.logoUrl} alt={displayName} className="w-full h-auto max-h-11 object-contain" />
+              ? <img src={brand.logoUrl} alt={displayName} className="w-full h-auto max-h-11 object-contain object-left" />
               : (
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0 h-9 w-9">
@@ -80,54 +77,27 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5" aria-label="Điều hướng chính">
-        {/* Main */}
-        <div>
-          <ul className="space-y-1" role="list">
-            {navLinks.map(({ href, label, icon: Icon }) => (
-              <li key={href}>
-                <Link
-                  href={href}
-                  title={collapsed ? label : undefined}
-                  className={cn(
-                    "flex items-center rounded-xl px-2.5 py-2.5 text-[13.5px] font-medium transition-all duration-150",
-                    collapsed ? "justify-center" : "gap-3",
-                    isActive(href)
-                      ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold"
-                      : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
-                  )}
-                >
-                  <Icon size={17} strokeWidth={isActive(href) ? 2.4 : 2} className={isActive(href) ? "text-blue-600 dark:text-blue-400" : ""} />
-                  {!collapsed && label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Settings */}
-        <div>
-          <ul className="space-y-1" role="list">
-            {settingLinks.map(({ href, label, icon: Icon }) => (
-              <li key={href}>
-                <Link
-                  href={href}
-                  title={collapsed ? label : undefined}
-                  className={cn(
-                    "flex items-center rounded-xl px-2.5 py-2.5 text-[13.5px] font-medium transition-all duration-150",
-                    collapsed ? "justify-center" : "gap-3",
-                    isActive(href)
-                      ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold"
-                      : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
-                  )}
-                >
-                  <Icon size={17} strokeWidth={isActive(href) ? 2.4 : 2} className={isActive(href) ? "text-blue-600 dark:text-blue-400" : ""} />
-                  {!collapsed && label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
+      <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Điều hướng chính">
+        <ul className="space-y-1" role="list">
+          {navLinks.map(({ href, label, icon: Icon }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                title={collapsed ? label : undefined}
+                className={cn(
+                  "flex items-center rounded-xl px-2.5 py-2.5 text-[13.5px] font-medium transition-all duration-150",
+                  collapsed ? "justify-center" : "gap-3",
+                  isActive(href)
+                    ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold"
+                    : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
+                )}
+              >
+                <Icon size={17} strokeWidth={isActive(href) ? 2.4 : 2} className={isActive(href) ? "text-blue-600 dark:text-blue-400" : ""} />
+                {!collapsed && label}
+              </Link>
+            </li>
+          ))}
+        </ul>
       </nav>
 
       {/* Collapse / expand control */}
