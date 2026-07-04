@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -258,9 +258,12 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultPostsPerDay, setDefaultPostsPerDay] = useState("3");
   const [defaultBaseTime, setDefaultBaseTime] = useState(() => vn7Now(5));
   const [defaultEndTime, setDefaultEndTime] = useState("");
-  const [commentEnabled, setCommentEnabled] = useState(false);
-  const [commentMode, setCommentMode] = useState<"custom" | "caption">("custom");
-  const [commentTemplate, setCommentTemplate] = useState("");
+  const [defaultCommentEnabled, setDefaultCommentEnabled] = useState(false);
+  const [defaultCommentUseCaption, setDefaultCommentUseCaption] = useState(true);
+  const [defaultCommentUseCustom, setDefaultCommentUseCustom] = useState(false);
+  const [defaultCommentTemplate, setDefaultCommentTemplate] = useState("");
+  const [commentAttachImage, setCommentAttachImage] = useState(false);
+  const [commentImageUrls, setCommentImageUrls] = useState<string[]>([]);
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
 
@@ -296,9 +299,12 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       if (cfg.batchPostsPerDay) setDefaultPostsPerDay(cfg.batchPostsPerDay);
       if (cfg.batchBaseTime) setDefaultBaseTime(cfg.batchBaseTime);
       if (cfg.batchEndTime !== undefined) setDefaultEndTime(cfg.batchEndTime);
-      if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
-      if (cfg.commentMode === "custom" || cfg.commentMode === "caption") setCommentMode(cfg.commentMode);
-      if (cfg.commentTemplate !== undefined) setCommentTemplate(cfg.commentTemplate);
+      if (cfg.commentEnabled !== undefined) setDefaultCommentEnabled(cfg.commentEnabled === "true");
+      if (cfg.commentUseCaption !== undefined) setDefaultCommentUseCaption(cfg.commentUseCaption === "true");
+      if (cfg.commentUseCustom !== undefined) setDefaultCommentUseCustom(cfg.commentUseCustom === "true");
+      if (cfg.commentTemplate !== undefined) setDefaultCommentTemplate(cfg.commentTemplate);
+      if (cfg.commentAttachImage !== undefined) setCommentAttachImage(cfg.commentAttachImage === "true");
+      if (cfg.commentImageUrls) { try { setCommentImageUrls(JSON.parse(cfg.commentImageUrls)); } catch { /* ignore */ } }
     }
 
     // Apply sessionStorage cache instantly
@@ -358,6 +364,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchGender: adConfig.gender,
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
       adStatus: adConfig.adStatus,
+      commentEnabled: defaultCommentEnabled, commentUseCaption: defaultCommentUseCaption,
+      commentUseCustom: defaultCommentUseCustom, commentTemplate: defaultCommentTemplate,
     };
   }
 
@@ -369,6 +377,10 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     if (d.batchPostsPerDay) setDefaultPostsPerDay(d.batchPostsPerDay);
     if (d.batchBaseTime) setDefaultBaseTime(d.batchBaseTime);
     if (d.batchEndTime !== undefined) setDefaultEndTime(d.batchEndTime);
+    if (d.commentEnabled !== undefined) setDefaultCommentEnabled(d.commentEnabled);
+    if (d.commentUseCaption !== undefined) setDefaultCommentUseCaption(d.commentUseCaption);
+    if (d.commentUseCustom !== undefined) setDefaultCommentUseCustom(d.commentUseCustom);
+    if (d.commentTemplate !== undefined) setDefaultCommentTemplate(d.commentTemplate);
     patchAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -391,7 +403,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
     {
-      refreshInterval: (data) => data?.posts.some((p) =>
+      refreshInterval: (data) => data?.posts?.some((p) =>
         p.status === "fetching" || p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating"
       ) ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
@@ -435,7 +447,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     } finally { setLoading(false); }
   }
 
-  if (!batchId || !batch) {
+  if (!batchId || !batch || !("posts" in batch)) {
     const LINES_PER_COL = 20;
     const allLines = urlText === "" ? [""] : urlText.split("\n");
     const numCols = Math.min(3, Math.max(1, Math.ceil(urlCount / LINES_PER_COL)));
@@ -537,7 +549,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       defaultPageIds={defaultPageIds} defaultScheduleMode={defaultScheduleMode}
       defaultStepMinutes={defaultStepMinutes} defaultPostsPerDay={defaultPostsPerDay}
       defaultBaseTime={defaultBaseTime} defaultEndTime={defaultEndTime}
-      commentEnabled={commentEnabled} commentMode={commentMode} commentTemplate={commentTemplate}
+      defaultCommentEnabled={defaultCommentEnabled} defaultCommentUseCaption={defaultCommentUseCaption}
+      defaultCommentUseCustom={defaultCommentUseCustom} defaultCommentTemplate={defaultCommentTemplate}
+      commentAttachImage={commentAttachImage} commentImageUrls={commentImageUrls}
       onPatchAdConfig={patchAdConfig}
       onNewBatch={() => setBatchId(null)} onToast={show} ToastComponent={ToastComponent}
       mutateBatch={mutateBatch}
@@ -559,9 +573,12 @@ interface BatchViewProps {
   defaultPostsPerDay: string;
   defaultBaseTime: string;
   defaultEndTime: string;
-  commentEnabled: boolean;
-  commentMode: "custom" | "caption";
-  commentTemplate: string;
+  defaultCommentEnabled: boolean;
+  defaultCommentUseCaption: boolean;
+  defaultCommentUseCustom: boolean;
+  defaultCommentTemplate: string;
+  commentAttachImage: boolean;
+  commentImageUrls: string[];
   onPatchAdConfig: (patch: Partial<BatchAdConfig>) => void;
   onNewBatch: () => void;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
@@ -569,7 +586,7 @@ interface BatchViewProps {
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, commentEnabled, commentMode, commentTemplate, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentUseCustom, defaultCommentTemplate, commentAttachImage, commentImageUrls, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -579,6 +596,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [stepMinutes, setStepMinutes] = useState(defaultStepMinutes);
   const [postsPerDay, setPostsPerDay] = useState(defaultPostsPerDay);
   const [endTime, setEndTime] = useState(defaultEndTime);
+  const [commentEnabled, setCommentEnabled] = useState(defaultCommentEnabled);
+  const [commentUseCaption, setCommentUseCaption] = useState(defaultCommentUseCaption);
+  const [commentUseCustom, setCommentUseCustom] = useState(defaultCommentUseCustom);
+  const [commentTemplate, setCommentTemplate] = useState(defaultCommentTemplate);
   const [postTimes, setPostTimes] = useState<Record<string, string>>({});
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -764,6 +785,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       batchGender: adConfig.gender,
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
       adStatus: adConfig.adStatus,
+      commentEnabled, commentUseCaption, commentUseCustom, commentTemplate,
     };
   }
 
@@ -778,6 +800,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       else setBaseTime(d.batchBaseTime);
     }
     if (d.batchEndTime !== undefined) setEndTime(d.batchEndTime);
+    if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
+    if (d.commentUseCaption !== undefined) setCommentUseCaption(d.commentUseCaption);
+    if (d.commentUseCustom !== undefined) setCommentUseCustom(d.commentUseCustom);
+    if (d.commentTemplate !== undefined) setCommentTemplate(d.commentTemplate);
     patchAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -897,13 +923,23 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     }
   }
 
+  // Caption is the base, custom text (if any) is appended on top — this is
+  // "write additional comment" on top of the caption, not an either/or.
   function resolveCommentText(id: string): string {
     if (!commentEnabled) return "";
-    if (commentMode === "caption") {
-      const p = batch.posts.find(x => x.id === id);
-      return p?.finalCaption ?? p?.rawCaption ?? "";
+    const p = batch.posts.find(x => x.id === id);
+    const parts: string[] = [];
+    if (commentUseCaption) parts.push(p?.finalCaption ?? p?.rawCaption ?? "");
+    if (commentUseCustom) {
+      const custom = (rowAdParams[id]?.commentText ?? commentTemplate).trim();
+      if (custom) parts.push(custom);
     }
-    return rowAdParams[id]?.commentText ?? commentTemplate;
+    return parts.filter(Boolean).join("\n\n");
+  }
+
+  function resolveCommentImageUrl(): string | undefined {
+    if (!commentAttachImage || commentImageUrls.length === 0) return undefined;
+    return commentImageUrls[Math.floor(Math.random() * commentImageUrls.length)];
   }
 
   async function handleBulkSchedule() {
@@ -930,7 +966,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ...(runAdsForRow && rp ? {
             adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
           } : {}),
-          ...(resolveCommentText(id).trim() ? { commentText: resolveCommentText(id) } : {}),
+          ...(() => {
+            const commentText = resolveCommentText(id);
+            if (!commentText.trim()) return {};
+            const commentImageUrl = resolveCommentImageUrl();
+            return { commentText, ...(commentImageUrl ? { commentImageUrl } : {}) };
+          })(),
         }),
       });
       if (res.ok) ok++;
@@ -971,7 +1012,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             adStatus: adConfig.adStatus,
             ...(rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
           } : {}),
-          ...(resolveCommentText(id).trim() ? { commentText: resolveCommentText(id) } : {}),
+          ...(() => {
+            const commentText = resolveCommentText(id);
+            if (!commentText.trim()) return {};
+            const commentImageUrl = resolveCommentImageUrl();
+            return { commentText, ...(commentImageUrl ? { commentImageUrl } : {}) };
+          })(),
         }),
       }).catch(() => null);
       if (!res?.ok) return { ok: false, adsScheduled: false };
@@ -1174,6 +1220,50 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               hideInlinePreset
             />
             <AdsConfigPanel adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows} onPatch={patchAdConfig} />
+            <div className={`${adsPanel} p-4 space-y-3 col-span-2`}>
+              <div className="flex items-center gap-2">
+                <MessageCircle size={14} className="text-violet-600 shrink-0" />
+                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt bình luận</span>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Bật bình luận tự động</span>
+                  <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                    commentEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
+                    {commentEnabled ? "Bật" : "Tắt"}
+                  </span>
+                </div>
+                <button type="button" onClick={() => setCommentEnabled(v => !v)}
+                  className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
+                    commentEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+                  <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                    commentEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
+                </button>
+              </div>
+
+              {commentEnabled && (
+                <>
+                  <div className="flex items-center gap-4 rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={commentUseCaption} onChange={e => setCommentUseCaption(e.target.checked)}
+                        className="rounded accent-violet-600" />
+                      <span className="text-xs text-slate-700 dark:text-slate-200">Dùng caption</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={commentUseCustom} onChange={e => setCommentUseCustom(e.target.checked)}
+                        className="rounded accent-violet-600" />
+                      <span className="text-xs text-slate-700 dark:text-slate-200">Tự nhập thêm nội dung</span>
+                    </label>
+                  </div>
+                  {commentUseCustom && (
+                    <input type="text" value={commentTemplate} onChange={e => setCommentTemplate(e.target.value)}
+                      placeholder="Viết thêm nội dung comment — có thể sửa riêng từng bài trong bảng"
+                      className="w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1233,7 +1323,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 }))}
                 justImportedLinkIds={justImportedLinkIds}
                 commentEnabled={commentEnabled}
-                commentMode={commentMode}
+                commentUseCaption={commentUseCaption}
+                commentUseCustom={commentUseCustom}
                 onCommentTextChange={(postId, value) => setRowAdParams(prev => ({
                   ...prev,
                   [postId]: { ...(prev[postId] ?? genRowParams(adConfig, commentTemplate)), commentText: value },
@@ -1267,7 +1358,8 @@ interface PostRowProps {
   onCtaHeadlineChange: (postId: string, value: string) => void;
   justImportedLinkIds: Set<string>;
   commentEnabled: boolean;
-  commentMode: "custom" | "caption";
+  commentUseCaption: boolean;
+  commentUseCustom: boolean;
   onCommentTextChange: (postId: string, value: string) => void;
 }
 
@@ -1437,7 +1529,7 @@ function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttemp
   return null;
 }
 
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentMode, onCommentTextChange }: PostRowProps) {
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentUseCaption, commentUseCustom, onCommentTextChange }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -1663,15 +1755,17 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               commentText={post.commentText}
               errorMsg={post.errorMsg}
             />
-          : commentMode === "caption"
-            ? <span className="text-xs text-slate-500 line-clamp-2">{displayCaption || "–"}</span>
-            : <input
+          : commentUseCustom
+            ? <input
                 type="text"
                 value={rowAdParams?.commentText ?? ""}
                 onChange={(e) => onCommentTextChange(post.id, e.target.value)}
-                placeholder="Nội dung comment"
+                placeholder={commentUseCaption ? "Viết thêm nội dung (nối sau caption)" : "Nội dung comment"}
                 className="w-full rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            : commentUseCaption
+              ? <span className="text-xs text-slate-500 line-clamp-2">{displayCaption || "–"}</span>
+              : <span className="text-slate-300 text-xs">–</span>
       )}
     </tr>
   );

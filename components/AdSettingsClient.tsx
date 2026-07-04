@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  Save, CheckCircle, Loader2, Megaphone, MessageCircle,
+  Save, CheckCircle, Loader2, Megaphone, MessageCircle, X,
 } from "lucide-react";
 import { loadAdSettings, saveAdSettings, type AdSettings } from "@/lib/adSettings";
 import { ScheduleModeSelector } from "@/components/ScheduleModeSelector";
@@ -63,8 +63,12 @@ export function AdSettingsClient() {
   const [batchBaseTime, setBatchBaseTime] = useState(() => vn7Now());
   const [batchEndTime, setBatchEndTime] = useState("");
   const [commentEnabled, setCommentEnabled] = useState(false);
-  const [commentMode, setCommentMode] = useState<"custom" | "caption">("custom");
+  const [commentUseCaption, setCommentUseCaption] = useState(true);
+  const [commentUseCustom, setCommentUseCustom] = useState(false);
   const [commentTemplate, setCommentTemplate] = useState("");
+  const [commentAttachImage, setCommentAttachImage] = useState(false);
+  const [commentImageUrls, setCommentImageUrls] = useState<string[]>([]);
+  const [newCommentImageUrl, setNewCommentImageUrl] = useState("");
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatch, setSavedBatch] = useState(false);
 
@@ -148,8 +152,11 @@ export function AdSettingsClient() {
     if (cfg.batchBaseTime) setBatchBaseTime(cfg.batchBaseTime);
     if (cfg.batchEndTime !== undefined) setBatchEndTime(cfg.batchEndTime);
     if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
-    if (cfg.commentMode === "custom" || cfg.commentMode === "caption") setCommentMode(cfg.commentMode);
+    if (cfg.commentUseCaption !== undefined) setCommentUseCaption(cfg.commentUseCaption === "true");
+    if (cfg.commentUseCustom !== undefined) setCommentUseCustom(cfg.commentUseCustom === "true");
     if (cfg.commentTemplate !== undefined) setCommentTemplate(cfg.commentTemplate);
+    if (cfg.commentAttachImage !== undefined) setCommentAttachImage(cfg.commentAttachImage === "true");
+    if (cfg.commentImageUrls) { try { setCommentImageUrls(JSON.parse(cfg.commentImageUrls)); } catch { /* ignore */ } }
   }
 
   if (!settings) return null;
@@ -179,7 +186,9 @@ export function AdSettingsClient() {
           autoAdsStatus: batchAdStatus,
           batchDefaultPageIds: JSON.stringify(batchDefaultPageIds),
           batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime, batchEndTime,
-          commentEnabled: String(commentEnabled), commentMode, commentTemplate,
+          commentEnabled: String(commentEnabled),
+          commentUseCaption: String(commentUseCaption), commentUseCustom: String(commentUseCustom), commentTemplate,
+          commentAttachImage: String(commentAttachImage), commentImageUrls: JSON.stringify(commentImageUrls),
         }),
       });
       const updated = await saveAccountRows();
@@ -248,7 +257,7 @@ export function AdSettingsClient() {
       batchTemplateId, batchRunAds, autoAdsStatus: batchAdStatus,
       batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo, batchGender,
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
-      commentEnabled, commentMode, commentTemplate,
+      commentEnabled, commentUseCaption, commentUseCustom, commentTemplate, commentAttachImage, commentImageUrls,
       accountRows: accountRows.map(r => ({
         accountId: r.accountId, weight: r.weight,
         budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
@@ -265,8 +274,11 @@ export function AdSettingsClient() {
     if (d.batchBaseTime) setBatchBaseTime(d.batchBaseTime);
     if (d.batchEndTime !== undefined) setBatchEndTime(d.batchEndTime);
     if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
-    if (d.commentMode) setCommentMode(d.commentMode);
+    if (d.commentUseCaption !== undefined) setCommentUseCaption(d.commentUseCaption);
+    if (d.commentUseCustom !== undefined) setCommentUseCustom(d.commentUseCustom);
     if (d.commentTemplate !== undefined) setCommentTemplate(d.commentTemplate);
+    if (d.commentAttachImage !== undefined) setCommentAttachImage(d.commentAttachImage);
+    if (d.commentImageUrls) setCommentImageUrls(d.commentImageUrls);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
     if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
@@ -421,33 +433,74 @@ export function AdSettingsClient() {
 
         {commentEnabled && (
           <>
-            <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+            <div className="rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2">
               <div className="flex flex-col">
                 <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nguồn nội dung comment</span>
-                <span className="text-[10px] text-slate-400">Có thể sửa riêng từng bài trong bảng batch</span>
+                <span className="text-[10px] text-slate-400">Có thể chọn cả 2 — caption sẽ được ghép trước, nội dung tự nhập thêm vào sau</span>
               </div>
-              <div className="flex items-center rounded-lg border overflow-hidden shrink-0">
-                <button type="button" onClick={() => setCommentMode("custom")}
-                  className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
-                    commentMode === "custom" ? "bg-violet-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
-                  Tự nhập
-                </button>
-                <button type="button" onClick={() => setCommentMode("caption")}
-                  className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
-                    commentMode === "caption" ? "bg-violet-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
-                  Dùng lại caption
-                </button>
-              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={commentUseCaption} onChange={e => setCommentUseCaption(e.target.checked)}
+                  className="rounded accent-violet-600" />
+                <span className="text-xs text-slate-700 dark:text-slate-200">Dùng caption (sau khi đổi link aff)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={commentUseCustom} onChange={e => setCommentUseCustom(e.target.checked)}
+                  className="rounded accent-violet-600" />
+                <span className="text-xs text-slate-700 dark:text-slate-200">Tự nhập thêm nội dung</span>
+              </label>
             </div>
 
-            {commentMode === "custom" && (
+            {commentUseCustom && (
               <div className="space-y-1">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung mặc định</span>
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung tự nhập mặc định</span>
                 <input type="text" value={commentTemplate} onChange={e => setCommentTemplate(e.target.value)}
-                  placeholder="Nội dung comment mặc định — có thể sửa riêng từng bài"
+                  placeholder="Viết thêm nội dung comment — có thể sửa riêng từng bài"
                   className="w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
               </div>
             )}
+
+            <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+              <div className="flex flex-col">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Đính kèm ảnh</span>
+                <span className="text-[10px] text-slate-400">Random 1 ảnh trong danh sách bên dưới cho mỗi comment</span>
+              </div>
+              <button type="button" onClick={() => setCommentAttachImage(v => !v)} disabled={commentImageUrls.length === 0}
+                className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed",
+                  commentAttachImage ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+                <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                  commentAttachImage ? "translate-x-4" : "translate-x-0"].join(" ")} />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <input type="text" value={newCommentImageUrl} onChange={e => setNewCommentImageUrl(e.target.value)}
+                  placeholder="Dán URL ảnh rồi bấm Thêm"
+                  className="flex-1 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                <button type="button" onClick={() => {
+                  const url = newCommentImageUrl.trim();
+                  if (!url) return;
+                  setCommentImageUrls(prev => [...prev, url]);
+                  setNewCommentImageUrl("");
+                }}
+                  className="rounded-lg bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 text-xs font-medium transition-colors shrink-0">
+                  Thêm
+                </button>
+              </div>
+              {commentImageUrls.length > 0 && (
+                <ul className="space-y-1">
+                  {commentImageUrls.map((url, i) => (
+                    <li key={i} className="flex items-center gap-2 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5">
+                      <span className="flex-1 truncate text-xs text-slate-600 dark:text-slate-300">{url}</span>
+                      <button type="button" onClick={() => setCommentImageUrls(prev => prev.filter((_, ci) => ci !== i))}
+                        className="text-slate-400 hover:text-red-500 shrink-0">
+                        <X size={13} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </>
         )}
       </div>

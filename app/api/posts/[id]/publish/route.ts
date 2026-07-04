@@ -30,6 +30,7 @@ export async function POST(
       ctaHeadline?: string;
       adStatus?: "ACTIVE" | "PAUSED";
       commentText?: string;
+      commentImageUrl?: string;
     };
     const { pageId } = body;
 
@@ -185,7 +186,7 @@ export async function POST(
     }
 
     if (body.commentText?.trim() && post.commentStatus !== "done") {
-      await scheduleAutoComments({ postId: params.id, fbPostId, accessToken: fbConn.accessToken, text: body.commentText });
+      await scheduleAutoComments({ postId: params.id, fbPostId, accessToken: fbConn.accessToken, text: body.commentText, imageUrl: body.commentImageUrl });
     }
 
     return NextResponse.json({ ok: true, fbPostUrl, autoAds: adsWillRun ? { scheduled: true } : null });

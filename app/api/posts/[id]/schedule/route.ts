@@ -6,7 +6,7 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adAgeMin, adAgeMax, adGender, adBudget, commentText } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adAgeMin, adAgeMax, adGender, adBudget, commentText, commentImageUrl } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -17,6 +17,7 @@ export async function PATCH(
       adGender?: string;
       adBudget?: string;
       commentText?: string;
+      commentImageUrl?: string;
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id } });
@@ -50,6 +51,7 @@ export async function PATCH(
         ...(adGender !== undefined ? { adGender } : {}),
         ...(adBudget !== undefined ? { adBudget } : {}),
         ...(commentText ? { commentText } : {}),
+        ...(commentImageUrl ? { commentImageUrl } : {}),
       },
     });
 

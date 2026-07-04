@@ -135,7 +135,7 @@ export async function GET(req: Request) {
       }
 
       if (post.commentText?.trim() && fbPostId && post.commentStatus !== "done") {
-        await scheduleAutoComments({ postId: post.id, fbPostId, accessToken: fbConn.accessToken, text: post.commentText });
+        await scheduleAutoComments({ postId: post.id, fbPostId, accessToken: fbConn.accessToken, text: post.commentText, imageUrl: post.commentImageUrl ?? undefined });
       }
 
       results.push({ id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) });

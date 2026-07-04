@@ -47,6 +47,7 @@ model Post {
   adNextAttemptAt DateTime?
   adAttempt      Int?            @default(0)
   commentText          String?
+  commentImageUrl      String?
   commentStatus        String?
   commentNextAttemptAt DateTime?
   commentAttempt       Int?      @default(0)

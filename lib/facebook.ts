@@ -91,11 +91,11 @@ export async function publishToPage(
   return json;
 }
 
-export async function postComment(objectId: string, accessToken: string, message: string): Promise<{ id: string }> {
+export async function postComment(objectId: string, accessToken: string, message: string, attachmentUrl?: string): Promise<{ id: string }> {
   const res = await fetch(`${FB_API}/${objectId}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, access_token: accessToken }),
+    body: JSON.stringify({ message, ...(attachmentUrl ? { attachment_url: attachmentUrl } : {}), access_token: accessToken }),
   });
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);

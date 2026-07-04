@@ -12,6 +12,7 @@ export interface AutoCommentParams {
   fbPostId: string;
   accessToken: string;
   text: string;
+  imageUrl?: string;
 }
 
 // Call this right after a post publishes successfully (or from the schedule
@@ -34,7 +35,7 @@ export async function scheduleAutoComments(params: AutoCommentParams): Promise<v
   const nextAttemptAt = new Date(Date.now() + RETRY_DELAYS_MS[0]);
   await prisma.post.update({
     where: { id: params.postId },
-    data: { commentText: params.text, commentStatus: "pending", commentNextAttemptAt: nextAttemptAt, commentAttempt: 0 },
+    data: { commentText: params.text, commentImageUrl: params.imageUrl ?? null, commentStatus: "pending", commentNextAttemptAt: nextAttemptAt, commentAttempt: 0 },
   }).catch(() => {});
 
   waitUntil(
@@ -54,7 +55,7 @@ export async function attemptAutoComment(params: AutoCommentParams, attemptIndex
   }).catch(() => {});
 
   try {
-    const result = await postComment(params.fbPostId, params.accessToken, params.text);
+    const result = await postComment(params.fbPostId, params.accessToken, params.text, params.imageUrl);
     await prisma.post.update({
       where: { id: params.postId },
       data: { commentStatus: "done", commentId: result.id, commentAttempt: attemptNumber, commentNextAttemptAt: null, errorMsg: null },
@@ -101,7 +102,7 @@ export async function processDueCommentRetries(): Promise<void> {
     if (!fbConn) continue;
 
     await attemptAutoComment(
-      { postId: post.id, fbPostId: post.fbPostId, accessToken: fbConn.accessToken, text: post.commentText },
+      { postId: post.id, fbPostId: post.fbPostId, accessToken: fbConn.accessToken, text: post.commentText, imageUrl: post.commentImageUrl ?? undefined },
       post.commentAttempt ?? 0
     );
   }
