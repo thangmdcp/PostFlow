@@ -27,7 +27,7 @@ export function AdParametersForm({
   budgetMin, budgetMax, budgetStep,
   onBudgetMinChange, onBudgetMaxChange, onBudgetStepChange,
   accent = "violet",
-  budgetLabel = "Ngân sách (VNĐ/ngày)",
+  budgetLabel = "Ngân sách",
   budgetStepLabel = "Bước",
 }: AdParametersFormProps) {
   const ring = accent === "blue" ? "focus:ring-blue-500" : "focus:ring-violet-500";
@@ -70,9 +70,9 @@ export function AdParametersForm({
       </div>
 
       {/* Budget */}
-      <div className="space-y-1">
-        {budgetLabel && <p className="text-[10px] text-slate-400">{budgetLabel}</p>}
-        <div className="grid grid-cols-3 gap-1">
+      <div className="flex items-start gap-1 min-w-0">
+        {budgetLabel && <span className="text-[10px] text-slate-400 shrink-0 w-[60px] pt-2">{budgetLabel}</span>}
+        <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
           <div>
             <p className="text-[9px] text-slate-400 mb-0.5 text-center">Min</p>
             <input type="number" value={budgetMin} onChange={e => onBudgetMinChange(e.target.value)} className={inp + " w-full text-center"} placeholder="100000" />

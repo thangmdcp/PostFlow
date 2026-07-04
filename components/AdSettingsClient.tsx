@@ -396,7 +396,7 @@ export function AdSettingsClient() {
 
             <AdParametersForm
               accent="violet"
-              budgetLabel=""
+              budgetLabel="Ngân sách"
               budgetStepLabel="Bước nhảy"
               ageMinFrom={batchAgeMinFrom} ageMinTo={batchAgeMinTo}
               ageMaxFrom={batchAgeMaxFrom} ageMaxTo={batchAgeMaxTo}
