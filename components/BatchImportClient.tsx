@@ -78,18 +78,41 @@ function weightedPickAccount(rows: { accountId: string; weight: number }[]): str
   return rows[rows.length - 1].accountId;
 }
 
-function computeScheduleTimes(ids: string[], mode: ScheduleMode, baseTime: string, stepMinutes: string, postsPerDay: string, manualTime: string): Record<string, string> {
+function parseHHMM(t: string): number { const [h, m] = t.split(":").map(Number); return h * 60 + m; }
+
+function nextDayAt(date: Date, startMin: number): Date {
+  const curDateStr = dateToVn7(date).slice(0, 10);
+  const nextDateStr = dateToVn7(new Date(vn7ToDate(`${curDateStr}T00:00`).getTime() + 24 * 60 * 60000)).slice(0, 10);
+  const hh = String(Math.floor(startMin / 60)).padStart(2, "0");
+  const mm = String(startMin % 60).padStart(2, "0");
+  return vn7ToDate(`${nextDateStr}T${hh}:${mm}`);
+}
+
+function computeScheduleTimes(ids: string[], mode: ScheduleMode, baseTime: string, stepMinutes: string, postsPerDay: string, manualTime: string, endTime: string): Record<string, string> {
   const times: Record<string, string> = {};
   if (mode === "manual") {
     ids.forEach(id => { times[id] = manualTime; });
   } else if (mode === "interval") {
     const base = baseTime ? vn7ToDate(baseTime) : new Date();
     const step = Math.max(1, Number(stepMinutes) || 60);
-    ids.forEach((id, i) => { times[id] = dateToVn7(new Date(base.getTime() + i * step * 60000)); });
+    const startMin = baseTime ? parseHHMM(baseTime.slice(11, 16)) : parseHHMM(dateToVn7(base).slice(11, 16));
+    const endMin = endTime ? parseHHMM(endTime) : null;
+    let cursor = base;
+    ids.forEach(id => {
+      if (endMin != null && endMin > startMin) {
+        const tod = parseHHMM(dateToVn7(cursor).slice(11, 16));
+        if (tod > endMin) cursor = nextDayAt(cursor, startMin);
+      }
+      times[id] = dateToVn7(cursor);
+      cursor = new Date(cursor.getTime() + step * 60000);
+    });
   } else if (mode === "daily") {
     const base = baseTime ? vn7ToDate(baseTime) : new Date();
     const perDay = Math.max(1, Number(postsPerDay) || 3);
-    const minutesPerSlot = Math.floor((24 * 60) / perDay);
+    const startMin = baseTime ? parseHHMM(baseTime.slice(11, 16)) : parseHHMM(dateToVn7(base).slice(11, 16));
+    const endMin = endTime ? parseHHMM(endTime) : null;
+    const windowMin = (endMin != null && endMin > startMin) ? (endMin - startMin) : 24 * 60;
+    const minutesPerSlot = Math.max(1, Math.floor(windowMin / perDay));
     ids.forEach((id, i) => {
       const dayOffset = Math.floor(i / perDay);
       const slotOffset = (i % perDay) * minutesPerSlot;
@@ -227,6 +250,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultStepMinutes, setDefaultStepMinutes] = useState("60");
   const [defaultPostsPerDay, setDefaultPostsPerDay] = useState("3");
   const [defaultBaseTime, setDefaultBaseTime] = useState(() => vn7Now(5));
+  const [defaultEndTime, setDefaultEndTime] = useState("");
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
 
@@ -261,6 +285,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       if (cfg.batchStepMinutes) setDefaultStepMinutes(cfg.batchStepMinutes);
       if (cfg.batchPostsPerDay) setDefaultPostsPerDay(cfg.batchPostsPerDay);
       if (cfg.batchBaseTime) setDefaultBaseTime(cfg.batchBaseTime);
+      if (cfg.batchEndTime !== undefined) setDefaultEndTime(cfg.batchEndTime);
     }
 
     // Apply sessionStorage cache instantly
@@ -313,6 +338,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     return {
       batchDefaultPageIds: defaultPageIds, batchScheduleMode: defaultScheduleMode,
       batchStepMinutes: defaultStepMinutes, batchPostsPerDay: defaultPostsPerDay, batchBaseTime: defaultBaseTime,
+      batchEndTime: defaultEndTime,
       batchTemplateId: adConfig.templateId, batchRunAds: adConfig.runAds,
       batchAgeMinFrom: adConfig.ageMinFrom, batchAgeMinTo: adConfig.ageMinTo,
       batchAgeMaxFrom: adConfig.ageMaxFrom, batchAgeMaxTo: adConfig.ageMaxTo,
@@ -329,6 +355,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     if (d.batchStepMinutes) setDefaultStepMinutes(d.batchStepMinutes);
     if (d.batchPostsPerDay) setDefaultPostsPerDay(d.batchPostsPerDay);
     if (d.batchBaseTime) setDefaultBaseTime(d.batchBaseTime);
+    if (d.batchEndTime !== undefined) setDefaultEndTime(d.batchEndTime);
     patchAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -465,6 +492,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               stepMinutes={defaultStepMinutes} onStepMinutesChange={setDefaultStepMinutes}
               postsPerDay={defaultPostsPerDay} onPostsPerDayChange={setDefaultPostsPerDay}
               baseTime={defaultBaseTime} onBaseTimeChange={setDefaultBaseTime}
+              endTime={defaultEndTime} onEndTimeChange={setDefaultEndTime}
               onQuickNow={() => setDefaultBaseTime(vn7Now(0))}
               onQuickMidnight={() => setDefaultBaseTime(vn7NextMidnight())}
               hideInlinePreset
@@ -482,7 +510,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows}
       defaultPageIds={defaultPageIds} defaultScheduleMode={defaultScheduleMode}
       defaultStepMinutes={defaultStepMinutes} defaultPostsPerDay={defaultPostsPerDay}
-      defaultBaseTime={defaultBaseTime}
+      defaultBaseTime={defaultBaseTime} defaultEndTime={defaultEndTime}
       onPatchAdConfig={patchAdConfig}
       onNewBatch={() => setBatchId(null)} onToast={show} ToastComponent={ToastComponent}
       mutateBatch={mutateBatch}
@@ -503,6 +531,7 @@ interface BatchViewProps {
   defaultStepMinutes: string;
   defaultPostsPerDay: string;
   defaultBaseTime: string;
+  defaultEndTime: string;
   onPatchAdConfig: (patch: Partial<BatchAdConfig>) => void;
   onNewBatch: () => void;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
@@ -510,7 +539,7 @@ interface BatchViewProps {
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -519,6 +548,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [baseTime, setBaseTime] = useState(() => defaultBaseTime || vn7Now(5));
   const [stepMinutes, setStepMinutes] = useState(defaultStepMinutes);
   const [postsPerDay, setPostsPerDay] = useState(defaultPostsPerDay);
+  const [endTime, setEndTime] = useState(defaultEndTime);
   const [postTimes, setPostTimes] = useState<Record<string, string>>({});
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -611,13 +641,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   // both the initial auto-fill and the "Áp dụng" bulk-edit button call.
   const applyDefaultsToRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
-    const times = computeScheduleTimes(ids, scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime);
+    const times = computeScheduleTimes(ids, scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime);
     setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = genRowParams(adConfig); }); return n; });
     setRowPageId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = pickPage(); }); return n; });
     setRowAccountId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = bulkAccountId || weightedPickAccount(accountRows); }); return n; });
     setRowRunAds(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = adConfig.runAds; }); return n; });
     setPostTimes(prev => ({ ...prev, ...times }));
-  }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, adConfig, accountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
+  }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, accountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
 
   const readyPosts = batch.posts.filter((p) => p.status === "ready" || p.status === "failed");
   const readyIds = readyPosts.map(p => p.id);
@@ -695,6 +725,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       batchDefaultPageIds: selectedPageIds, batchScheduleMode: scheduleMode,
       batchStepMinutes: stepMinutes, batchPostsPerDay: postsPerDay,
       batchBaseTime: scheduleMode === "manual" ? manualApplyTime : baseTime,
+      batchEndTime: endTime,
       batchTemplateId: adConfig.templateId, batchRunAds: adConfig.runAds,
       batchAgeMinFrom: adConfig.ageMinFrom, batchAgeMinTo: adConfig.ageMinTo,
       batchAgeMaxFrom: adConfig.ageMaxFrom, batchAgeMaxTo: adConfig.ageMaxTo,
@@ -714,6 +745,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       if ((d.batchScheduleMode ?? scheduleMode) === "manual") setManualApplyTime(d.batchBaseTime);
       else setBaseTime(d.batchBaseTime);
     }
+    if (d.batchEndTime !== undefined) setEndTime(d.batchEndTime);
     patchAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -730,12 +762,25 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   }
 
   // ── Batch Custom Links export/import ────────────────────────────────────────
+  // If `auto` and the typed text ends in digits, treat that as the starting
+  // number and increment per post (bai1 → bai2 → … → bai10, bai11). Otherwise
+  // fall back to appending "_<postNumber>" as before.
+  function formatSubId(cfg: SubIdConfig, postNumber: number): string {
+    if (!cfg.auto) return cfg.text;
+    const m = cfg.text.match(/^(.*?)(\d+)$/);
+    if (m) {
+      const [, prefix, numStr] = m;
+      return `${prefix}${parseInt(numStr, 10) + (postNumber - 1)}`;
+    }
+    return `${cfg.text}_${postNumber}`;
+  }
+
   function buildExportRows(): { competitorUrl: string; subs: string[] }[] {
     const rows: { competitorUrl: string; subs: string[] }[] = [];
     batch.posts.forEach((post, postIdx) => {
       const postNumber = postIdx + 1;
       [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-        const subs = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}_${postNumber}` : cfg.text);
+        const subs = subIdConfig.map(cfg => formatSubId(cfg, postNumber));
         rows.push({ competitorUrl: link.competitorUrl, subs });
       });
     });
@@ -776,7 +821,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const pool: { linkId: string; competitorUrl: string; campaignName: string }[] = [];
       batch.posts.forEach((post, postIdx) => {
         const postNumber = postIdx + 1;
-        const campaignName = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}_${postNumber}` : cfg.text).join("-");
+        const campaignName = subIdConfig.map(cfg => formatSubId(cfg, postNumber)).join("-");
         [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
           pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName });
         });
@@ -903,19 +948,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       {ToastComponent}
 
       {/* ── Thanh thao tác — tất cả nút chức năng trên cùng 1 hàng ── */}
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
+      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
         <button onClick={onNewBatch}
           className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600 border rounded-lg px-3 py-1.5 hover:border-blue-300 transition-colors shrink-0">
           <PlusCircle size={13} /> Batch mới
         </button>
 
         <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
-
-        {checkedIds.size > 0 && (
-          <span className="text-xs text-slate-500 shrink-0">
-            Đã chọn {checkedIds.size} dòng
-          </span>
-        )}
 
         {/* Random split-button */}
         <div className="relative flex items-center shrink-0" ref={randomPanelRef}>
@@ -953,7 +992,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0}
           className={["flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed",
             detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
-          <SlidersHorizontal size={13} /> Cài đặt chi tiết
+          <SlidersHorizontal size={13} /> Cài đặt
         </button>
 
         <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
@@ -1058,6 +1097,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               postsPerDay={postsPerDay} onPostsPerDayChange={setPostsPerDay}
               baseTime={scheduleMode === "manual" ? manualApplyTime : baseTime}
               onBaseTimeChange={scheduleMode === "manual" ? setManualApplyTime : setBaseTime}
+              endTime={endTime} onEndTimeChange={setEndTime}
               onQuickNow={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7Now(0))}
               onQuickMidnight={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7NextMidnight())}
               hideInlinePreset

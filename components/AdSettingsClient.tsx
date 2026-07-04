@@ -61,6 +61,7 @@ export function AdSettingsClient() {
   const [batchStepMinutes, setBatchStepMinutes] = useState("60");
   const [batchPostsPerDay, setBatchPostsPerDay] = useState("3");
   const [batchBaseTime, setBatchBaseTime] = useState(() => vn7Now());
+  const [batchEndTime, setBatchEndTime] = useState("");
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatch, setSavedBatch] = useState(false);
 
@@ -142,6 +143,7 @@ export function AdSettingsClient() {
     if (cfg.batchStepMinutes) setBatchStepMinutes(cfg.batchStepMinutes);
     if (cfg.batchPostsPerDay) setBatchPostsPerDay(cfg.batchPostsPerDay);
     if (cfg.batchBaseTime) setBatchBaseTime(cfg.batchBaseTime);
+    if (cfg.batchEndTime !== undefined) setBatchEndTime(cfg.batchEndTime);
   }
 
   if (!settings) return null;
@@ -170,7 +172,7 @@ export function AdSettingsClient() {
           batchRunAds: String(batchRunAds),
           autoAdsStatus: batchAdStatus,
           batchDefaultPageIds: JSON.stringify(batchDefaultPageIds),
-          batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime,
+          batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime, batchEndTime,
         }),
       });
       const updated = await saveAccountRows();
@@ -235,7 +237,7 @@ export function AdSettingsClient() {
   // ── Full-cluster preset (schedule + template + ads params + TKQC allocation) ──
   function buildPresetData() {
     return {
-      batchDefaultPageIds, batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime,
+      batchDefaultPageIds, batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime, batchEndTime,
       batchTemplateId, batchRunAds, autoAdsStatus: batchAdStatus,
       batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo, batchGender,
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
@@ -253,6 +255,7 @@ export function AdSettingsClient() {
     if (d.batchStepMinutes) setBatchStepMinutes(d.batchStepMinutes);
     if (d.batchPostsPerDay) setBatchPostsPerDay(d.batchPostsPerDay);
     if (d.batchBaseTime) setBatchBaseTime(d.batchBaseTime);
+    if (d.batchEndTime !== undefined) setBatchEndTime(d.batchEndTime);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
     if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
@@ -300,6 +303,7 @@ export function AdSettingsClient() {
         stepMinutes={batchStepMinutes} onStepMinutesChange={setBatchStepMinutes}
         postsPerDay={batchPostsPerDay} onPostsPerDayChange={setBatchPostsPerDay}
         baseTime={batchBaseTime} onBaseTimeChange={setBatchBaseTime}
+        endTime={batchEndTime} onEndTimeChange={setBatchEndTime}
         onQuickNow={() => setBatchBaseTime(vn7Now())}
         onQuickMidnight={() => setBatchBaseTime(vn7NextMidnight())}
         hideInlinePreset
