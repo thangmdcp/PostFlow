@@ -59,14 +59,14 @@ export function CommentSettingsPanel({
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={useCaption} onChange={e => onUseCaptionChange(e.target.checked)}
                 className="rounded accent-violet-600" />
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Dùng caption (sau khi đổi link aff)</span>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Dùng caption</span>
             </label>
             {useCaption && (
-              <div className="pl-6 space-y-2">
+              <div className="space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={captionAttachImage} onChange={e => onCaptionAttachImageChange(e.target.checked)}
                     className="rounded accent-violet-600" />
-                  <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh (dùng ảnh dùng chung nếu để trống)</span>
+                  <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh</span>
                 </label>
                 <ImageUrlListEditor urls={captionImageUrls} onChange={onCaptionImageUrlsChange} />
               </div>
@@ -76,10 +76,7 @@ export function CommentSettingsPanel({
           {/* Custom entries */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <div className="flex flex-col">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung tự nhập</span>
-                <span className="text-[10px] text-slate-400">Ghim để dùng cố định — không ghim sẽ vào nhóm random để ghép ngẫu nhiên</span>
-              </div>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung tự nhập</span>
               <button type="button" onClick={() => onEntriesChange([...entries, { id: Math.random().toString(36).slice(2), text: "", attachImage: false, imageUrls: [], pinned: false }])}
                 className="text-xs text-violet-600 hover:text-violet-700 font-medium shrink-0">
                 + Thêm nội dung
@@ -112,7 +109,7 @@ export function CommentSettingsPanel({
                   <input type="checkbox" checked={entry.attachImage}
                     onChange={e => patchEntry(i, { attachImage: e.target.checked })}
                     className="rounded accent-violet-600" />
-                  <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh (dùng ảnh dùng chung nếu để trống)</span>
+                  <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh</span>
                 </label>
                 {entry.attachImage && (
                   <ImageUrlListEditor urls={entry.imageUrls} onChange={urls => patchEntry(i, { imageUrls: urls })} />
@@ -121,20 +118,14 @@ export function CommentSettingsPanel({
             ))}
           </div>
 
-          {/* Shared image pool + random count */}
+          {/* Shared image pool + total comment count */}
           <div className="rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2">
-            <div className="flex flex-col">
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Ảnh dùng chung</span>
-              <span className="text-[10px] text-slate-400">Dùng khi caption/nội dung không có ảnh riêng</span>
-            </div>
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Ảnh dùng chung</span>
             <ImageUrlListEditor urls={sharedImageUrls} onChange={onSharedImageUrlsChange} />
           </div>
 
           <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-            <div className="flex flex-col">
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Số lượng comment random ghép</span>
-              <span className="text-[10px] text-slate-400">Random nội dung + ảnh trong nhóm chưa ghim để tạo comment mới</span>
-            </div>
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tổng số lượng comment mỗi bài</span>
             <input type="number" min={0} value={randomCount} onChange={e => onRandomCountChange(e.target.value)}
               className="w-16 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-500 shrink-0" />
           </div>

@@ -11,8 +11,8 @@ import { BrandingClient } from "@/components/BrandingClient";
 export type SettingsTab = "connections" | "ads" | "branding" | "setup";
 
 const TABS: { key: SettingsTab; label: string; href: string; icon: typeof Link2 }[] = [
-  { key: "connections", label: "Kết nối FB", href: "/settings/connections", icon: Link2 },
   { key: "ads", label: "Cài đặt Ads", href: "/settings/ads", icon: SlidersHorizontal },
+  { key: "connections", label: "Kết nối FB", href: "/settings/connections", icon: Link2 },
   { key: "branding", label: "Giao diện", href: "/settings/branding", icon: Palette },
   { key: "setup", label: "Hệ thống", href: "/settings/setup", icon: Wrench },
 ];

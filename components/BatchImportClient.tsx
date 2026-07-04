@@ -261,6 +261,23 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
   const [adAccounts, setAdAccounts] = useState<{ accountId: string; name: string }[]>([]);
   const [accountRows, setAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
+  // Pre-batch panel's own temporary TKQC copy — editable here for convenience,
+  // but never persisted; re-synced whenever the real (server) rows change.
+  const [tempAccountRows, setTempAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
+  useEffect(() => { setTempAccountRows(accountRows); }, [accountRows]);
+  function patchTempRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
+    setTempAccountRows(rows => rows.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  }
+  function deleteTempRow(idx: number) {
+    setTempAccountRows(rows => rows.filter((_, i) => i !== idx));
+  }
+  function addTempRow() {
+    const firstFree = adAccounts.find(a => !tempAccountRows.some(r => r.accountId === a.accountId));
+    setTempAccountRows(rows => [...rows, {
+      accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
+      weight: 0, budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep,
+    }]);
+  }
   const [defaultPageIds, setDefaultPageIds] = useState<string[]>([]);
   const [defaultScheduleMode, setDefaultScheduleMode] = useState<ScheduleMode>("interval");
   const [defaultStepMinutes, setDefaultStepMinutes] = useState("60");
@@ -551,7 +568,19 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               onQuickMidnight={() => setDefaultBaseTime(vn7NextMidnight())}
               hideInlinePreset
             />
-            <AdsConfigPanel adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows} onPatch={patchAdConfig} />
+            <AdsConfigPanel
+              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={tempAccountRows} onPatch={patchAdConfig}
+              onPatchRow={patchTempRow} onDeleteRow={deleteTempRow} onAddRow={addTempRow}
+            />
+            <CommentSettingsPanel
+              enabled={defaultCommentEnabled} onEnabledChange={setDefaultCommentEnabled}
+              useCaption={defaultCommentUseCaption} onUseCaptionChange={setDefaultCommentUseCaption}
+              captionAttachImage={defaultCommentCaptionAttachImage} onCaptionAttachImageChange={setDefaultCommentCaptionAttachImage}
+              captionImageUrls={defaultCommentCaptionImageUrls} onCaptionImageUrlsChange={setDefaultCommentCaptionImageUrls}
+              sharedImageUrls={defaultCommentSharedImageUrls} onSharedImageUrlsChange={setDefaultCommentSharedImageUrls}
+              randomCount={defaultCommentRandomCount} onRandomCountChange={setDefaultCommentRandomCount}
+              entries={defaultCommentCustomEntries} onEntriesChange={setDefaultCommentCustomEntries}
+            />
           </div>
         </div>
       </div>
@@ -990,12 +1019,17 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       jobs.push({ text: e.text, imageUrl: resolveImage(e.attachImage, e.imageUrls, commentSharedImageUrls) });
     }
 
+    // The count is a TOTAL target, not an "extra" amount — caption + pinned
+    // entries are always included first; random-mixed ones only fill the
+    // remaining gap up to that total (never fewer than the fixed set, never
+    // more than requested).
     const unpinned = active.filter(e => !e.pinned);
-    const count = Math.max(0, Number(commentRandomCount) || 0);
-    if (unpinned.length && count > 0) {
+    const total = Math.max(0, Number(commentRandomCount) || 0);
+    if (unpinned.length && total > jobs.length) {
+      const remaining = total - jobs.length;
       const textPool = unpinned.map(e => e.text);
       const imagePool = unpinned.flatMap(e => e.attachImage ? (e.imageUrls.length ? e.imageUrls : commentSharedImageUrls) : []);
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < remaining; i++) {
         const text = textPool[Math.floor(Math.random() * textPool.length)];
         const imageUrl = imagePool.length ? imagePool[Math.floor(Math.random() * imagePool.length)] : undefined;
         jobs.push({ text, imageUrl });
@@ -1115,11 +1149,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const tableWidth = 40 + visibleCols.reduce((s, c) => s + colWidths[c.key], 0);
 
   return (
-    <div className="w-full flex gap-4 items-start">
-      <div className="flex-1 min-w-0">
+    <div className="w-full">
       {ToastComponent}
 
-      {/* ── Thanh thao tác — tất cả nút chức năng trên cùng 1 hàng ── */}
+      {/* ── Thanh thao tác — luôn chiếm trọn chiều rộng, không co lại khi mở panel Cài đặt ── */}
       <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
         <button onClick={onNewBatch} title="Batch mới"
           className="flex items-center text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0">
@@ -1234,7 +1267,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
       </div>
 
-
+      <div className="flex gap-4 items-start">
+      <div className="flex-1 min-w-0">
       {/* ── Table ── */}
       <div className="rounded-2xl border bg-card shadow-sm overflow-x-auto">
         <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
@@ -1343,6 +1377,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           />
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -1543,6 +1578,17 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   const [fbPostUrl] = useState(post.fbPostUrl ?? "");
   const [status, setStatus] = useState(post.status);
   const [showCaption, setShowCaption] = useState(false);
+  const [commentPopoverOpen, setCommentPopoverOpen] = useState(false);
+  const commentPopoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!commentPopoverOpen) return;
+    const h = (e: MouseEvent) => {
+      if (commentPopoverRef.current && !commentPopoverRef.current.contains(e.target as Node)) setCommentPopoverOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [commentPopoverOpen]);
 
   useEffect(() => { setStatus(post.status); }, [post.status]);
   useEffect(() => { setLinks(post.extractedLinks); }, [post.extractedLinks]);
@@ -1754,25 +1800,53 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           : <span className="text-slate-300 text-xs">–</span>
       )}
       {commentEnabled && cell("comment",
-        post.comments.length > 0
-          ? <div className="space-y-0.5">
-              {post.comments.map(c => (
-                <CommentStatusBadge key={c.id}
-                  commentStatus={c.status}
-                  commentNextAttemptAt={c.nextAttemptAt}
-                  commentAttempt={c.attempt}
-                  commentText={c.text}
-                  errorMsg={c.errorMsg}
-                />
-              ))}
+        post.comments.length > 1 || commentJobsPreview.length > 1
+          ? <div className="relative" ref={commentPopoverRef}>
+              <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
+                className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
+                {post.comments.length > 0 ? `${post.comments.length} comment` : `${commentJobsPreview.length} comment (dự kiến)`}
+              </button>
+              {commentPopoverOpen && (
+                <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
+                  {post.comments.length > 0
+                    ? post.comments.map(c => (
+                        <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
+                          <CommentStatusBadge
+                            commentStatus={c.status}
+                            commentNextAttemptAt={c.nextAttemptAt}
+                            commentAttempt={c.attempt}
+                            commentText={c.text}
+                            errorMsg={c.errorMsg}
+                          />
+                        </div>
+                      ))
+                    : commentJobsPreview.map((job, i) => (
+                        <div key={i} className="text-xs text-slate-600 dark:text-slate-300 p-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
+                          {job.text}
+                        </div>
+                      ))}
+                </div>
+              )}
             </div>
-          : commentJobsPreview.length > 0
-            ? <ul className="space-y-0.5">
-                {commentJobsPreview.map((job, i) => (
-                  <li key={i} className="text-xs text-slate-500 line-clamp-1">• {job.text}</li>
+          : post.comments.length > 0
+            ? <div className="space-y-0.5">
+                {post.comments.map(c => (
+                  <CommentStatusBadge key={c.id}
+                    commentStatus={c.status}
+                    commentNextAttemptAt={c.nextAttemptAt}
+                    commentAttempt={c.attempt}
+                    commentText={c.text}
+                    errorMsg={c.errorMsg}
+                  />
                 ))}
-              </ul>
-            : <span className="text-slate-300 text-xs">–</span>
+              </div>
+            : commentJobsPreview.length > 0
+              ? <ul className="space-y-0.5">
+                  {commentJobsPreview.map((job, i) => (
+                    <li key={i} className="text-xs text-slate-500 line-clamp-1">• {job.text}</li>
+                  ))}
+                </ul>
+              : <span className="text-slate-300 text-xs">–</span>
       )}
     </tr>
   );

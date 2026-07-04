@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
+import { publishDuePost } from "@/lib/publishDuePost";
 
 export async function PATCH(
   req: Request,
@@ -54,6 +55,14 @@ export async function PATCH(
     });
 
     if (comments) await persistCommentJobs(params.id, comments);
+
+    // Elapsed time between rolling this batch's target times and actually
+    // saving them can push an early post's scheduledAt into the past before
+    // the next cron tick even runs — publish it right away instead of
+    // leaving it to wait.
+    if (new Date(scheduledAt) <= new Date()) {
+      await publishDuePost(scheduled);
+    }
 
     return NextResponse.json(scheduled);
   } catch (err) {
