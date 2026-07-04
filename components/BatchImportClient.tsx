@@ -1120,67 +1120,71 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     <div className="w-full">
       {ToastComponent}
 
-      {/* ── Thanh thao tác — luôn chiếm trọn chiều rộng, không co lại khi mở panel Cài đặt ── */}
-      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
-        <button onClick={onNewBatch} title="Batch mới"
-          className="flex items-center gap-1.5 text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0 whitespace-nowrap">
-          <PlusCircle size={13} /> {sidebarCollapsed && "Tạo batch"}
-        </button>
+      {/* ── Thanh thao tác — chia thành các cụm, khoảng cách đều nhau giữa các cụm, luôn chiếm trọn chiều rộng ── */}
+      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={onNewBatch} title="Batch mới"
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0 whitespace-nowrap">
+            <PlusCircle size={13} /> {sidebarCollapsed && "Tạo batch"}
+          </button>
 
-        {/* Random split-button */}
-        <div className="relative flex items-center shrink-0" ref={randomPanelRef}>
-          <div className="flex items-center rounded-lg border bg-white dark:bg-slate-800 overflow-hidden">
-            <button onClick={handleRandomize} disabled={checkedIds.size === 0}
-              title="Random các thông số đã tích trong danh sách bên cạnh"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
-              <Shuffle size={13} /> {sidebarCollapsed && "Random"}
-            </button>
-            <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
-              className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              <ChevronDown size={11} />
-            </button>
-          </div>
-          {randomFieldsOpen && (
-            <div className="absolute left-0 top-full mt-1 z-50 w-48 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
-              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 pt-1 pb-1.5">Random thông số nào</p>
-              {RANDOM_FIELD_OPTIONS.map(opt => (
-                <label key={opt.key} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
-                  <input type="checkbox" checked={randomFields.has(opt.key)}
-                    onChange={e => setRandomFields(prev => {
-                      const n = new Set(prev);
-                      e.target.checked ? n.add(opt.key) : n.delete(opt.key);
-                      return n;
-                    })}
-                    className="rounded accent-blue-600" />
-                  <span className="text-xs text-slate-700 dark:text-slate-200">{opt.label}</span>
-                </label>
-              ))}
+          {/* Random split-button */}
+          <div className="relative flex items-center shrink-0" ref={randomPanelRef}>
+            <div className="flex items-center rounded-lg border bg-white dark:bg-slate-800 overflow-hidden">
+              <button onClick={handleRandomize} disabled={checkedIds.size === 0}
+                title="Random các thông số đã tích trong danh sách bên cạnh"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
+                <Shuffle size={13} /> {sidebarCollapsed && "Random"}
+              </button>
+              <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
+                className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                <ChevronDown size={11} />
+              </button>
             </div>
-          )}
+            {randomFieldsOpen && (
+              <div className="absolute left-0 top-full mt-1 z-50 w-48 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 pt-1 pb-1.5">Random thông số nào</p>
+                {RANDOM_FIELD_OPTIONS.map(opt => (
+                  <label key={opt.key} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+                    <input type="checkbox" checked={randomFields.has(opt.key)}
+                      onChange={e => setRandomFields(prev => {
+                        const n = new Set(prev);
+                        e.target.checked ? n.add(opt.key) : n.delete(opt.key);
+                        return n;
+                      })}
+                      className="rounded accent-blue-600" />
+                    <span className="text-xs text-slate-700 dark:text-slate-200">{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Cài đặt chi tiết */}
+          <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0} title="Cài đặt"
+            className={["flex items-center gap-1.5 text-xs font-medium rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap",
+              detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
+            <SlidersHorizontal size={13} /> {sidebarCollapsed && "Cài đặt"}
+          </button>
         </div>
 
-        {/* Cài đặt chi tiết */}
-        <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0} title="Cài đặt"
-          className={["flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap",
-            detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
-          <SlidersHorizontal size={13} /> {sidebarCollapsed && "Cài đặt"}
-        </button>
-
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
-        {subIdConfig.map((cfg, i) => (
-          <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm để ghim cố định" : "Đã ghim cố định cho mọi bài — bấm để chuyển sang tự động tăng số"}>
-            <input type="text" value={cfg.text}
-              onChange={e => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, text: e.target.value } : c))}
-              placeholder={`Sub_id${i + 1}`}
-              className="w-[72px] rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <button onClick={() => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, auto: !c.auto } : c))}
-              className={["px-1.5 py-1 rounded-md border transition-colors",
-                !cfg.auto ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400"].join(" ")}>
-              {!cfg.auto ? <Pin size={11} /> : <PinOff size={11} />}
-            </button>
-          </div>
-        ))}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
+          {subIdConfig.map((cfg, i) => (
+            <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm để ghim cố định" : "Đã ghim cố định cho mọi bài — bấm để chuyển sang tự động tăng số"}>
+              <input type="text" value={cfg.text}
+                onChange={e => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, text: e.target.value } : c))}
+                placeholder={`Sub_id${i + 1}`}
+                className="w-[72px] rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <button onClick={() => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, auto: !c.auto } : c))}
+                className={["px-1.5 py-1 rounded-md border transition-colors",
+                  !cfg.auto ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400"].join(" ")}>
+                {!cfg.auto ? <Pin size={11} /> : <PinOff size={11} />}
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
           <button onClick={handleBulkSchedule} disabled={bulkRunning || checkedIds.size === 0}
             title="Lưu giờ đăng của các dòng đã chọn — hệ thống sẽ tự đăng đúng giờ đó"
             className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">

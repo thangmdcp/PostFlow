@@ -157,16 +157,16 @@ export function BrandingClient() {
       </div>
 
       <ImageField
-        label="Logo (hiện ở sidebar)"
-        hint="Khuyến nghị: ảnh vuông 512×512px, nền trong suốt (PNG)"
+        label="Logo (hiện ở sidebar khi mở rộng)"
+        hint="Khuyến nghị: ảnh ngang, nền trong suốt (PNG/SVG), ví dụ 480×120px — sẽ giãn hết chiều rộng sidebar"
         value={config.logoUrl}
         onChange={url => patch({ logoUrl: url })}
-        previewClassName="w-14 h-14"
+        previewClassName="w-32 h-14"
       />
 
       <ImageField
-        label="Favicon (icon tab trình duyệt)"
-        hint="Khuyến nghị: ảnh vuông 32×32px hoặc 512×512px"
+        label="Favicon (icon tab trình duyệt — cũng dùng làm logo khi sidebar thu gọn)"
+        hint="Khuyến nghị: ảnh vuông 512×512px, nền trong suốt (PNG)"
         value={config.faviconUrl}
         onChange={url => patch({ faviconUrl: url })}
         previewClassName="w-10 h-10"

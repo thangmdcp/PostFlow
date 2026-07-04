@@ -28,16 +28,19 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
-  const [brand, setBrand] = useState<{ logoUrl?: string; siteName?: string }>({});
+  const [brand, setBrand] = useState<{ logoUrl?: string; faviconUrl?: string; siteName?: string }>({});
 
   useEffect(() => {
     fetch("/api/app-config")
       .then(r => r.json())
-      .then((cfg: Record<string, string>) => setBrand({ logoUrl: cfg.logoUrl, siteName: cfg.siteTitle }))
+      .then((cfg: Record<string, string>) => setBrand({ logoUrl: cfg.logoUrl, faviconUrl: cfg.faviconUrl, siteName: cfg.siteTitle }))
       .catch(() => {});
   }, []);
 
   const displayName = brand.siteName?.split(/[—-]/)[0]?.trim() || "PostFlow";
+  // Collapsed rail is a small square — reuse the favicon (square, 512×512)
+  // there instead of the wide expanded-sidebar logo, which wouldn't fit.
+  const collapsedLogoUrl = brand.faviconUrl || brand.logoUrl;
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -52,16 +55,28 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         collapsed ? "w-16" : "w-60"
       )}
     >
-      {/* Logo */}
+      {/* Logo — collapsed: small square (favicon); expanded: wide logo spanning edge to edge */}
       <div className={cn("flex h-16 items-center transition-all duration-200", collapsed ? "px-3 justify-center" : "px-4")}>
-        {brand.logoUrl
-          // eslint-disable-next-line @next/next/no-img-element
-          ? <img src={brand.logoUrl} alt={displayName} className={cn("object-contain transition-all duration-200", collapsed ? "max-h-8 max-w-8" : "max-h-9 max-w-full")} />
-          : (
-            <div className={cn("flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0", collapsed ? "h-8 w-8" : "h-9 w-9")}>
-              <Zap size={16} strokeWidth={2.5} />
-            </div>
-          )}
+        {collapsed
+          ? (collapsedLogoUrl
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={collapsedLogoUrl} alt={displayName} className="h-8 w-8 object-contain" />
+              : (
+                <div className="flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0 h-8 w-8">
+                  <Zap size={16} strokeWidth={2.5} />
+                </div>
+              ))
+          : (brand.logoUrl
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={brand.logoUrl} alt={displayName} className="w-full h-auto max-h-11 object-contain" />
+              : (
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0 h-9 w-9">
+                    <Zap size={16} strokeWidth={2.5} />
+                  </div>
+                  <span className="text-[15px] font-bold tracking-tight text-slate-900 dark:text-white truncate">{displayName}</span>
+                </div>
+              ))}
       </div>
 
       {/* Nav */}
