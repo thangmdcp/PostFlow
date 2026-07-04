@@ -146,7 +146,7 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
   const totalDelete = deletePages.size + deleteAds.size;
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="w-full space-y-5">
       {ToastComponent}
       <h1 className="text-xl font-bold">Kết nối Facebook</h1>
 

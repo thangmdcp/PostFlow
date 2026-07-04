@@ -153,16 +153,16 @@ export function ScheduleModeSelector({
           <div className="flex items-center gap-3 flex-wrap gap-y-2">
             <DateTimePicker value={baseTime} onChange={onBaseTimeChange} compact />
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">Cách nhau:</span>
-              <input type="number" min={1} value={stepMinutes} onChange={e => onStepMinutesChange(e.target.value)} className={numInp} />
-              <span className="text-xs text-slate-500">phút</span>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-xs text-slate-500">đến:</span>
               <input type="time" value={endTime} onChange={e => onEndTimeChange(e.target.value)} className={numInp + " w-20"} />
               {endTime && (
                 <button type="button" onClick={() => onEndTimeChange("")} className="text-[10px] text-slate-400 hover:text-red-500">Bỏ</button>
               )}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-xs text-slate-500">Cách nhau:</span>
+              <input type="number" min={1} value={stepMinutes} onChange={e => onStepMinutesChange(e.target.value)} className={numInp} />
+              <span className="text-xs text-slate-500">phút</span>
             </div>
           </div>
           {quickLinks}
@@ -174,15 +174,15 @@ export function ScheduleModeSelector({
           <div className="flex items-center gap-3 flex-wrap gap-y-2">
             <DateTimePicker value={baseTime} onChange={onBaseTimeChange} compact />
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">Số bài/ngày:</span>
-              <input type="number" min={1} max={24} value={postsPerDay} onChange={e => onPostsPerDayChange(e.target.value)} className={numInp} />
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-xs text-slate-500">đến:</span>
               <input type="time" value={endTime} onChange={e => onEndTimeChange(e.target.value)} className={numInp + " w-20"} />
               {endTime && (
                 <button type="button" onClick={() => onEndTimeChange("")} className="text-[10px] text-slate-400 hover:text-red-500">Bỏ</button>
               )}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-xs text-slate-500">Số bài/ngày:</span>
+              <input type="number" min={1} max={24} value={postsPerDay} onChange={e => onPostsPerDayChange(e.target.value)} className={numInp} />
             </div>
           </div>
           {quickLinks}

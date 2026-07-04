@@ -83,9 +83,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <nav className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5" aria-label="Điều hướng chính">
         {/* Main */}
         <div>
-          {!collapsed && (
-            <p className="px-2.5 mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Chính</p>
-          )}
           <ul className="space-y-1" role="list">
             {navLinks.map(({ href, label, icon: Icon }) => (
               <li key={href}>
@@ -110,9 +107,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {/* Settings */}
         <div>
-          {!collapsed && (
-            <p className="px-2.5 mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Cài đặt</p>
-          )}
           <ul className="space-y-1" role="list">
             {settingLinks.map(({ href, label, icon: Icon }) => (
               <li key={href}>
