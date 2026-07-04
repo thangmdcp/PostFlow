@@ -13,7 +13,7 @@ import {
   Columns3, Check, ChevronDown, ChevronLeft, ChevronRight, X, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
-import { loadAdSettings, randomInteger, randomStep, type AdSettings } from "@/lib/adSettings";
+import { randomInteger, randomStep } from "@/lib/adSettings";
 import { PageMultiSelect, PresetPanel, pickRandomPage } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
@@ -23,18 +23,29 @@ import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[] };
 
-function buildDefaultAdConfig(settings: AdSettings, tpl?: CampaignTemplate): BatchAdConfig {
+const EMPTY_AD_CONFIG: BatchAdConfig = {
+  templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
+  ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65", gender: "",
+  budgetMin: "100000", budgetMax: "200000", budgetStep: "10000", adStatus: "PAUSED",
+};
+
+// Same "Cài đặt Ads" server config (/api/app-config, batch* + comment* keys) that
+// BatchImportClient's pre-batch panel and in-batch drawer already read — this
+// drawer used to seed blank/legacy-localStorage defaults instead, which is why
+// the comment settings saved in Cài đặt Ads never showed up here.
+function buildAdConfigFromCfg(cfg: Record<string, string>, tpl?: CampaignTemplate): BatchAdConfig {
   return {
     templateId: tpl?.campaignId ?? "",
     templateName: tpl?.templateName ?? "",
     postType: (tpl?.settings?.postType as "published" | "dark") ?? "published",
     overridePublish: false,
-    runAds: true,
-    ageMinFrom: settings.ageMinFrom, ageMinTo: settings.ageMinTo,
-    ageMaxFrom: settings.ageMaxFrom, ageMaxTo: settings.ageMaxTo,
-    gender: settings.gender,
-    budgetMin: settings.budgetMin, budgetMax: settings.budgetMax, budgetStep: settings.budgetStep,
-    adStatus: settings.adStatus,
+    runAds: cfg.batchRunAds !== undefined ? cfg.batchRunAds === "true" : true,
+    ageMinFrom: cfg.batchAgeMinFrom ?? EMPTY_AD_CONFIG.ageMinFrom, ageMinTo: cfg.batchAgeMinTo ?? EMPTY_AD_CONFIG.ageMinTo,
+    ageMaxFrom: cfg.batchAgeMaxFrom ?? EMPTY_AD_CONFIG.ageMaxFrom, ageMaxTo: cfg.batchAgeMaxTo ?? EMPTY_AD_CONFIG.ageMaxTo,
+    gender: cfg.batchGender ?? EMPTY_AD_CONFIG.gender,
+    budgetMin: cfg.batchBudgetMin ?? EMPTY_AD_CONFIG.budgetMin, budgetMax: cfg.batchBudgetMax ?? EMPTY_AD_CONFIG.budgetMax,
+    budgetStep: cfg.batchBudgetStep ?? EMPTY_AD_CONFIG.budgetStep,
+    adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? EMPTY_AD_CONFIG.adStatus,
   };
 }
 
@@ -125,7 +136,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   );
   const [adsDrawerOpen, setAdsDrawerOpen] = useState(false);
   const [drawerPostIds, setDrawerPostIds] = useState<string[]>([]);
-  const [drawerAdConfig, setDrawerAdConfig] = useState<BatchAdConfig>(() => buildDefaultAdConfig(loadAdSettings()));
+  const [drawerAdConfig, setDrawerAdConfig] = useState<BatchAdConfig>(EMPTY_AD_CONFIG);
   const [drawerAccountRows, setDrawerAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
   const [drawerApplying, setDrawerApplying] = useState(false);
   const [drawerCommentEnabled, setDrawerCommentEnabled] = useState(false);
@@ -133,28 +144,34 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [drawerCommentCaptionAttachImage, setDrawerCommentCaptionAttachImage] = useState(false);
   const [drawerCommentCaptionImageUrls, setDrawerCommentCaptionImageUrls] = useState<string[]>([]);
   const [drawerCommentSharedImageUrls, setDrawerCommentSharedImageUrls] = useState<string[]>([]);
-  const [drawerCommentRandomCount, setDrawerCommentRandomCount] = useState("1");
+  const [drawerCommentRandomCount, setDrawerCommentRandomCount] = useState("0");
   const [drawerCommentEntries, setDrawerCommentEntries] = useState<CommentEntry[]>([]);
 
   async function openAdsDrawer(ids: string[]) {
     setDrawerPostIds(ids);
-    setDrawerAdConfig(buildDefaultAdConfig(loadAdSettings(), templates[0]));
-    setDrawerCommentEnabled(false);
-    setDrawerCommentUseCaption(true);
-    setDrawerCommentCaptionAttachImage(false);
-    setDrawerCommentCaptionImageUrls([]);
-    setDrawerCommentSharedImageUrls([]);
-    setDrawerCommentRandomCount("1");
-    setDrawerCommentEntries([]);
     setAdsDrawerOpen(true);
     try {
-      const [accs, rows] = await Promise.all([
+      const [accs, rows, cfg] = await Promise.all([
         fetch("/api/ad-accounts").then((r) => r.json()).catch(() => []),
         fetch("/api/auto-ads-accounts").then((r) => r.json()).catch(() => []),
+        fetch("/api/app-config").then((r) => r.json()).catch(() => ({})) as Promise<Record<string, string>>,
       ]);
       if (Array.isArray(accs)) setAdAccountsFull(accs);
       if (Array.isArray(rows)) setDrawerAccountRows(rows);
-    } catch { /* keep defaults */ }
+
+      const tpl = templates.find((t) => t.campaignId === cfg.batchTemplateId) ?? templates[0];
+      setDrawerAdConfig(buildAdConfigFromCfg(cfg, tpl));
+
+      setDrawerCommentEnabled(cfg.commentEnabled === "true");
+      setDrawerCommentUseCaption(cfg.commentUseCaption !== undefined ? cfg.commentUseCaption === "true" : true);
+      setDrawerCommentCaptionAttachImage(cfg.commentCaptionAttachImage === "true");
+      try { setDrawerCommentCaptionImageUrls(cfg.commentCaptionImageUrls ? JSON.parse(cfg.commentCaptionImageUrls) : []); } catch { setDrawerCommentCaptionImageUrls([]); }
+      try { setDrawerCommentEntries(cfg.commentCustomEntries ? JSON.parse(cfg.commentCustomEntries) : []); } catch { setDrawerCommentEntries([]); }
+      try { setDrawerCommentSharedImageUrls(cfg.commentSharedImageUrls ? JSON.parse(cfg.commentSharedImageUrls) : []); } catch { setDrawerCommentSharedImageUrls([]); }
+      setDrawerCommentRandomCount(cfg.commentRandomCount ?? "0");
+    } catch {
+      setDrawerAdConfig(buildAdConfigFromCfg({}, templates[0]));
+    }
   }
 
   function patchDrawerAdConfig(patch: Partial<BatchAdConfig>) {
