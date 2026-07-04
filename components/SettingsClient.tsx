@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import type { FbConnection, FbAdAccount } from "@prisma/client";
-import { Link2, SlidersHorizontal, Wrench, Palette } from "lucide-react";
+import type { FbConnection, FbAdAccount, CampaignTemplate } from "@prisma/client";
+import { Link2, SlidersHorizontal, Wrench, Palette, Megaphone } from "lucide-react";
 import { ConnectionsClient } from "@/components/ConnectionsClient";
 import { AdSettingsClient } from "@/components/AdSettingsClient";
 import { SetupClient } from "@/components/SetupClient";
 import { BrandingClient } from "@/components/BrandingClient";
+import { AdsClient } from "@/components/AdsClient";
 
-export type SettingsTab = "connections" | "ads" | "branding" | "setup";
+export type SettingsTab = "connections" | "ads" | "campaigns" | "branding" | "setup";
 
 const TABS: { key: SettingsTab; label: string; href: string; icon: typeof Link2 }[] = [
   { key: "ads", label: "Cài đặt Ads", href: "/settings/ads", icon: SlidersHorizontal },
+  { key: "campaigns", label: "Quảng cáo", href: "/settings/campaigns", icon: Megaphone },
   { key: "connections", label: "Kết nối FB", href: "/settings/connections", icon: Link2 },
   { key: "branding", label: "Giao diện", href: "/settings/branding", icon: Palette },
   { key: "setup", label: "Hệ thống", href: "/settings/setup", icon: Wrench },
@@ -21,9 +23,10 @@ interface SettingsClientProps {
   initialTab: SettingsTab;
   connections: FbConnection[];
   savedAdAccounts: FbAdAccount[];
+  campaignTemplates?: CampaignTemplate[];
 }
 
-export function SettingsClient({ initialTab, connections, savedAdAccounts }: SettingsClientProps) {
+export function SettingsClient({ initialTab, connections, savedAdAccounts, campaignTemplates }: SettingsClientProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [visited, setVisited] = useState<Set<SettingsTab>>(new Set([initialTab]));
 
@@ -59,6 +62,9 @@ export function SettingsClient({ initialTab, connections, savedAdAccounts }: Set
       </div>
       <div className={tab === "ads" ? "" : "hidden"}>
         {visited.has("ads") && <AdSettingsClient />}
+      </div>
+      <div className={tab === "campaigns" ? "" : "hidden"}>
+        {visited.has("campaigns") && <AdsClient adAccounts={savedAdAccounts} templates={campaignTemplates ?? []} />}
       </div>
       <div className={tab === "branding" ? "" : "hidden"}>
         {visited.has("branding") && <BrandingClient />}

@@ -7,21 +7,18 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   PlusCircle,
-  Megaphone,
   Zap,
   Settings,
   ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 
 const navLinks = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/posts/new", label: "Tạo batch", icon: PlusCircle },
-  { href: "/ads", label: "Quảng cáo", icon: Megaphone },
 ];
 
 const settingLinks = [
-  { href: "/settings/connections", label: "Cài đặt", icon: Settings },
+  { href: "/settings/ads", label: "Cài đặt", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -55,49 +52,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         collapsed ? "w-16" : "w-60"
       )}
     >
-      {/* Logo + toggle */}
-      <div className="flex h-16 items-center px-4 justify-between">
-        {!collapsed && (
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0 overflow-hidden">
-              {brand.logoUrl
-                // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={brand.logoUrl} alt={displayName} className="w-full h-full object-cover" />
-                : <Zap size={16} strokeWidth={2.5} />}
+      {/* Logo */}
+      <div className={cn("flex h-16 items-center transition-all duration-200", collapsed ? "px-3 justify-center" : "px-4")}>
+        {brand.logoUrl
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={brand.logoUrl} alt={displayName} className={cn("object-contain transition-all duration-200", collapsed ? "max-h-8 max-w-8" : "max-h-9 max-w-full")} />
+          : (
+            <div className={cn("flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 flex-shrink-0", collapsed ? "h-8 w-8" : "h-9 w-9")}>
+              <Zap size={16} strokeWidth={2.5} />
             </div>
-            <span className="text-[15px] font-bold tracking-tight text-slate-900 dark:text-white truncate">{displayName}</span>
-          </div>
-        )}
-        {collapsed && (
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/20 mx-auto overflow-hidden">
-            {brand.logoUrl
-              // eslint-disable-next-line @next/next/no-img-element
-              ? <img src={brand.logoUrl} alt={displayName} className="w-full h-full object-cover" />
-              : <Zap size={16} strokeWidth={2.5} />}
-          </div>
-        )}
-        <button
-          onClick={onToggle}
-          className={cn(
-            "flex-shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-white transition-colors",
-            collapsed && "hidden"
           )}
-          title={collapsed ? "Mở rộng" : "Thu gọn"}
-        >
-          <ChevronLeft size={16} />
-        </button>
       </div>
-
-      {/* Expand button when collapsed */}
-      {collapsed && (
-        <button
-          onClick={onToggle}
-          className="flex items-center justify-center py-2 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors mx-2 rounded-lg"
-          title="Mở rộng"
-        >
-          <ChevronRight size={16} />
-        </button>
-      )}
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5" aria-label="Điều hướng chính">
@@ -156,12 +121,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
       </nav>
 
-      {/* Footer */}
-      {!collapsed && (
-        <div className="border-t border-slate-200/80 dark:border-slate-800 px-4 py-3">
-          <p className="text-[11px] font-medium text-slate-400 dark:text-slate-500">v1.0.0</p>
-        </div>
-      )}
+      {/* Collapse / expand control */}
+      <button
+        onClick={onToggle}
+        className="mt-auto flex items-center justify-center gap-2 border-t border-slate-200/80 dark:border-slate-800 py-3 text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-white transition-colors duration-200 w-full"
+        title={collapsed ? "Mở rộng" : "Thu gọn"}
+      >
+        <ChevronLeft size={16} className={cn("transition-transform duration-200", collapsed && "rotate-180")} />
+        {!collapsed && <span className="text-xs font-medium">Thu gọn</span>}
+      </button>
     </aside>
   );
 }

@@ -10,15 +10,38 @@ import { formatDate, truncate } from "@/lib/utils";
 import {
   ExternalLink, RefreshCw, Megaphone, PlusCircle,
   Trash2, CheckSquare, Square, Loader2, Clock, CalendarDays,
-  Columns3, Check, ChevronDown, ChevronLeft, ChevronRight,
+  Columns3, Check, ChevronDown, ChevronLeft, ChevronRight, X, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
-import { CreateAdDialog } from "@/components/CreateAdDialog";
-import { loadAdSettings, randomizeFromSettings } from "@/lib/adSettings";
+import { loadAdSettings, randomInteger, randomStep, type AdSettings } from "@/lib/adSettings";
 import { PageMultiSelect, PresetPanel, pickRandomPage } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
+import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
+import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
+import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[] };
+
+function buildDefaultAdConfig(settings: AdSettings, tpl?: CampaignTemplate): BatchAdConfig {
+  return {
+    templateId: tpl?.campaignId ?? "",
+    templateName: tpl?.templateName ?? "",
+    postType: (tpl?.settings?.postType as "published" | "dark") ?? "published",
+    overridePublish: false,
+    runAds: true,
+    ageMinFrom: settings.ageMinFrom, ageMinTo: settings.ageMinTo,
+    ageMaxFrom: settings.ageMaxFrom, ageMaxTo: settings.ageMaxTo,
+    gender: settings.gender,
+    budgetMin: settings.budgetMin, budgetMax: settings.budgetMax, budgetStep: settings.budgetStep,
+    adStatus: settings.adStatus,
+  };
+}
+
+function resolveDrawerImage(attach: boolean, own: string[], shared: string[]): string | undefined {
+  if (!attach) return undefined;
+  const pool = own.length ? own : shared;
+  return pool.length ? pool[Math.floor(Math.random() * pool.length)] : undefined;
+}
 
 interface Props {
   posts: PostWithLinks[];
@@ -77,8 +100,6 @@ const COLS_STORAGE_KEY = "postflow_dashboard_cols_v1";
 export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const router = useRouter();
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [selectedPost, setSelectedPost] = useState<PostWithLinks | null>(null);
-  const [adDialogOpen, setAdDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [localPosts, setLocalPosts] = useState(posts);
   // `posts` only seeds initial state — router.refresh() re-renders this
@@ -93,9 +114,167 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(
     connections[0] ? [connections[0].pageId] : []
   );
-  const [templates, setTemplates] = useState<{ id: string; templateName: string; campaignId: string; settings?: Record<string, unknown> }[]>([]);
+  const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
   const { show, ToastComponent } = useToast();
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Ads drawer (single-post or bulk "Tạo ads", editable before applying) ────
+  const [adAccountsFull, setAdAccountsFull] = useState<{ accountId: string; name: string }[]>(
+    adAccounts.map((a) => ({ accountId: a.accountId, name: a.name }))
+  );
+  const [adsDrawerOpen, setAdsDrawerOpen] = useState(false);
+  const [drawerPostIds, setDrawerPostIds] = useState<string[]>([]);
+  const [drawerAdConfig, setDrawerAdConfig] = useState<BatchAdConfig>(() => buildDefaultAdConfig(loadAdSettings()));
+  const [drawerAccountRows, setDrawerAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
+  const [drawerApplying, setDrawerApplying] = useState(false);
+  const [drawerCommentEnabled, setDrawerCommentEnabled] = useState(false);
+  const [drawerCommentUseCaption, setDrawerCommentUseCaption] = useState(true);
+  const [drawerCommentCaptionAttachImage, setDrawerCommentCaptionAttachImage] = useState(false);
+  const [drawerCommentCaptionImageUrls, setDrawerCommentCaptionImageUrls] = useState<string[]>([]);
+  const [drawerCommentSharedImageUrls, setDrawerCommentSharedImageUrls] = useState<string[]>([]);
+  const [drawerCommentRandomCount, setDrawerCommentRandomCount] = useState("1");
+  const [drawerCommentEntries, setDrawerCommentEntries] = useState<CommentEntry[]>([]);
+
+  async function openAdsDrawer(ids: string[]) {
+    setDrawerPostIds(ids);
+    setDrawerAdConfig(buildDefaultAdConfig(loadAdSettings(), templates[0]));
+    setDrawerCommentEnabled(false);
+    setDrawerCommentUseCaption(true);
+    setDrawerCommentCaptionAttachImage(false);
+    setDrawerCommentCaptionImageUrls([]);
+    setDrawerCommentSharedImageUrls([]);
+    setDrawerCommentRandomCount("1");
+    setDrawerCommentEntries([]);
+    setAdsDrawerOpen(true);
+    try {
+      const [accs, rows] = await Promise.all([
+        fetch("/api/ad-accounts").then((r) => r.json()).catch(() => []),
+        fetch("/api/auto-ads-accounts").then((r) => r.json()).catch(() => []),
+      ]);
+      if (Array.isArray(accs)) setAdAccountsFull(accs);
+      if (Array.isArray(rows)) setDrawerAccountRows(rows);
+    } catch { /* keep defaults */ }
+  }
+
+  function patchDrawerAdConfig(patch: Partial<BatchAdConfig>) {
+    setDrawerAdConfig((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.templateId !== undefined) {
+        const tpl = templates.find((t) => t.campaignId === patch.templateId);
+        if (tpl) { next.templateName = tpl.templateName; next.postType = (tpl.settings?.postType as "published" | "dark") ?? "published"; }
+      }
+      return next;
+    });
+  }
+  function patchDrawerRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
+    setDrawerAccountRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+  function deleteDrawerRow(idx: number) {
+    setDrawerAccountRows((rows) => rows.filter((_, i) => i !== idx));
+  }
+  function addDrawerRow() {
+    const firstFree = adAccountsFull.find((a) => !drawerAccountRows.some((r) => r.accountId === a.accountId));
+    setDrawerAccountRows((rows) => [...rows, {
+      accountId: firstFree?.accountId ?? adAccountsFull[0]?.accountId ?? "",
+      weight: 1, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
+    }]);
+  }
+
+  function resolveDrawerCommentJobs(post: PostWithLinks): { text: string; imageUrl?: string }[] {
+    if (!drawerCommentEnabled) return [];
+    const jobs: { text: string; imageUrl?: string }[] = [];
+    if (drawerCommentUseCaption) {
+      const text = (post.finalCaption ?? "").trim();
+      if (text) jobs.push({ text, imageUrl: resolveDrawerImage(drawerCommentCaptionAttachImage, drawerCommentCaptionImageUrls, drawerCommentSharedImageUrls) });
+    }
+    const active = drawerCommentEntries.filter((e) => e.text.trim());
+    for (const e of active.filter((e) => e.pinned)) {
+      jobs.push({ text: e.text, imageUrl: resolveDrawerImage(e.attachImage, e.imageUrls, drawerCommentSharedImageUrls) });
+    }
+    const unpinned = active.filter((e) => !e.pinned);
+    const total = Math.max(0, Number(drawerCommentRandomCount) || 0);
+    if (unpinned.length && total > jobs.length) {
+      const remaining = total - jobs.length;
+      const textPool = unpinned.map((e) => e.text);
+      const imagePool = unpinned.flatMap((e) => (e.attachImage ? (e.imageUrls.length ? e.imageUrls : drawerCommentSharedImageUrls) : []));
+      for (let i = 0; i < remaining; i++) {
+        jobs.push({
+          text: textPool[Math.floor(Math.random() * textPool.length)],
+          imageUrl: imagePool.length ? imagePool[Math.floor(Math.random() * imagePool.length)] : undefined,
+        });
+      }
+    }
+    return jobs;
+  }
+
+  async function applyAdsDrawer() {
+    const ids = new Set(drawerPostIds);
+    const posts = localPosts.filter((p) => ids.has(p.id));
+    if (posts.length === 0) { setAdsDrawerOpen(false); return; }
+    const missing = posts.filter((p) => p.extractedLinks.some((l) => !l.myUrl));
+    if (missing.length > 0) { show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi áp dụng`, "error"); return; }
+    if (posts.some((p) => p.status === "pending") && selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
+
+    setDrawerApplying(true);
+    let ok = 0, fail = 0;
+    for (const p of posts) {
+      try {
+        const accountId = drawerAccountRows.length ? weightedPickAccount(drawerAccountRows) : adAccountsFull[0]?.accountId;
+        const row = drawerAccountRows.find((r) => r.accountId === accountId);
+        const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
+        const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
+        const budget = randomStep(Number(row?.budgetMin ?? drawerAdConfig.budgetMin), Number(row?.budgetMax ?? drawerAdConfig.budgetMax), Number(row?.budgetStep ?? drawerAdConfig.budgetStep));
+        const comments = resolveDrawerCommentJobs(p);
+
+        if (p.status === "pending") {
+          const pageId = pickRandomPage(selectedPageIds, connections);
+          const res = await fetch(`/api/posts/${p.id}/publish`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pageId,
+              templateId: drawerAdConfig.runAds ? drawerAdConfig.templateId : undefined,
+              ageMinFrom: String(ageMin), ageMinTo: String(ageMin),
+              ageMaxFrom: String(ageMax), ageMaxTo: String(ageMax),
+              gender: drawerAdConfig.gender,
+              budgetMin: String(budget), budgetMax: String(budget), budgetStep: "1",
+              adAccountId: accountId,
+              adStatus: drawerAdConfig.adStatus,
+              comments: comments.length ? comments : undefined,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok) { ok++; setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x))); }
+          else fail++;
+        } else if (p.status === "done") {
+          let stepOk = true;
+          if (drawerAdConfig.runAds) {
+            const res = await fetch("/api/ads/create", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                postId: p.id,
+                templateCampaignId: drawerAdConfig.templateId,
+                adAccountId: accountId,
+                dailyBudget: String(budget), ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus,
+              }),
+            });
+            stepOk = res.ok;
+            if (res.ok) setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, adCampaignId: "created" } : x)));
+          }
+          if (comments.length) {
+            await fetch(`/api/posts/${p.id}/comments`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ comments }),
+            }).catch(() => {});
+          }
+          stepOk ? ok++ : fail++;
+        }
+      } catch { fail++; }
+    }
+    setDrawerApplying(false);
+    show(`Áp dụng: ${ok} thành công${fail > 0 ? `, ${fail} lỗi` : ""}`, ok > 0 ? "success" : "error");
+    setAdsDrawerOpen(false);
+    setCheckedIds(new Set());
+  }
 
   // ── Column widths & visibility ────────────────────────────────────────────
   const defaultWidths = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultWidth])) as Record<ColKey, number>;
@@ -385,114 +564,6 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     setCheckedIds(new Set());
   }
 
-  // ── Bulk ads (auto-publish pending first, then create ads) ───────────────────
-  async function handleBulkAds() {
-    if (!hasSelection || checkedForAds.length === 0 || bulkRunning) return;
-    const firstTemplate = templates[0];
-    if (!firstTemplate) { show("Chưa có campaign template", "error"); return; }
-    if (selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
-    const missing = checkedForAds.filter((p) => p.extractedLinks.some((l) => !l.myUrl));
-    if (missing.length > 0) {
-      show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi đăng`, "error");
-      return;
-    }
-
-    setBulkRunning(true);
-    const settings = loadAdSettings();
-
-    // Step 1: publish pending posts first
-    if (checkedPending.length > 0) {
-      show(`Đang đăng ${checkedPending.length} bài chờ...`, "info");
-      await bulkPublish(checkedPending);
-    }
-
-    // Step 2: create ads for all (done + just-published)
-    const toAds = [
-      ...checkedDone,
-      ...checkedPending, // now published
-    ];
-    let adsOk = 0;
-    let adsFail = 0;
-    for (const p of toAds) {
-      try {
-        const { budget, ageMin, ageMax, gender, adStatus } = randomizeFromSettings(settings);
-        const res = await fetch("/api/ads/create", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            postId: p.id,
-            templateCampaignId: firstTemplate.campaignId,
-            adAccountId: adAccounts[0]?.accountId,
-            dailyBudget: budget, ageMin, ageMax, gender, adStatus,
-          }),
-        });
-        if (res.ok) {
-          adsOk++;
-          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, adCampaignId: "created" } : x));
-        } else adsFail++;
-      } catch { adsFail++; }
-    }
-
-    setBulkRunning(false);
-    show(
-      `Tạo ads: ${adsOk} thành công${adsFail > 0 ? `, ${adsFail} lỗi` : ""}`,
-      adsOk > 0 ? "success" : "error"
-    );
-    setCheckedIds(new Set());
-  }
-
-  // ── Single post: publish then ads ───────────────────────────────────────────
-  const [singleAdsRunningId, setSingleAdsRunningId] = useState<string | null>(null);
-
-  async function publishThenAds(post: PostWithLinks) {
-    if (selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
-    const firstTemplate = templates[0];
-    if (!firstTemplate) { show("Chưa có campaign template", "error"); return; }
-
-    // Guard: all extracted links must have affiliate URL filled
-    const missingAff = post.extractedLinks.filter((l) => !l.myUrl);
-    if (missingAff.length > 0) {
-      show(`Còn ${missingAff.length} link chưa điền link aff — vào batch điền trước khi đăng`, "error");
-      return;
-    }
-
-    setSingleAdsRunningId(post.id);
-    try {
-      // Step 1: publish
-      const pageId = pickRandomPage(selectedPageIds, connections);
-      show("Đang đăng bài...", "info");
-      const pubRes = await fetch(`/api/posts/${post.id}/publish`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId }),
-      });
-      const pubData = await pubRes.json();
-      if (!pubRes.ok) throw new Error(pubData.error ?? "Đăng bài thất bại");
-      setLocalPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, status: "done", fbPostUrl: pubData.fbPostUrl } : p));
-
-      // Step 2: create ads
-      show("Đang tạo ads...", "info");
-      const settings = loadAdSettings();
-      const { budget, ageMin, ageMax, gender, adStatus } = randomizeFromSettings(settings);
-      const adsRes = await fetch("/api/ads/create", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          postId: post.id,
-          templateCampaignId: firstTemplate.campaignId,
-          adAccountId: adAccounts[0]?.accountId,
-          dailyBudget: budget, ageMin, ageMax, gender, adStatus,
-        }),
-      });
-      if (!adsRes.ok) {
-        const d = await adsRes.json();
-        throw new Error(d.error ?? "Tạo ads thất bại");
-      }
-      setLocalPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, adCampaignId: "created" } : p));
-      show("Đã đăng bài và tạo ads thành công", "success");
-    } catch (err: unknown) {
-      show(err instanceof Error ? err.message : "Thất bại", "error");
-    }
-    setSingleAdsRunningId(null);
-  }
-
   const btnBase = "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all";
   const btnActive = (color: string) => `${btnBase} ${color} text-white`;
   const btnDim = `${btnBase} bg-muted text-muted-foreground opacity-50 cursor-not-allowed`;
@@ -655,9 +726,9 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           </button>
 
           {/* Tạo ads */}
-          <button onClick={handleBulkAds} disabled={checkedForAds.length === 0 || bulkRunning}
-            className={`${checkedForAds.length > 0 && !bulkRunning ? btnActive("bg-blue-600 hover:bg-blue-700") : btnDim} shrink-0`}>
-            {bulkRunning ? <Loader2 size={12} className="animate-spin" /> : <Megaphone size={12} />}
+          <button onClick={() => openAdsDrawer(checkedForAds.map((p) => p.id))} disabled={checkedForAds.length === 0}
+            className={`${checkedForAds.length > 0 ? btnActive("bg-blue-600 hover:bg-blue-700") : btnDim} shrink-0`}>
+            <Megaphone size={12} />
             Tạo ads{checkedForAds.length > 0 ? ` (${checkedForAds.length})` : ""}
           </button>
 
@@ -693,6 +764,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
       {/* Table — FB Ads Manager style */}
+      <div className="flex gap-4 items-start">
+      <div className="flex-1 min-w-0">
       {filtered.length === 0 ? (
         <EmptyState title="Chưa có bài nào"
           action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
@@ -856,18 +929,14 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                                   <Megaphone size={10} />Ads ✓
                                 </span>
                               : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
-                                  onClick={() => { setSelectedPost(post); setAdDialogOpen(true); }}>
+                                  onClick={() => openAdsDrawer([post.id])}>
                                   <Megaphone size={11} />Ads
                                 </Button>
                           )}
                           {post.status === "pending" && (
                             <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
-                              disabled={singleAdsRunningId === post.id}
-                              onClick={() => publishThenAds(post)}>
-                              {singleAdsRunningId === post.id
-                                ? <Loader2 size={11} className="animate-spin" />
-                                : <Megaphone size={11} />}
-                              Ads
+                              onClick={() => openAdsDrawer([post.id])}>
+                              <Megaphone size={11} />Ads
                             </Button>
                           )}
                           {post.status === "failed" && (
@@ -890,19 +959,40 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           </table>
         </div>
       )}
+      </div>
 
-      {/* Single post ad dialog */}
-      {selectedPost && (
-        <CreateAdDialog
-          open={adDialogOpen}
-          onClose={() => setAdDialogOpen(false)}
-          post={selectedPost}
-          connections={connections}
-          adAccounts={adAccounts}
-          onSuccess={(msg) => show(msg, "success")}
-          onError={(msg) => show(msg, "error")}
-        />
+      {/* Ads drawer — single post or bulk selection, editable before applying */}
+      {adsDrawerOpen && (
+        <div className="w-[420px] shrink-0 sticky top-4 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm p-4 space-y-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-slate-500">Áp dụng cho {drawerPostIds.length} bài</p>
+            <button onClick={() => setAdsDrawerOpen(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+              <X size={14} />
+            </button>
+          </div>
+
+          <AdsConfigPanel
+            adConfig={drawerAdConfig} templates={templates} adAccounts={adAccountsFull} accountRows={drawerAccountRows}
+            onPatch={patchDrawerAdConfig} onPatchRow={patchDrawerRow} onDeleteRow={deleteDrawerRow} onAddRow={addDrawerRow}
+          />
+
+          <CommentSettingsPanel
+            enabled={drawerCommentEnabled} onEnabledChange={setDrawerCommentEnabled}
+            useCaption={drawerCommentUseCaption} onUseCaptionChange={setDrawerCommentUseCaption}
+            captionAttachImage={drawerCommentCaptionAttachImage} onCaptionAttachImageChange={setDrawerCommentCaptionAttachImage}
+            captionImageUrls={drawerCommentCaptionImageUrls} onCaptionImageUrlsChange={setDrawerCommentCaptionImageUrls}
+            sharedImageUrls={drawerCommentSharedImageUrls} onSharedImageUrlsChange={setDrawerCommentSharedImageUrls}
+            randomCount={drawerCommentRandomCount} onRandomCountChange={setDrawerCommentRandomCount}
+            entries={drawerCommentEntries} onEntriesChange={setDrawerCommentEntries}
+          />
+
+          <button onClick={applyAdsDrawer} disabled={drawerApplying}
+            className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm font-semibold transition-colors shadow-sm disabled:opacity-50">
+            {drawerApplying ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />} Áp dụng
+          </button>
+        </div>
       )}
+      </div>
     </div>
   );
 }

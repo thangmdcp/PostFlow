@@ -133,7 +133,7 @@ export function BrandingClient() {
   }
 
   return (
-    <div className="max-w-xl space-y-5">
+    <div className="max-w-2xl space-y-5">
       {ToastComponent}
       <div>
         <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Thương hiệu</h2>

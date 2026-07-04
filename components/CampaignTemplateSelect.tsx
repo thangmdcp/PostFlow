@@ -31,7 +31,7 @@ export function CampaignTemplateSelect({
       <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Template</p>
       {templates.length === 0 ? (
         <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 border border-amber-200">
-          Chưa có template — vào <a href="/ads" className="underline">Quảng cáo</a> để tạo.
+          Chưa có template — vào <a href="/settings/campaigns" className="underline">Cài đặt → Quảng cáo</a> để tạo.
         </p>
       ) : (
         <select value={value} onChange={e => onChange(e.target.value)}

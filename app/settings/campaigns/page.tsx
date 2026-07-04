@@ -4,7 +4,7 @@ import type { FbConnection, FbAdAccount, CampaignTemplate } from "@prisma/client
 
 export const dynamic = "force-dynamic";
 
-export default async function BrandingSettingsPage() {
+export default async function CampaignsSettingsPage() {
   let connections: FbConnection[] = [];
   let adAccounts: FbAdAccount[] = [];
   let campaignTemplates: CampaignTemplate[] = [];
@@ -16,5 +16,5 @@ export default async function BrandingSettingsPage() {
     ]);
   } catch { /* DB not set up yet — tabs still render, Kết nối FB tab will show empty state */ }
 
-  return <SettingsClient initialTab="branding" connections={connections} savedAdAccounts={adAccounts} campaignTemplates={campaignTemplates} />;
+  return <SettingsClient initialTab="campaigns" connections={connections} savedAdAccounts={adAccounts} campaignTemplates={campaignTemplates} />;
 }

@@ -17,32 +17,14 @@ import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
 import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import { ScheduleModeSelector, type ScheduleMode } from "@/components/ScheduleModeSelector";
-import { AdParametersForm } from "@/components/AdParametersForm";
-import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
 import { AutoAdsAccountEditor, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
+import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
-
-interface CampaignTemplate { id: string; templateName: string; campaignId: string; settings?: Record<string, unknown>; }
-
-interface BatchAdConfig {
-  templateId: string;
-  templateName: string;
-  postType: "published" | "dark";
-  overridePublish: boolean;
-  runAds: boolean;
-  ageMinFrom: string; ageMinTo: string;
-  ageMaxFrom: string; ageMaxTo: string;
-  gender: string;
-  budgetMin: string; budgetMax: string; budgetStep: string;
-  adStatus: "ACTIVE" | "PAUSED";
-}
-
-interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
 
 type RandomField = "age" | "gender" | "budget" | "page" | "account" | "cta";
 const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
@@ -58,33 +40,12 @@ interface Props { connections: FbConnection[]; initialBatch: BatchData | null; }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function genRowParams(cfg: BatchAdConfig): RowAdParams {
-  const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
-  const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
-  const budget = randomStep(Number(cfg.budgetMin), Number(cfg.budgetMax), Number(cfg.budgetStep));
-  return { ageMin, ageMax, budget, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
-}
-
 // Own images take priority; the shared pool is a fallback only when the
 // item has none of its own (confirmed with user — not merged together).
 function resolveImage(attach: boolean, ownUrls: string[], shared: string[]): string | undefined {
   if (!attach) return undefined;
   const pool = ownUrls.length ? ownUrls : shared;
   return pool.length ? pool[Math.floor(Math.random() * pool.length)] : undefined;
-}
-
-// Simple weighted-random TKQC account pick for the batch preview table (the
-// server still does its own deficit-based round-robin at actual publish time
-// unless this pick is passed through as an explicit override).
-function weightedPickAccount(rows: { accountId: string; weight: number }[]): string {
-  if (rows.length === 0) return "";
-  const total = rows.reduce((s, r) => s + (Number(r.weight) || 1), 0);
-  let r = Math.random() * total;
-  for (const row of rows) {
-    r -= Number(row.weight) || 1;
-    if (r <= 0) return row.accountId;
-  }
-  return rows[rows.length - 1].accountId;
 }
 
 function parseHHMM(t: string): number { const [h, m] = t.split(":").map(Number); return h * 60 + m; }
@@ -638,6 +599,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    setSidebarCollapsed(localStorage.getItem("sidebar_collapsed") === "true");
+    const h = (e: Event) => setSidebarCollapsed((e as CustomEvent<boolean>).detail);
+    window.addEventListener("sidebar-toggle", h);
+    return () => window.removeEventListener("sidebar-toggle", h);
+  }, []);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(defaultScheduleMode);
   const [baseTime, setBaseTime] = useState(() => defaultBaseTime || vn7Now(5));
   const [stepMinutes, setStepMinutes] = useState(defaultStepMinutes);
@@ -1216,12 +1184,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           <button onClick={handleBulkSchedule} disabled={bulkRunning || checkedIds.size === 0}
             title="Lưu giờ đăng của các dòng đã chọn — hệ thống sẽ tự đăng đúng giờ đó"
             className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} Lên lịch
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} {sidebarCollapsed && "Lên lịch"}
           </button>
           <button onClick={handleBulkPublish} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
             title="Đăng ngay lập tức, bỏ qua giờ đã đặt — có chạy ads hay không tuỳ theo cột &quot;Chạy ads&quot; của từng dòng"
             className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
-            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Đăng ngay
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} {sidebarCollapsed && "Đăng ngay"}
           </button>
           <button onClick={handleBulkDelete} disabled={bulkRunning || checkedIds.size === 0} title="Xoá các dòng đã chọn"
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -1849,99 +1817,6 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               : <span className="text-slate-300 text-xs">–</span>
       )}
     </tr>
-  );
-}
-
-// ─── AdsConfigPanel ───────────────────────────────────────────────────────────
-interface AdsConfigPanelProps {
-  adConfig: BatchAdConfig;
-  templates: CampaignTemplate[];
-  adAccounts: { accountId: string; name: string }[];
-  accountRows: AutoAdsAccountRowLike[];
-  onPatch: (patch: Partial<BatchAdConfig>) => void;
-  onPatchRow?: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;
-  onDeleteRow?: (idx: number) => void;
-  onAddRow?: () => void;
-}
-
-function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow }: AdsConfigPanelProps) {
-  const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500";
-  const numInp = inp + " w-16 text-center";
-
-  return (
-    <div className={`${adsPanel} p-4 space-y-3`}>
-      <div className="flex items-center gap-2">
-        <Megaphone size={14} className="text-violet-600 shrink-0" />
-        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt quảng cáo</span>
-      </div>
-
-      {/* Template */}
-      <CampaignTemplateSelect
-        templates={templates} value={adConfig.templateId} onChange={v => onPatch({ templateId: v })}
-        overridePublish={adConfig.overridePublish}
-        onOverridePublishChange={checked => onPatch({ overridePublish: checked })}
-      />
-
-      {/* Run ads toggle */}
-      <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Chạy quảng cáo ngay sau đăng</span>
-          <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-            adConfig.runAds ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
-            {adConfig.runAds ? "Bật" : "Tắt"}
-          </span>
-        </div>
-        <button type="button" onClick={() => onPatch({ runAds: !adConfig.runAds })}
-          className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
-            adConfig.runAds ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
-          <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-            adConfig.runAds ? "translate-x-4" : "translate-x-0"].join(" ")} />
-        </button>
-      </div>
-
-      {/* Trạng thái ads sau khi tạo: Active hay Pause */}
-      {adConfig.runAds && (
-        <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-          <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Trạng thái sau khi tạo</span>
-          <div className="flex items-center rounded-lg border overflow-hidden">
-            <button type="button" onClick={() => onPatch({ adStatus: "PAUSED" })}
-              className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
-                adConfig.adStatus === "PAUSED" ? "bg-slate-700 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
-              Tạm dừng
-            </button>
-            <button type="button" onClick={() => onPatch({ adStatus: "ACTIVE" })}
-              className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
-                adConfig.adStatus === "ACTIVE" ? "bg-emerald-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
-              Chạy ngay
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* TKQC — editable when handlers are provided (batch drawer), summary-only otherwise (pre-batch panel) */}
-      {adConfig.runAds && (
-        onPatchRow && onDeleteRow && onAddRow
-          ? <AutoAdsAccountEditor rows={accountRows} adAccounts={adAccounts} onPatchRow={onPatchRow} onDeleteRow={onDeleteRow} onAddRow={onAddRow} />
-          : <AutoAdsAccountEditor readOnly rows={accountRows} adAccounts={adAccounts} />
-      )}
-
-      {/* Age / Gender / Budget */}
-      {adConfig.runAds && (
-        <div className="space-y-2.5">
-          <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Thông số ads</p>
-          <AdParametersForm
-            accent="blue"
-            ageMinFrom={adConfig.ageMinFrom} ageMinTo={adConfig.ageMinTo}
-            ageMaxFrom={adConfig.ageMaxFrom} ageMaxTo={adConfig.ageMaxTo}
-            onAgeMinFromChange={v => onPatch({ ageMinFrom: v })} onAgeMinToChange={v => onPatch({ ageMinTo: v })}
-            onAgeMaxFromChange={v => onPatch({ ageMaxFrom: v })} onAgeMaxToChange={v => onPatch({ ageMaxTo: v })}
-            gender={adConfig.gender} onGenderChange={v => onPatch({ gender: v })}
-            budgetMin={adConfig.budgetMin} budgetMax={adConfig.budgetMax} budgetStep={adConfig.budgetStep}
-            onBudgetMinChange={v => onPatch({ budgetMin: v })} onBudgetMaxChange={v => onPatch({ budgetMax: v })} onBudgetStepChange={v => onPatch({ budgetStep: v })}
-          />
-        </div>
-      )}
-    </div>
   );
 }
 

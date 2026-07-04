@@ -257,7 +257,7 @@ export function SetupClient() {
   const requiredFilled = FIELDS.filter(f => f.required).every(f => (values[f.key] ?? "").length > 0);
 
   return (
-    <div className="max-w-xl">
+    <div className="max-w-2xl">
       {ToastComponent}
 
       <h1 className="text-xl font-bold mb-1">Cài đặt</h1>

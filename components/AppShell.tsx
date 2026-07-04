@@ -13,8 +13,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   function toggle() {
     setCollapsed((v) => {
-      localStorage.setItem("sidebar_collapsed", String(!v));
-      return !v;
+      const next = !v;
+      localStorage.setItem("sidebar_collapsed", String(next));
+      window.dispatchEvent(new CustomEvent("sidebar-toggle", { detail: next }));
+      return next;
     });
   }
 
