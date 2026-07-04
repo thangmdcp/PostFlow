@@ -70,19 +70,20 @@ export function AdParametersForm({
       </div>
 
       {/* Budget */}
-      <div className="flex items-start gap-1 min-w-0">
-        {budgetLabel && <span className="text-[10px] text-slate-400 shrink-0 w-[60px] pt-2">{budgetLabel}</span>}
-        <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
-          <div>
-            <p className="text-[9px] text-slate-400 mb-0.5 text-center">Min</p>
+      <div className="space-y-0.5">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="shrink-0 w-[60px]" aria-hidden />
+          <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
+            <p className="text-[9px] text-slate-400 text-center">Min</p>
+            <p className="text-[9px] text-slate-400 text-center">Max</p>
+            <p className="text-[9px] text-slate-400 text-center">{budgetStepLabel}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 min-w-0">
+          {budgetLabel && <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">{budgetLabel}</span>}
+          <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
             <input type="number" value={budgetMin} onChange={e => onBudgetMinChange(e.target.value)} className={inp + " w-full text-center"} placeholder="100000" />
-          </div>
-          <div>
-            <p className="text-[9px] text-slate-400 mb-0.5 text-center">Max</p>
             <input type="number" value={budgetMax} onChange={e => onBudgetMaxChange(e.target.value)} className={inp + " w-full text-center"} placeholder="200000" />
-          </div>
-          <div>
-            <p className="text-[9px] text-slate-400 mb-0.5 text-center">{budgetStepLabel}</p>
             <input type="number" value={budgetStep} onChange={e => onBudgetStepChange(e.target.value)} className={inp + " w-full text-center"} placeholder="10000" />
           </div>
         </div>
