@@ -1123,8 +1123,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       {/* ── Thanh thao tác — luôn chiếm trọn chiều rộng, không co lại khi mở panel Cài đặt ── */}
       <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
         <button onClick={onNewBatch} title="Batch mới"
-          className="flex items-center text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0">
-          <PlusCircle size={13} />
+          className="flex items-center gap-1.5 text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0 whitespace-nowrap">
+          <PlusCircle size={13} /> {sidebarCollapsed && "Tạo batch"}
         </button>
 
         {/* Random split-button */}
@@ -1132,8 +1132,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           <div className="flex items-center rounded-lg border bg-white dark:bg-slate-800 overflow-hidden">
             <button onClick={handleRandomize} disabled={checkedIds.size === 0}
               title="Random các thông số đã tích trong danh sách bên cạnh"
-              className="flex items-center px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              <Shuffle size={13} />
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
+              <Shuffle size={13} /> {sidebarCollapsed && "Random"}
             </button>
             <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
               className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -1161,9 +1161,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
         {/* Cài đặt chi tiết */}
         <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0} title="Cài đặt"
-          className={["flex items-center rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed",
+          className={["flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap",
             detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
-          <SlidersHorizontal size={13} />
+          <SlidersHorizontal size={13} /> {sidebarCollapsed && "Cài đặt"}
         </button>
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
@@ -1197,7 +1197,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           </button>
         </div>
 
-        <div className="flex items-center gap-2 ml-auto shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Column toggle */}
           <div className="relative" ref={colPanelRef}>
             <button onClick={() => setColPanelOpen(v => !v)} title="Cột"
