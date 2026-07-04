@@ -10,7 +10,7 @@ export async function GET(
       where: { id: params.id },
       include: {
         posts: {
-          include: { extractedLinks: { orderBy: { order: "asc" } } },
+          include: { extractedLinks: { orderBy: { order: "asc" } }, comments: true },
           orderBy: { order: "asc" },
         },
       },

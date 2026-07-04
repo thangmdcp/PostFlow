@@ -18,7 +18,7 @@ export default async function NewPostPage({ searchParams }: Props) {
         where: { id: searchParams.batchId },
         include: {
           posts: {
-            include: { extractedLinks: { orderBy: { order: "asc" } } },
+            include: { extractedLinks: { orderBy: { order: "asc" } }, comments: true },
             orderBy: { order: "asc" },
           },
         },

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
         },
       },
       include: {
-        posts: { include: { extractedLinks: true }, orderBy: { order: "asc" } },
+        posts: { include: { extractedLinks: true, comments: true }, orderBy: { order: "asc" } },
       },
     });
 

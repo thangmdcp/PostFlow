@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adAgeMin, adAgeMax, adGender, adBudget, commentText, commentImageUrl } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adAgeMin, adAgeMax, adGender, adBudget, comments } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -16,8 +17,7 @@ export async function PATCH(
       adAgeMax?: number;
       adGender?: string;
       adBudget?: string;
-      commentText?: string;
-      commentImageUrl?: string;
+      comments?: { text: string; imageUrl?: string }[];
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id } });
@@ -50,10 +50,10 @@ export async function PATCH(
         ...(adAgeMax !== undefined ? { adAgeMax } : {}),
         ...(adGender !== undefined ? { adGender } : {}),
         ...(adBudget !== undefined ? { adBudget } : {}),
-        ...(commentText ? { commentText } : {}),
-        ...(commentImageUrl ? { commentImageUrl } : {}),
       },
     });
+
+    if (comments) await persistCommentJobs(params.id, comments);
 
     return NextResponse.json(scheduled);
   } catch (err) {

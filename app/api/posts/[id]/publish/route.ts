@@ -4,7 +4,7 @@ import { publishToPage } from "@/lib/facebook";
 import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
-import { scheduleAutoComments } from "@/lib/autoCommentsRunner";
+import { persistCommentJobs, scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 
 // The first ads attempt (1 min after publish) runs via waitUntil, which
 // extends THIS invocation's lifetime — maxDuration must cover the publish
@@ -29,8 +29,7 @@ export async function POST(
       adAccountId?: string;
       ctaHeadline?: string;
       adStatus?: "ACTIVE" | "PAUSED";
-      commentText?: string;
-      commentImageUrl?: string;
+      comments?: { text: string; imageUrl?: string }[];
     };
     const { pageId } = body;
 
@@ -185,8 +184,9 @@ export async function POST(
       });
     }
 
-    if (body.commentText?.trim() && post.commentStatus !== "done") {
-      await scheduleAutoComments({ postId: params.id, fbPostId, accessToken: fbConn.accessToken, text: body.commentText, imageUrl: body.commentImageUrl });
+    if (body.comments?.length) {
+      await persistCommentJobs(params.id, body.comments);
+      await scheduleCommentJobs(params.id, fbPostId, fbConn.accessToken);
     }
 
     return NextResponse.json({ ok: true, fbPostUrl, autoAds: adsWillRun ? { scheduled: true } : null });

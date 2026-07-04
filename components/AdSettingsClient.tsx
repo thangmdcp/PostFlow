@@ -15,6 +15,7 @@ import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 interface CampaignTemplate { id: string; templateName: string; campaignId: string; settings?: { postType?: string } }
 interface AdAccount { id: string; accountId: string; name: string; }
 interface FbConnection { pageId: string; pageName: string; }
+interface CommentEntry { id: string; text: string; attachImage: boolean; imageUrls: string[]; }
 interface AutoAdsAccountRow {
   id: string;            // DB id (empty string = unsaved new row)
   accountId: string;
@@ -64,11 +65,9 @@ export function AdSettingsClient() {
   const [batchEndTime, setBatchEndTime] = useState("");
   const [commentEnabled, setCommentEnabled] = useState(false);
   const [commentUseCaption, setCommentUseCaption] = useState(true);
-  const [commentUseCustom, setCommentUseCustom] = useState(false);
-  const [commentTemplate, setCommentTemplate] = useState("");
-  const [commentAttachImage, setCommentAttachImage] = useState(false);
-  const [commentImageUrls, setCommentImageUrls] = useState<string[]>([]);
-  const [newCommentImageUrl, setNewCommentImageUrl] = useState("");
+  const [commentCaptionAttachImage, setCommentCaptionAttachImage] = useState(false);
+  const [commentCaptionImageUrls, setCommentCaptionImageUrls] = useState<string[]>([]);
+  const [commentCustomEntries, setCommentCustomEntries] = useState<CommentEntry[]>([]);
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatch, setSavedBatch] = useState(false);
 
@@ -153,10 +152,9 @@ export function AdSettingsClient() {
     if (cfg.batchEndTime !== undefined) setBatchEndTime(cfg.batchEndTime);
     if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
     if (cfg.commentUseCaption !== undefined) setCommentUseCaption(cfg.commentUseCaption === "true");
-    if (cfg.commentUseCustom !== undefined) setCommentUseCustom(cfg.commentUseCustom === "true");
-    if (cfg.commentTemplate !== undefined) setCommentTemplate(cfg.commentTemplate);
-    if (cfg.commentAttachImage !== undefined) setCommentAttachImage(cfg.commentAttachImage === "true");
-    if (cfg.commentImageUrls) { try { setCommentImageUrls(JSON.parse(cfg.commentImageUrls)); } catch { /* ignore */ } }
+    if (cfg.commentCaptionAttachImage !== undefined) setCommentCaptionAttachImage(cfg.commentCaptionAttachImage === "true");
+    if (cfg.commentCaptionImageUrls) { try { setCommentCaptionImageUrls(JSON.parse(cfg.commentCaptionImageUrls)); } catch { /* ignore */ } }
+    if (cfg.commentCustomEntries) { try { setCommentCustomEntries(JSON.parse(cfg.commentCustomEntries)); } catch { /* ignore */ } }
   }
 
   if (!settings) return null;
@@ -187,8 +185,10 @@ export function AdSettingsClient() {
           batchDefaultPageIds: JSON.stringify(batchDefaultPageIds),
           batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime, batchEndTime,
           commentEnabled: String(commentEnabled),
-          commentUseCaption: String(commentUseCaption), commentUseCustom: String(commentUseCustom), commentTemplate,
-          commentAttachImage: String(commentAttachImage), commentImageUrls: JSON.stringify(commentImageUrls),
+          commentUseCaption: String(commentUseCaption),
+          commentCaptionAttachImage: String(commentCaptionAttachImage),
+          commentCaptionImageUrls: JSON.stringify(commentCaptionImageUrls),
+          commentCustomEntries: JSON.stringify(commentCustomEntries),
         }),
       });
       const updated = await saveAccountRows();
@@ -257,7 +257,7 @@ export function AdSettingsClient() {
       batchTemplateId, batchRunAds, autoAdsStatus: batchAdStatus,
       batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo, batchGender,
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
-      commentEnabled, commentUseCaption, commentUseCustom, commentTemplate, commentAttachImage, commentImageUrls,
+      commentEnabled, commentUseCaption, commentCaptionAttachImage, commentCaptionImageUrls, commentCustomEntries,
       accountRows: accountRows.map(r => ({
         accountId: r.accountId, weight: r.weight,
         budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
@@ -275,10 +275,9 @@ export function AdSettingsClient() {
     if (d.batchEndTime !== undefined) setBatchEndTime(d.batchEndTime);
     if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
     if (d.commentUseCaption !== undefined) setCommentUseCaption(d.commentUseCaption);
-    if (d.commentUseCustom !== undefined) setCommentUseCustom(d.commentUseCustom);
-    if (d.commentTemplate !== undefined) setCommentTemplate(d.commentTemplate);
-    if (d.commentAttachImage !== undefined) setCommentAttachImage(d.commentAttachImage);
-    if (d.commentImageUrls) setCommentImageUrls(d.commentImageUrls);
+    if (d.commentCaptionAttachImage !== undefined) setCommentCaptionAttachImage(d.commentCaptionAttachImage);
+    if (d.commentCaptionImageUrls) setCommentCaptionImageUrls(d.commentCaptionImageUrls);
+    if (d.commentCustomEntries) setCommentCustomEntries(d.commentCustomEntries);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
     if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
@@ -433,73 +432,58 @@ export function AdSettingsClient() {
 
         {commentEnabled && (
           <>
+            {/* Caption entry — a comment made of the post's own caption */}
             <div className="rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2">
-              <div className="flex flex-col">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nguồn nội dung comment</span>
-                <span className="text-[10px] text-slate-400">Có thể chọn cả 2 — caption sẽ được ghép trước, nội dung tự nhập thêm vào sau</span>
-              </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={commentUseCaption} onChange={e => setCommentUseCaption(e.target.checked)}
                   className="rounded accent-violet-600" />
-                <span className="text-xs text-slate-700 dark:text-slate-200">Dùng caption (sau khi đổi link aff)</span>
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Dùng caption (sau khi đổi link aff)</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={commentUseCustom} onChange={e => setCommentUseCustom(e.target.checked)}
-                  className="rounded accent-violet-600" />
-                <span className="text-xs text-slate-700 dark:text-slate-200">Tự nhập thêm nội dung</span>
-              </label>
+              {commentUseCaption && (
+                <div className="pl-6 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={commentCaptionAttachImage} onChange={e => setCommentCaptionAttachImage(e.target.checked)}
+                      className="rounded accent-violet-600" />
+                    <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh (random 1 ảnh mỗi lần)</span>
+                  </label>
+                  <ImageUrlListEditor urls={commentCaptionImageUrls} onChange={setCommentCaptionImageUrls} />
+                </div>
+              )}
             </div>
 
-            {commentUseCustom && (
-              <div className="space-y-1">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung tự nhập mặc định</span>
-                <input type="text" value={commentTemplate} onChange={e => setCommentTemplate(e.target.value)}
-                  placeholder="Viết thêm nội dung comment — có thể sửa riêng từng bài"
-                  className="w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
-              </div>
-            )}
-
-            <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-              <div className="flex flex-col">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Đính kèm ảnh</span>
-                <span className="text-[10px] text-slate-400">Random 1 ảnh trong danh sách bên dưới cho mỗi comment</span>
-              </div>
-              <button type="button" onClick={() => setCommentAttachImage(v => !v)} disabled={commentImageUrls.length === 0}
-                className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed",
-                  commentAttachImage ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
-                <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                  commentAttachImage ? "translate-x-4" : "translate-x-0"].join(" ")} />
-              </button>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <input type="text" value={newCommentImageUrl} onChange={e => setNewCommentImageUrl(e.target.value)}
-                  placeholder="Dán URL ảnh rồi bấm Thêm"
-                  className="flex-1 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
-                <button type="button" onClick={() => {
-                  const url = newCommentImageUrl.trim();
-                  if (!url) return;
-                  setCommentImageUrls(prev => [...prev, url]);
-                  setNewCommentImageUrl("");
-                }}
-                  className="rounded-lg bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 text-xs font-medium transition-colors shrink-0">
-                  Thêm
+            {/* Custom entries — each one is its own separate comment */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung tự nhập — mỗi mục là 1 comment riêng</span>
+                <button type="button" onClick={() => setCommentCustomEntries(prev => [...prev, { id: Math.random().toString(36).slice(2), text: "", attachImage: false, imageUrls: [] }])}
+                  className="text-xs text-violet-600 hover:text-violet-700 font-medium">
+                  + Thêm nội dung
                 </button>
               </div>
-              {commentImageUrls.length > 0 && (
-                <ul className="space-y-1">
-                  {commentImageUrls.map((url, i) => (
-                    <li key={i} className="flex items-center gap-2 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5">
-                      <span className="flex-1 truncate text-xs text-slate-600 dark:text-slate-300">{url}</span>
-                      <button type="button" onClick={() => setCommentImageUrls(prev => prev.filter((_, ci) => ci !== i))}
-                        className="text-slate-400 hover:text-red-500 shrink-0">
-                        <X size={13} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {commentCustomEntries.map((entry, i) => (
+                <div key={entry.id} className="rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <input type="text" value={entry.text}
+                      onChange={e => setCommentCustomEntries(prev => prev.map((x, xi) => xi === i ? { ...x, text: e.target.value } : x))}
+                      placeholder="Nội dung comment"
+                      className="flex-1 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                    <button type="button" onClick={() => setCommentCustomEntries(prev => prev.filter((_, xi) => xi !== i))}
+                      className="text-slate-400 hover:text-red-500 shrink-0">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={entry.attachImage}
+                      onChange={e => setCommentCustomEntries(prev => prev.map((x, xi) => xi === i ? { ...x, attachImage: e.target.checked } : x))}
+                      className="rounded accent-violet-600" />
+                    <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh (random 1 ảnh mỗi lần)</span>
+                  </label>
+                  {entry.attachImage && (
+                    <ImageUrlListEditor urls={entry.imageUrls}
+                      onChange={urls => setCommentCustomEntries(prev => prev.map((x, xi) => xi === i ? { ...x, imageUrls: urls } : x))} />
+                  )}
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -513,6 +497,41 @@ export function AdSettingsClient() {
           : savedBatch ? <><CheckCircle size={14} /> Đã lưu</>
           : <><Save size={14} /> Lưu cài đặt</>}
       </button>
+    </div>
+  );
+}
+
+function ImageUrlListEditor({ urls, onChange }: { urls: string[]; onChange: (urls: string[]) => void }) {
+  const [newUrl, setNewUrl] = useState("");
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <input type="text" value={newUrl} onChange={e => setNewUrl(e.target.value)}
+          placeholder="Dán URL ảnh rồi bấm Thêm"
+          className="flex-1 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
+        <button type="button" onClick={() => {
+          const url = newUrl.trim();
+          if (!url) return;
+          onChange([...urls, url]);
+          setNewUrl("");
+        }}
+          className="rounded-lg bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 text-xs font-medium transition-colors shrink-0">
+          Thêm
+        </button>
+      </div>
+      {urls.length > 0 && (
+        <ul className="space-y-1">
+          {urls.map((url, i) => (
+            <li key={i} className="flex items-center gap-2 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5">
+              <span className="flex-1 truncate text-xs text-slate-600 dark:text-slate-300">{url}</span>
+              <button type="button" onClick={() => onChange(urls.filter((_, ci) => ci !== i))}
+                className="text-slate-400 hover:text-red-500 shrink-0">
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -7,103 +7,103 @@ import { postComment } from "@/lib/facebook";
 const RETRY_DELAYS_MS = [30_000, 120_000];
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 
-export interface AutoCommentParams {
-  postId: string;
-  fbPostId: string;
-  accessToken: string;
+export interface CommentJob {
   text: string;
   imageUrl?: string;
 }
 
-// Call this right after a post publishes successfully (or from the schedule
-// PATCH's cron pickup). AWAIT it — it only persists the initial "pending"
-// state (a single fast DB write); the actual wait + attempt happens in the
-// background via waitUntil, which this does NOT block on.
-export async function scheduleAutoComments(params: AutoCommentParams): Promise<void> {
-  if (!params.text.trim() || !params.fbPostId) {
-    await prisma.post.update({
-      where: { id: params.postId },
-      data: { commentStatus: "skipped" },
-    }).catch(() => {});
-    return;
-  }
+// Replace any queued (not-yet-started) comment rows for this post with a
+// fresh set — called at schedule/publish-request time, before the post's
+// fbPostId is necessarily known yet. Idempotent: safe to call again if the
+// user re-schedules/re-publishes before anything has actually run.
+export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Promise<void> {
+  await prisma.postComment.deleteMany({ where: { postId, status: null } });
+  if (jobs.length === 0) return;
+  await prisma.postComment.createMany({
+    data: jobs.map((j) => ({ postId, text: j.text, imageUrl: j.imageUrl ?? null })),
+  });
+}
 
-  // Idempotency guard — never comment twice on the same post.
-  const existing = await prisma.post.findUnique({ where: { id: params.postId }, select: { commentStatus: true } });
-  if (existing?.commentStatus === "done") return;
+// Call this once fbPostId is known (right after a post publishes). AWAIT it —
+// it only persists each row's initial "pending" state (fast DB writes); the
+// actual wait + attempt happens in the background via waitUntil per row.
+export async function scheduleCommentJobs(postId: string, fbPostId: string, accessToken: string): Promise<void> {
+  const queued = await prisma.postComment.findMany({ where: { postId, status: null } });
+  if (queued.length === 0) return;
 
   const nextAttemptAt = new Date(Date.now() + RETRY_DELAYS_MS[0]);
-  await prisma.post.update({
-    where: { id: params.postId },
-    data: { commentText: params.text, commentImageUrl: params.imageUrl ?? null, commentStatus: "pending", commentNextAttemptAt: nextAttemptAt, commentAttempt: 0 },
-  }).catch(() => {});
+  await prisma.postComment.updateMany({
+    where: { id: { in: queued.map((c) => c.id) } },
+    data: { status: "pending", nextAttemptAt, attempt: 0 },
+  });
 
-  waitUntil(
-    new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[0])).then(() =>
-      attemptAutoComment(params, 0)
-    )
-  );
+  for (const row of queued) {
+    waitUntil(
+      new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[0])).then(() =>
+        attemptComment(row.id, fbPostId, accessToken, 0)
+      )
+    );
+  }
 }
 
 // Exported so the cron route can also call it directly (for retries beyond
-// the first attempt) without going through scheduleAutoComments' waitUntil.
-export async function attemptAutoComment(params: AutoCommentParams, attemptIndex: number): Promise<void> {
+// the first attempt) without going through scheduleCommentJobs' waitUntil.
+export async function attemptComment(commentRowId: string, fbPostId: string, accessToken: string, attemptIndex: number): Promise<void> {
   const attemptNumber = attemptIndex + 1;
-  await prisma.post.update({
-    where: { id: params.postId },
-    data: { commentStatus: "creating" },
-  }).catch(() => {});
+  const row = await prisma.postComment.update({
+    where: { id: commentRowId },
+    data: { status: "creating" },
+  }).catch(() => null);
+  if (!row) return;
 
   try {
-    const result = await postComment(params.fbPostId, params.accessToken, params.text, params.imageUrl);
-    await prisma.post.update({
-      where: { id: params.postId },
-      data: { commentStatus: "done", commentId: result.id, commentAttempt: attemptNumber, commentNextAttemptAt: null, errorMsg: null },
+    const result = await postComment(fbPostId, accessToken, row.text, row.imageUrl ?? undefined);
+    await prisma.postComment.update({
+      where: { id: commentRowId },
+      data: { status: "done", commentId: result.id, attempt: attemptNumber, nextAttemptAt: null, errorMsg: null },
     });
-    console.log(`[auto-comment] post ${params.postId}: comment ${result.id} posted (attempt ${attemptNumber})`);
+    console.log(`[auto-comment] post ${row.postId}: comment ${result.id} posted (attempt ${attemptNumber})`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-comment failed";
-    console.error(`[auto-comment] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
+    console.error(`[auto-comment] comment row ${commentRowId} attempt ${attemptNumber} failed:`, msg);
 
     if (attemptIndex + 1 < MAX_ATTEMPTS) {
       const delay = RETRY_DELAYS_MS[attemptIndex + 1];
       const nextAttemptAt = new Date(Date.now() + delay);
-      await prisma.post.update({
-        where: { id: params.postId },
-        data: { commentStatus: "pending", commentNextAttemptAt: nextAttemptAt, commentAttempt: attemptNumber, errorMsg: `[comment] ${msg}` },
+      await prisma.postComment.update({
+        where: { id: commentRowId },
+        data: { status: "pending", nextAttemptAt, attempt: attemptNumber, errorMsg: `[comment] ${msg}` },
       }).catch(() => {});
     } else {
-      await prisma.post.update({
-        where: { id: params.postId },
-        data: { commentStatus: "failed", commentAttempt: attemptNumber, commentNextAttemptAt: null, errorMsg: `[comment] ${msg}` },
+      await prisma.postComment.update({
+        where: { id: commentRowId },
+        data: { status: "failed", attempt: attemptNumber, nextAttemptAt: null, errorMsg: `[comment] ${msg}` },
       }).catch(() => {});
     }
   }
 }
 
-// Called from the cron tick for posts whose commentNextAttemptAt has passed,
+// Called from the cron tick for comment rows whose nextAttemptAt has passed,
 // or whose "creating" status has been stuck for a while (invocation died
 // mid-attempt) — mirrors processDueAdRetries.
 export async function processDueCommentRetries(): Promise<void> {
   const now = new Date();
   const stuckSince = new Date(now.getTime() - 3 * 60_000);
-  const due = await prisma.post.findMany({
+  const due = await prisma.postComment.findMany({
     where: {
       OR: [
-        { commentStatus: "pending", commentNextAttemptAt: { lte: now } },
-        { commentStatus: "creating", updatedAt: { lte: stuckSince } },
+        { status: "pending", nextAttemptAt: { lte: now } },
+        { status: "creating", updatedAt: { lte: stuckSince } },
       ],
     },
+    include: { post: true },
   });
 
-  for (const post of due) {
-    if (!post.pageId || !post.fbPostId || !post.commentText) continue;
-    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
+  for (const row of due) {
+    if (!row.post.pageId || !row.post.fbPostId) continue;
+    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: row.post.pageId } });
     if (!fbConn) continue;
 
-    await attemptAutoComment(
-      { postId: post.id, fbPostId: post.fbPostId, accessToken: fbConn.accessToken, text: post.commentText, imageUrl: post.commentImageUrl ?? undefined },
-      post.commentAttempt ?? 0
-    );
+    await attemptComment(row.id, row.post.fbPostId, fbConn.accessToken, row.attempt ?? 0);
   }
 }
