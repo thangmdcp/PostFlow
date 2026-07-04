@@ -735,7 +735,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     batch.posts.forEach((post, postIdx) => {
       const postNumber = postIdx + 1;
       [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-        const subs = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}${postNumber}` : cfg.text);
+        const subs = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}_${postNumber}` : cfg.text);
         rows.push({ competitorUrl: link.competitorUrl, subs });
       });
     });
@@ -776,7 +776,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const pool: { linkId: string; competitorUrl: string; campaignName: string }[] = [];
       batch.posts.forEach((post, postIdx) => {
         const postNumber = postIdx + 1;
-        const campaignName = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}${postNumber}` : cfg.text).join("-");
+        const campaignName = subIdConfig.map(cfg => cfg.auto ? `${cfg.text}_${postNumber}` : cfg.text).join("-");
         [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
           pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName });
         });
@@ -924,9 +924,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               title="Random các thông số đã tích trong danh sách bên cạnh"
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               <Shuffle size={13} /> Random
-              {randomFields.size > 0 && randomFields.size < RANDOM_FIELD_OPTIONS.length && (
-                <span className="rounded-full bg-blue-100 text-blue-700 text-[10px] px-1.5 font-semibold">{randomFields.size}</span>
-              )}
             </button>
             <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
               className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -975,21 +972,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             </button>
           </div>
         ))}
-        <button onClick={handleExport}
-          title="Xuất file Batch Custom Links.xlsx (link gốc + sub_id) để chạy qua công cụ tạo link aff"
-          className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0">
-          <FileDown size={13} /> Xuất file
-        </button>
-        <input ref={importFileRef} type="file" accept=".csv,.xlsx" className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
-        <button onClick={() => importFileRef.current?.click()} disabled={importing}
-          title="Nhập file kết quả (cột 'Liên kết chuyển đổi') để tự điền link aff cho từng bài"
-          className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors shrink-0">
-          {importing ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />} Nhập file
-        </button>
-
-        <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
-
         {checkedIds.size > 0 && (
           <div className="flex items-center gap-2">
             <button onClick={handleBulkSchedule} disabled={bulkRunning}
@@ -1005,26 +987,41 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           </div>
         )}
 
-        {/* Column toggle */}
-        <div className="relative ml-auto" ref={colPanelRef}>
-          <button onClick={() => setColPanelOpen(v => !v)}
-            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-300 transition-colors">
-            <Columns3 size={13} /> Cột <ChevronDown size={11} />
+        <div className="flex items-center gap-2 ml-auto shrink-0">
+          {/* Column toggle */}
+          <div className="relative" ref={colPanelRef}>
+            <button onClick={() => setColPanelOpen(v => !v)}
+              className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-300 transition-colors">
+              <Columns3 size={13} /> Cột <ChevronDown size={11} />
+            </button>
+            {colPanelOpen && (
+              <div className="absolute right-0 top-8 z-50 w-52 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
+                {COLUMN_DEFS.map(col => (
+                  <button key={col.key} onClick={() => {
+                    const next = { ...colVisibleRef.current, [col.key]: !colVisibleRef.current[col.key] };
+                    setColVisible(next); saveColState(colWidthsRef.current, next);
+                  }}
+                    className="flex items-center justify-between w-full rounded-lg px-3 py-1.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                    <span className="text-slate-700 dark:text-slate-200">{col.label}</span>
+                    {colVisible[col.key] ? <Eye size={12} className="text-blue-500" /> : <EyeOff size={12} className="text-slate-300" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button onClick={handleExport}
+            title="Xuất file Batch Custom Links.xlsx (link gốc + sub_id) để chạy qua công cụ tạo link aff"
+            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0">
+            <FileDown size={13} /> Xuất file
           </button>
-          {colPanelOpen && (
-            <div className="absolute right-0 top-8 z-50 w-52 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
-              {COLUMN_DEFS.map(col => (
-                <button key={col.key} onClick={() => {
-                  const next = { ...colVisibleRef.current, [col.key]: !colVisibleRef.current[col.key] };
-                  setColVisible(next); saveColState(colWidthsRef.current, next);
-                }}
-                  className="flex items-center justify-between w-full rounded-lg px-3 py-1.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                  <span className="text-slate-700 dark:text-slate-200">{col.label}</span>
-                  {colVisible[col.key] ? <Eye size={12} className="text-blue-500" /> : <EyeOff size={12} className="text-slate-300" />}
-                </button>
-              ))}
-            </div>
-          )}
+          <input ref={importFileRef} type="file" accept=".csv,.xlsx" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
+          <button onClick={() => importFileRef.current?.click()} disabled={importing}
+            title="Nhập file kết quả (cột 'Liên kết chuyển đổi') để tự điền link aff cho từng bài"
+            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors shrink-0">
+            {importing ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />} Nhập file
+          </button>
         </div>
       </div>
 
@@ -1119,6 +1116,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 adAccounts={adAccounts}
                 colVisible={colVisible}
                 colWidths={colWidths}
+                onCtaHeadlineChange={(postId, value) => setRowAdParams(prev => ({
+                  ...prev,
+                  [postId]: { ...(prev[postId] ?? genRowParams(adConfig)), ctaHeadline: value },
+                }))}
               />
             ))}
           </tbody>
@@ -1145,6 +1146,7 @@ interface PostRowProps {
   adAccounts: { accountId: string; name: string }[];
   colVisible: Record<ColKey, boolean>;
   colWidths: Record<ColKey, number>;
+  onCtaHeadlineChange: (postId: string, value: string) => void;
 }
 
 // Ticks its own 1s interval — isolated so a live countdown doesn't force the
@@ -1237,7 +1239,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   return null;
 }
 
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths }: PostRowProps) {
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -1303,26 +1305,29 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       </td>
 
       {cell("status",
-        status === "fetching"
-          ? <div className="space-y-1"><Skeleton className="h-2.5 w-16 rounded" /><Skeleton className="h-2 w-10 rounded" /></div>
-          : <div className="space-y-1">
-              <StatusBadge status={status} />
-              {status === "failed" && post.errorMsg && (
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
-                  <button onClick={async () => { const r = await fetch(`/api/posts/${post.id}/retry`, { method: "POST" }); if (r.ok) setStatus("ready"); }}
-                    className="shrink-0 text-[9px] text-slate-400 hover:text-blue-600 underline flex items-center gap-0.5">
-                    <RefreshCw size={8} /> Thử lại
-                  </button>
-                </div>
-              )}
-              <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} />
+        <div className="space-y-1">
+          <StatusBadge status={status} />
+          {status === "failed" && post.errorMsg && (
+            <div className="flex items-center gap-1">
+              <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
+              <button onClick={async () => { const r = await fetch(`/api/posts/${post.id}/retry`, { method: "POST" }); if (r.ok) setStatus("ready"); }}
+                className="shrink-0 text-[9px] text-slate-400 hover:text-blue-600 underline flex items-center gap-0.5">
+                <RefreshCw size={8} /> Thử lại
+              </button>
             </div>
+          )}
+          <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} />
+        </div>
       )}
 
       {cell("title",
         status === "fetching"
-          ? <div className="flex items-center gap-2"><Skeleton className="h-9 w-9 rounded shrink-0" /><div className="space-y-1 flex-1"><Skeleton className="h-2 w-24 rounded" /><Skeleton className="h-2 w-16 rounded" /></div></div>
+          ? <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0">
+                <Loader2 size={14} className="animate-spin text-slate-300" />
+              </div>
+              <div className="space-y-1 flex-1"><Skeleton className="h-2 w-24 rounded" /><Skeleton className="h-2 w-16 rounded" /></div>
+            </div>
           : <div className="flex items-center gap-2">
               {post.thumbnailUrl
                 ? (
@@ -1345,7 +1350,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 
       {cell("caption",
         status === "fetching"
-          ? <div className="space-y-1"><Skeleton className="h-2 w-full rounded" /><Skeleton className="h-2 w-3/4 rounded" /></div>
+          ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><div className="space-y-1 flex-1"><Skeleton className="h-2 w-full rounded" /><Skeleton className="h-2 w-3/4 rounded" /></div></div>
           : displayCaption ? (
             <div>
               <p className={["text-xs text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-words", showCaption ? "" : "line-clamp-2"].join(" ")}>
@@ -1362,7 +1367,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 
       {cell("linkAff",
         status === "fetching"
-          ? <Skeleton className="h-6 w-full rounded" />
+          ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><Skeleton className="h-6 flex-1 rounded" /></div>
           : links.length === 0
             ? <span className="text-slate-300 text-xs">Không có link</span>
             : <div className="space-y-1.5">
@@ -1431,8 +1436,14 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {cell("ctaHeadline",
-        adConfig.postType === "dark" && rowAdParams?.ctaHeadline
-          ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{rowAdParams.ctaHeadline}</span>
+        adConfig.postType === "dark" && rowAdParams
+          ? <input
+              type="text"
+              value={rowAdParams.ctaHeadline}
+              onChange={(e) => onCtaHeadlineChange(post.id, e.target.value)}
+              placeholder="Tiêu đề CTA"
+              className="w-full rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           : <span className="text-slate-300 text-xs">–</span>
       )}
     </tr>
