@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -963,15 +963,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
         {subIdConfig.map((cfg, i) => (
-          <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm # để chuyển sang cố định" : "Cố định cho mọi bài — bấm # để chuyển sang tự động tăng số"}>
+          <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm để ghim cố định" : "Đã ghim cố định cho mọi bài — bấm để chuyển sang tự động tăng số"}>
             <input type="text" value={cfg.text}
               onChange={e => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, text: e.target.value } : c))}
               placeholder={`Sub_id${i + 1}`}
               className="w-[72px] rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-2 focus:ring-blue-500" />
             <button onClick={() => setSubIdConfig(prev => prev.map((c, ci) => ci === i ? { ...c, auto: !c.auto } : c))}
-              className={["px-1.5 py-1 rounded-md border text-[10px] font-semibold transition-colors",
-                cfg.auto ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400"].join(" ")}>
-              #
+              className={["px-1.5 py-1 rounded-md border transition-colors",
+                !cfg.auto ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400"].join(" ")}>
+              {!cfg.auto ? <Pin size={11} /> : <PinOff size={11} />}
             </button>
           </div>
         ))}

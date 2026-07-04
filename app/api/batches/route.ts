@@ -24,15 +24,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No valid URLs" }, { status: 400 });
     }
 
-    // Create batch + posts
+    // Create batch + posts — explicit `order` because relying on createdAt
+    // (all rows share the same insert instant) or implicit row order isn't
+    // guaranteed to come back in paste order on every later fetch, which
+    // silently broke position-based matching (Sub_id file export/import,
+    // "postNumber" naming) whenever a query happened to return them
+    // differently than the order the user actually pasted the links in.
     const batch = await prisma.batch.create({
       data: {
         posts: {
-          create: validUrls.map((url) => ({ sourceUrl: url, status: "fetching" })),
+          create: validUrls.map((url, i) => ({ sourceUrl: url, status: "fetching", order: i })),
         },
       },
       include: {
-        posts: { include: { extractedLinks: true } },
+        posts: { include: { extractedLinks: true }, orderBy: { order: "asc" } },
       },
     });
 

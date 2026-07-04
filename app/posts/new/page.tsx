@@ -19,7 +19,7 @@ export default async function NewPostPage({ searchParams }: Props) {
         include: {
           posts: {
             include: { extractedLinks: { orderBy: { order: "asc" } } },
-            orderBy: { createdAt: "asc" },
+            orderBy: { order: "asc" },
           },
         },
       });

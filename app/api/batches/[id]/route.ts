@@ -11,7 +11,7 @@ export async function GET(
       include: {
         posts: {
           include: { extractedLinks: { orderBy: { order: "asc" } } },
-          orderBy: { createdAt: "asc" },
+          orderBy: { order: "asc" },
         },
       },
     });

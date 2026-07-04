@@ -747,8 +747,9 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 const isChecked = checkedIds.has(post.id);
                 const conn = connections.find((c) => c.pageId === post.pageId);
                 const pageName = conn?.pageName ?? post.pageId ?? "—";
-                const genderLabel = (post as PostWithLinks & { adGender?: string }).adGender === "male" ? "Nam"
-                  : (post as PostWithLinks & { adGender?: string }).adGender === "female" ? "Nữ" : "Tất cả";
+                // Gender codes match BatchImportClient's genderMap: "" = Tất cả, "1" = Nam, "2" = Nữ.
+                const rawGender = (post as PostWithLinks & { adGender?: string | null }).adGender;
+                const genderLabel = rawGender === "1" ? "Nam" : rawGender === "2" ? "Nữ" : "Tất cả";
                 const budget = (post as PostWithLinks & { adBudget?: string }).adBudget;
                 const ageMin = (post as PostWithLinks & { adAgeMin?: number }).adAgeMin;
                 const ageMax = (post as PostWithLinks & { adAgeMax?: number }).adAgeMax;
@@ -811,7 +812,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
                     {colVisible.gender && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
-                        {(post as PostWithLinks & { adGender?: string }).adGender
+                        {rawGender != null
                           ? <span className="text-xs text-slate-700 dark:text-slate-300">{genderLabel}</span>
                           : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
                       </td>
