@@ -4,6 +4,7 @@ import { publishToPage } from "@/lib/facebook";
 import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds, processDueAdRetries } from "@/lib/autoAdsRunner";
+import { scheduleAutoComments, processDueCommentRetries } from "@/lib/autoCommentsRunner";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
 // wait (via scheduleAutoAds' waitUntil) for however many just published, and
@@ -133,6 +134,10 @@ export async function GET(req: Request) {
         });
       }
 
+      if (post.commentText?.trim() && fbPostId && post.commentStatus !== "done") {
+        await scheduleAutoComments({ postId: post.id, fbPostId, accessToken: fbConn.accessToken, text: post.commentText });
+      }
+
       results.push({ id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -143,6 +148,7 @@ export async function GET(req: Request) {
 
   // Ads retries (2nd/3rd attempt) that came due since the last tick.
   await processDueAdRetries().catch((err) => console.error("[cron] processDueAdRetries failed:", err));
+  await processDueCommentRetries().catch((err) => console.error("[cron] processDueCommentRetries failed:", err));
 
   return NextResponse.json({ processed: results.length, results });
 }

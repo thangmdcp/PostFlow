@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -41,7 +41,7 @@ interface BatchAdConfig {
   adStatus: "ACTIVE" | "PAUSED";
 }
 
-interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
+interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; commentText: string; }
 
 type RandomField = "age" | "gender" | "budget" | "page" | "account" | "cta";
 const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
@@ -57,11 +57,11 @@ interface Props { connections: FbConnection[]; initialBatch: BatchData | null; }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function genRowParams(cfg: BatchAdConfig): RowAdParams {
+function genRowParams(cfg: BatchAdConfig, commentTemplate = ""): RowAdParams {
   const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
   const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
   const budget = randomStep(Number(cfg.budgetMin), Number(cfg.budgetMax), Number(cfg.budgetStep));
-  return { ageMin, ageMax, budget, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
+  return { ageMin, ageMax, budget, gender: cfg.gender, ctaHeadline: randomCtaPhrase(), commentText: commentTemplate };
 }
 
 // Simple weighted-random TKQC account pick for the batch preview table (the
@@ -185,7 +185,7 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account";
+type ColKey = "status" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
@@ -201,6 +201,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "runAds",      label: "Chạy ads",      defaultWidth: 90,  minWidth: 75,  defaultVisible: true },
   { key: "darkOverride",label: "Đăng trang",   defaultWidth: 100, minWidth: 80,  defaultVisible: true },
   { key: "ctaHeadline", label: "Tiêu đề CTA",   defaultWidth: 150, minWidth: 100, defaultVisible: true },
+  { key: "comment",     label: "Comment",       defaultWidth: 160, minWidth: 100, defaultVisible: true },
 ];
 
 const BATCH_COLS_KEY = "postflow_batch_cols_v1";
@@ -233,10 +234,16 @@ function loadSubIdConfig(): SubIdConfig[] {
   return DEFAULT_SUB_ID_CONFIG;
 }
 
+const LAST_BATCH_KEY = "postflow_last_batch_id";
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export function BatchImportClient({ connections, initialBatch }: Props) {
   const [urlText, setUrlText] = useState("");
-  const [batchId, setBatchId] = useState<string | null>(initialBatch?.id ?? null);
+  const [batchId, setBatchId] = useState<string | null>(() => {
+    if (initialBatch?.id) return initialBatch.id;
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(LAST_BATCH_KEY);
+  });
   const [loading, setLoading] = useState(false);
   const { show, ToastComponent } = useToast();
 
@@ -251,6 +258,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultPostsPerDay, setDefaultPostsPerDay] = useState("3");
   const [defaultBaseTime, setDefaultBaseTime] = useState(() => vn7Now(5));
   const [defaultEndTime, setDefaultEndTime] = useState("");
+  const [commentEnabled, setCommentEnabled] = useState(false);
+  const [commentMode, setCommentMode] = useState<"custom" | "caption">("custom");
+  const [commentTemplate, setCommentTemplate] = useState("");
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
 
@@ -286,6 +296,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       if (cfg.batchPostsPerDay) setDefaultPostsPerDay(cfg.batchPostsPerDay);
       if (cfg.batchBaseTime) setDefaultBaseTime(cfg.batchBaseTime);
       if (cfg.batchEndTime !== undefined) setDefaultEndTime(cfg.batchEndTime);
+      if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
+      if (cfg.commentMode === "custom" || cfg.commentMode === "caption") setCommentMode(cfg.commentMode);
+      if (cfg.commentTemplate !== undefined) setCommentTemplate(cfg.commentTemplate);
     }
 
     // Apply sessionStorage cache instantly
@@ -384,6 +397,19 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       fallbackData: initialBatch ?? undefined,
     }
   );
+
+  // Remember the last viewed batch so navigating away and back (e.g. to
+  // Dashboard) restores it instead of showing a blank compose screen. If the
+  // stored batch id no longer resolves to a real batch (deleted elsewhere),
+  // `fetcher` resolves with an error body instead of throwing — fall back to
+  // a blank compose screen rather than getting stuck on a dead id forever.
+  useEffect(() => {
+    if (batchId) localStorage.setItem(LAST_BATCH_KEY, batchId);
+    else localStorage.removeItem(LAST_BATCH_KEY);
+  }, [batchId]);
+  useEffect(() => {
+    if (batch && !("posts" in batch)) setBatchId(null);
+  }, [batch]);
 
   async function handleFetch() {
     const urls = urlText.trim().split("\n")
@@ -511,6 +537,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       defaultPageIds={defaultPageIds} defaultScheduleMode={defaultScheduleMode}
       defaultStepMinutes={defaultStepMinutes} defaultPostsPerDay={defaultPostsPerDay}
       defaultBaseTime={defaultBaseTime} defaultEndTime={defaultEndTime}
+      commentEnabled={commentEnabled} commentMode={commentMode} commentTemplate={commentTemplate}
       onPatchAdConfig={patchAdConfig}
       onNewBatch={() => setBatchId(null)} onToast={show} ToastComponent={ToastComponent}
       mutateBatch={mutateBatch}
@@ -532,6 +559,9 @@ interface BatchViewProps {
   defaultPostsPerDay: string;
   defaultBaseTime: string;
   defaultEndTime: string;
+  commentEnabled: boolean;
+  commentMode: "custom" | "caption";
+  commentTemplate: string;
   onPatchAdConfig: (patch: Partial<BatchAdConfig>) => void;
   onNewBatch: () => void;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
@@ -539,7 +569,7 @@ interface BatchViewProps {
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, commentEnabled, commentMode, commentTemplate, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -567,6 +597,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   // ── Sub_id export/import (Batch Custom Links) ───────────────────────────────
   const [subIdConfig, setSubIdConfig] = useState<SubIdConfig[]>(() => loadSubIdConfig());
   const [importing, setImporting] = useState(false);
+  const [justImportedLinkIds, setJustImportedLinkIds] = useState<Set<string>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
   useEffect(() => { localStorage.setItem(SUB_ID_CONFIG_KEY, JSON.stringify(subIdConfig)); }, [subIdConfig]);
 
@@ -642,12 +673,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const applyDefaultsToRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     const times = computeScheduleTimes(ids, scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime);
-    setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = genRowParams(adConfig); }); return n; });
+    setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = genRowParams(adConfig, commentTemplate); }); return n; });
     setRowPageId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = pickPage(); }); return n; });
     setRowAccountId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = bulkAccountId || weightedPickAccount(accountRows); }); return n; });
     setRowRunAds(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = adConfig.runAds; }); return n; });
     setPostTimes(prev => ({ ...prev, ...times }));
-  }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, accountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
+  }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, accountRows, selectedPageIds, connections, bulkAccountId, commentTemplate]); // eslint-disable-line
 
   const readyPosts = batch.posts.filter((p) => p.status === "ready" || p.status === "failed");
   const readyIds = readyPosts.map(p => p.id);
@@ -697,14 +728,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       setRowAdParams(prev => {
         const n = { ...prev };
         targets.forEach(id => {
-          const cur = n[id] ?? genRowParams(adConfig);
-          const fresh = genRowParams(adConfig);
+          const cur = n[id] ?? genRowParams(adConfig, commentTemplate);
+          const fresh = genRowParams(adConfig, commentTemplate);
           n[id] = {
             ageMin: randomFields.has("age") ? fresh.ageMin : cur.ageMin,
             ageMax: randomFields.has("age") ? fresh.ageMax : cur.ageMax,
             gender: randomFields.has("gender") ? fresh.gender : cur.gender,
             budget: randomFields.has("budget") ? fresh.budget : cur.budget,
             ctaHeadline: randomFields.has("cta") ? fresh.ctaHeadline : cur.ctaHeadline,
+            commentText: cur.commentText,
           };
         });
         return n;
@@ -797,6 +829,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     XLSX.writeFile(wb, "Batch Custom Links.xlsx");
     onToast(`Đã xuất ${rows.length} link`, "success");
+    // Preview where the counter left off — only auto/unpinned fields track a
+    // running number, pinned fields are meant to stay exactly as typed.
+    const lastPostNumber = batch.posts.length;
+    setSubIdConfig(prev => prev.map(cfg => cfg.auto ? { ...cfg, text: formatSubId(cfg, lastPostNumber) } : cfg));
   }
 
   async function handleImportFile(file: File) {
@@ -849,12 +885,25 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       ));
       const ok = results.filter(Boolean).length;
       await mutateBatch();
+      // Flash the same green "just saved" state the manual save path uses,
+      // so importing a file looks identical to saving each link by hand.
+      const succeededIds = toApply.filter((_, i) => results[i]).map(t => t.linkId);
+      if (succeededIds.length) setJustImportedLinkIds(new Set(succeededIds));
       onToast(`Đã import ${ok}/${rows.length} link${skipped ? ` (${skipped} không khớp/lỗi)` : ""}`, ok > 0 ? "success" : "error");
     } catch {
       onToast("Không đọc được file — kiểm tra lại định dạng", "error");
     } finally {
       setImporting(false);
     }
+  }
+
+  function resolveCommentText(id: string): string {
+    if (!commentEnabled) return "";
+    if (commentMode === "caption") {
+      const p = batch.posts.find(x => x.id === id);
+      return p?.finalCaption ?? p?.rawCaption ?? "";
+    }
+    return rowAdParams[id]?.commentText ?? commentTemplate;
   }
 
   async function handleBulkSchedule() {
@@ -881,6 +930,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ...(runAdsForRow && rp ? {
             adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
           } : {}),
+          ...(resolveCommentText(id).trim() ? { commentText: resolveCommentText(id) } : {}),
         }),
       });
       if (res.ok) ok++;
@@ -903,7 +953,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     // multiplies the wait by however many posts are selected.
     const outcomes = await Promise.all(targets.map(async (id) => {
       const pageId = rowPageId[id] || pickPage();
-      const rp = rowAdParams[id] ?? genRowParams(adConfig);
+      const rp = rowAdParams[id] ?? genRowParams(adConfig, commentTemplate);
       const rowOvr = rowOverrides[id] ?? adConfig.overridePublish;
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
       const res = await fetch(`/api/posts/${id}/publish`, {
@@ -921,6 +971,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             adStatus: adConfig.adStatus,
             ...(rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
           } : {}),
+          ...(resolveCommentText(id).trim() ? { commentText: resolveCommentText(id) } : {}),
         }),
       }).catch(() => null);
       if (!res?.ok) return { ok: false, adsScheduled: false };
@@ -938,9 +989,25 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setCheckedIds(new Set());
   }
 
+  async function handleBulkDelete() {
+    if (checkedIds.size === 0) return;
+    if (!confirm(`Xoá ${checkedIds.size} bài đã chọn?`)) return;
+    setBulkRunning(true);
+    const ids = [...checkedIds];
+    await Promise.all(ids.map(id => fetch(`/api/posts/${id}`, { method: "DELETE" }).catch(() => {})));
+    setBulkRunning(false);
+    setCheckedIds(new Set());
+    onToast(`Đã xoá ${ids.length} bài`, "success");
+    // Deleting every row in the batch starts fresh rather than leaving an
+    // empty batch behind for the "remember last batch" feature to restore.
+    if (ids.length >= batch.posts.length) { onNewBatch(); return; }
+    await mutateBatch();
+  }
+
   const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500";
   const numInp = inp + " w-16 text-center";
-  const visibleCols = COLUMN_DEFS.filter(c => colVisible[c.key]);
+  const activeColumnDefs = COLUMN_DEFS.filter(c => c.key !== "comment" || commentEnabled);
+  const visibleCols = activeColumnDefs.filter(c => colVisible[c.key]);
   const tableWidth = 40 + visibleCols.reduce((s, c) => s + colWidths[c.key], 0);
 
   return (
@@ -949,9 +1016,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
       {/* ── Thanh thao tác — tất cả nút chức năng trên cùng 1 hàng ── */}
       <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
-        <button onClick={onNewBatch}
-          className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600 border rounded-lg px-3 py-1.5 hover:border-blue-300 transition-colors shrink-0">
-          <PlusCircle size={13} /> Batch mới
+        <button onClick={onNewBatch} title="Batch mới"
+          className="flex items-center text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0">
+          <PlusCircle size={13} />
         </button>
 
         <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
@@ -961,8 +1028,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           <div className="flex items-center rounded-lg border bg-white dark:bg-slate-800 overflow-hidden">
             <button onClick={handleRandomize} disabled={checkedIds.size === 0}
               title="Random các thông số đã tích trong danh sách bên cạnh"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              <Shuffle size={13} /> Random
+              className="flex items-center px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              <Shuffle size={13} />
             </button>
             <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
               className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -989,10 +1056,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
 
         {/* Cài đặt chi tiết */}
-        <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0}
-          className={["flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed",
+        <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0} title="Cài đặt"
+          className={["flex items-center rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed",
             detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
-          <SlidersHorizontal size={13} /> Cài đặt
+          <SlidersHorizontal size={13} />
         </button>
 
         <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 shrink-0" />
@@ -1015,13 +1082,17 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           <div className="flex items-center gap-2">
             <button onClick={handleBulkSchedule} disabled={bulkRunning}
               title="Lưu giờ đăng của các dòng đã chọn — hệ thống sẽ tự đăng đúng giờ đó"
-              className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-50 transition-colors">
-              {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} Lên lịch
+              className="flex items-center rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 disabled:opacity-50 transition-colors">
+              {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />}
             </button>
             <button onClick={handleBulkPublish} disabled={bulkRunning || !adConfig.templateId}
               title="Đăng ngay lập tức, bỏ qua giờ đã đặt — có chạy ads hay không tuỳ theo cột &quot;Chạy ads&quot; của từng dòng"
-              className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-3 py-1.5 text-xs font-semibold disabled:opacity-50 transition-colors shadow-sm">
-              {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Đăng ngay
+              className="flex items-center rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-2.5 py-1.5 disabled:opacity-50 transition-colors shadow-sm">
+              {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+            </button>
+            <button onClick={handleBulkDelete} disabled={bulkRunning} title="Xoá các dòng đã chọn"
+              className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-50 transition-colors">
+              {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
             </button>
           </div>
         )}
@@ -1029,13 +1100,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         <div className="flex items-center gap-2 ml-auto shrink-0">
           {/* Column toggle */}
           <div className="relative" ref={colPanelRef}>
-            <button onClick={() => setColPanelOpen(v => !v)}
-              className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-300 transition-colors">
-              <Columns3 size={13} /> Cột <ChevronDown size={11} />
+            <button onClick={() => setColPanelOpen(v => !v)} title="Cột"
+              className="flex items-center gap-1 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-600 hover:border-blue-300 transition-colors">
+              <Columns3 size={13} /> <ChevronDown size={11} />
             </button>
             {colPanelOpen && (
               <div className="absolute right-0 top-8 z-50 w-52 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
-                {COLUMN_DEFS.map(col => (
+                {activeColumnDefs.map(col => (
                   <button key={col.key} onClick={() => {
                     const next = { ...colVisibleRef.current, [col.key]: !colVisibleRef.current[col.key] };
                     setColVisible(next); saveColState(colWidthsRef.current, next);
@@ -1051,15 +1122,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
           <button onClick={handleExport}
             title="Xuất file Batch Custom Links.xlsx (link gốc + sub_id) để chạy qua công cụ tạo link aff"
-            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0">
-            <FileDown size={13} /> Xuất file
+            className="flex items-center rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0">
+            <FileDown size={13} />
           </button>
           <input ref={importFileRef} type="file" accept=".csv,.xlsx" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
           <button onClick={() => importFileRef.current?.click()} disabled={importing}
             title="Nhập file kết quả (cột 'Liên kết chuyển đổi') để tự điền link aff cho từng bài"
-            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors shrink-0">
-            {importing ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />} Nhập file
+            className="flex items-center rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors shrink-0">
+            {importing ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />}
           </button>
         </div>
       </div>
@@ -1158,7 +1229,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 colWidths={colWidths}
                 onCtaHeadlineChange={(postId, value) => setRowAdParams(prev => ({
                   ...prev,
-                  [postId]: { ...(prev[postId] ?? genRowParams(adConfig)), ctaHeadline: value },
+                  [postId]: { ...(prev[postId] ?? genRowParams(adConfig, commentTemplate)), ctaHeadline: value },
+                }))}
+                justImportedLinkIds={justImportedLinkIds}
+                commentEnabled={commentEnabled}
+                commentMode={commentMode}
+                onCommentTextChange={(postId, value) => setRowAdParams(prev => ({
+                  ...prev,
+                  [postId]: { ...(prev[postId] ?? genRowParams(adConfig, commentTemplate)), commentText: value },
                 }))}
               />
             ))}
@@ -1187,6 +1265,10 @@ interface PostRowProps {
   colVisible: Record<ColKey, boolean>;
   colWidths: Record<ColKey, number>;
   onCtaHeadlineChange: (postId: string, value: string) => void;
+  justImportedLinkIds: Set<string>;
+  commentEnabled: boolean;
+  commentMode: "custom" | "caption";
+  onCommentTextChange: (postId: string, value: string) => void;
 }
 
 // Ticks its own 1s interval — isolated so a live countdown doesn't force the
@@ -1279,7 +1361,83 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   return null;
 }
 
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange }: PostRowProps) {
+// Same shape/states as AdStatusBadge, just for the comment pipeline.
+function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, errorMsg }: {
+  commentStatus: string | null | undefined;
+  commentNextAttemptAt: Date | string | null | undefined;
+  commentAttempt: number | null | undefined;
+  commentText: string | null | undefined;
+  errorMsg: string | null | undefined;
+}) {
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (commentStatus !== "pending" || !commentNextAttemptAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [commentStatus, commentNextAttemptAt]);
+
+  if (!commentStatus || commentStatus === "skipped") return null;
+
+  if (commentStatus === "creating") {
+    return (
+      <div className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 whitespace-nowrap">
+        <Loader2 size={8} className="animate-spin shrink-0" /> Đang bình luận
+      </div>
+    );
+  }
+
+  if (commentStatus === "done") {
+    return (
+      <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700" title={commentText ?? undefined}>
+        <CheckCircle2 size={10} className="shrink-0" />
+        <span className="line-clamp-2">{commentText}</span>
+      </div>
+    );
+  }
+
+  if (commentStatus === "failed") {
+    return (
+      <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
+        title={errorMsg ?? undefined}>
+        <span className="truncate">Lỗi bình luận (lần {commentAttempt ?? 0})</span>
+      </div>
+    );
+  }
+
+  if (commentStatus === "pending" && commentNextAttemptAt) {
+    if (now === null) {
+      return (
+        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
+          <Clock size={8} className="shrink-0" /> Chờ bình luận
+        </div>
+      );
+    }
+    const remainingMs = new Date(commentNextAttemptAt).getTime() - now;
+    if (remainingMs <= 0) {
+      return (
+        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
+          <Loader2 size={8} className="animate-spin shrink-0" /> Sắp bình luận
+        </div>
+      );
+    }
+    const totalSec = Math.ceil(remainingMs / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return (
+      <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
+        title="Thời gian còn lại tới lần bình luận tiếp theo">
+        <Clock size={8} className="shrink-0" />
+        <span className="tabular-nums">{m}:{String(s).padStart(2, "0")}</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentMode, onCommentTextChange }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -1289,6 +1447,16 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 
   useEffect(() => { setStatus(post.status); }, [post.status]);
   useEffect(() => { setLinks(post.extractedLinks); }, [post.extractedLinks]);
+
+  // File-import parity: flash the same green "just saved" state the manual
+  // save path uses, so imported links look identical to a manual save.
+  useEffect(() => {
+    const mine = post.extractedLinks.map(l => l.id).filter(id => justImportedLinkIds.has(id));
+    if (mine.length === 0) return;
+    setSaved(s => { const n = { ...s }; mine.forEach(id => { n[id] = true; }); return n; });
+    const t = setTimeout(() => setSaved(s => { const n = { ...s }; mine.forEach(id => { n[id] = false; }); return n; }), 2000);
+    return () => clearTimeout(t);
+  }, [justImportedLinkIds]); // eslint-disable-line
 
   async function saveLink(linkId: string, myUrl: string) {
     if (!myUrl.startsWith("http")) return;
@@ -1485,6 +1653,25 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               className="w-full rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           : <span className="text-slate-300 text-xs">–</span>
+      )}
+      {commentEnabled && cell("comment",
+        post.commentStatus
+          ? <CommentStatusBadge
+              commentStatus={post.commentStatus}
+              commentNextAttemptAt={post.commentNextAttemptAt}
+              commentAttempt={post.commentAttempt}
+              commentText={post.commentText}
+              errorMsg={post.errorMsg}
+            />
+          : commentMode === "caption"
+            ? <span className="text-xs text-slate-500 line-clamp-2">{displayCaption || "–"}</span>
+            : <input
+                type="text"
+                value={rowAdParams?.commentText ?? ""}
+                onChange={(e) => onCommentTextChange(post.id, e.target.value)}
+                placeholder="Nội dung comment"
+                className="w-full rounded-md border bg-white dark:bg-slate-800 px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
       )}
     </tr>
   );

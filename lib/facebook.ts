@@ -91,6 +91,17 @@ export async function publishToPage(
   return json;
 }
 
+export async function postComment(objectId: string, accessToken: string, message: string): Promise<{ id: string }> {
+  const res = await fetch(`${FB_API}/${objectId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, access_token: accessToken }),
+  });
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message);
+  return json;
+}
+
 export async function exchangeForLongLivedToken(
   shortToken: string
 ): Promise<string> {

@@ -46,6 +46,11 @@ model Post {
   adPublishStatus String?
   adNextAttemptAt DateTime?
   adAttempt      Int?            @default(0)
+  commentText          String?
+  commentStatus        String?
+  commentNextAttemptAt DateTime?
+  commentAttempt       Int?      @default(0)
+  commentId            String?
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

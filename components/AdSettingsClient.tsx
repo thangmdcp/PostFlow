@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  Save, CheckCircle, Loader2, Megaphone,
+  Save, CheckCircle, Loader2, Megaphone, MessageCircle,
 } from "lucide-react";
 import { loadAdSettings, saveAdSettings, type AdSettings } from "@/lib/adSettings";
 import { ScheduleModeSelector } from "@/components/ScheduleModeSelector";
@@ -62,6 +62,9 @@ export function AdSettingsClient() {
   const [batchPostsPerDay, setBatchPostsPerDay] = useState("3");
   const [batchBaseTime, setBatchBaseTime] = useState(() => vn7Now());
   const [batchEndTime, setBatchEndTime] = useState("");
+  const [commentEnabled, setCommentEnabled] = useState(false);
+  const [commentMode, setCommentMode] = useState<"custom" | "caption">("custom");
+  const [commentTemplate, setCommentTemplate] = useState("");
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatch, setSavedBatch] = useState(false);
 
@@ -144,6 +147,9 @@ export function AdSettingsClient() {
     if (cfg.batchPostsPerDay) setBatchPostsPerDay(cfg.batchPostsPerDay);
     if (cfg.batchBaseTime) setBatchBaseTime(cfg.batchBaseTime);
     if (cfg.batchEndTime !== undefined) setBatchEndTime(cfg.batchEndTime);
+    if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
+    if (cfg.commentMode === "custom" || cfg.commentMode === "caption") setCommentMode(cfg.commentMode);
+    if (cfg.commentTemplate !== undefined) setCommentTemplate(cfg.commentTemplate);
   }
 
   if (!settings) return null;
@@ -173,6 +179,7 @@ export function AdSettingsClient() {
           autoAdsStatus: batchAdStatus,
           batchDefaultPageIds: JSON.stringify(batchDefaultPageIds),
           batchScheduleMode, batchStepMinutes, batchPostsPerDay, batchBaseTime, batchEndTime,
+          commentEnabled: String(commentEnabled), commentMode, commentTemplate,
         }),
       });
       const updated = await saveAccountRows();
@@ -241,6 +248,7 @@ export function AdSettingsClient() {
       batchTemplateId, batchRunAds, autoAdsStatus: batchAdStatus,
       batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo, batchGender,
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
+      commentEnabled, commentMode, commentTemplate,
       accountRows: accountRows.map(r => ({
         accountId: r.accountId, weight: r.weight,
         budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
@@ -256,6 +264,9 @@ export function AdSettingsClient() {
     if (d.batchPostsPerDay) setBatchPostsPerDay(d.batchPostsPerDay);
     if (d.batchBaseTime) setBatchBaseTime(d.batchBaseTime);
     if (d.batchEndTime !== undefined) setBatchEndTime(d.batchEndTime);
+    if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
+    if (d.commentMode) setCommentMode(d.commentMode);
+    if (d.commentTemplate !== undefined) setCommentTemplate(d.commentTemplate);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
     if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
@@ -382,6 +393,62 @@ export function AdSettingsClient() {
               onPatchRow={patchRow} onDeleteRow={deleteRow} onAddRow={addRow} onResetCounts={handleResetCounts}
             />
           </div>
+        )}
+      </div>
+
+      {/* ── Cài đặt bình luận tự động ── */}
+      <div className={`${adsPanel} p-4 space-y-3`}>
+        <div className="flex items-center gap-2">
+          <MessageCircle size={14} className="text-violet-600 shrink-0" />
+          <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt bình luận</span>
+        </div>
+
+        <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Bật bình luận tự động</span>
+            <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+              commentEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
+              {commentEnabled ? "Bật" : "Tắt"}
+            </span>
+          </div>
+          <button type="button" onClick={() => setCommentEnabled(v => !v)}
+            className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
+              commentEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+            <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+              commentEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
+          </button>
+        </div>
+
+        {commentEnabled && (
+          <>
+            <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+              <div className="flex flex-col">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nguồn nội dung comment</span>
+                <span className="text-[10px] text-slate-400">Có thể sửa riêng từng bài trong bảng batch</span>
+              </div>
+              <div className="flex items-center rounded-lg border overflow-hidden shrink-0">
+                <button type="button" onClick={() => setCommentMode("custom")}
+                  className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    commentMode === "custom" ? "bg-violet-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+                  Tự nhập
+                </button>
+                <button type="button" onClick={() => setCommentMode("caption")}
+                  className={["px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    commentMode === "caption" ? "bg-violet-600 text-white" : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50"].join(" ")}>
+                  Dùng lại caption
+                </button>
+              </div>
+            </div>
+
+            {commentMode === "custom" && (
+              <div className="space-y-1">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Nội dung mặc định</span>
+                <input type="text" value={commentTemplate} onChange={e => setCommentTemplate(e.target.value)}
+                  placeholder="Nội dung comment mặc định — có thể sửa riêng từng bài"
+                  className="w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
+              </div>
+            )}
+          </>
         )}
       </div>
 
