@@ -100,9 +100,23 @@ export async function processDueCommentRetries(): Promise<void> {
   });
 
   for (const row of due) {
-    if (!row.post.pageId || !row.post.fbPostId) continue;
+    // These would otherwise sit "pending" forever with no visible error —
+    // mark them failed instead so a missing page/connection is diagnosable.
+    if (!row.post.pageId || !row.post.fbPostId) {
+      await prisma.postComment.update({
+        where: { id: row.id },
+        data: { status: "failed", nextAttemptAt: null, errorMsg: "[comment] Bài chưa có pageId/fbPostId" },
+      }).catch(() => {});
+      continue;
+    }
     const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: row.post.pageId } });
-    if (!fbConn) continue;
+    if (!fbConn) {
+      await prisma.postComment.update({
+        where: { id: row.id },
+        data: { status: "failed", nextAttemptAt: null, errorMsg: `[comment] Không tìm thấy kết nối FB cho page ${row.post.pageId}` },
+      }).catch(() => {});
+      continue;
+    }
 
     await attemptComment(row.id, row.post.fbPostId, fbConn.accessToken, row.attempt ?? 0);
   }

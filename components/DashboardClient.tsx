@@ -174,6 +174,23 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     }
   }
 
+  // "Cài đặt Ads" is the single source of truth — edits made from this
+  // drawer write straight back to the same /api/app-config + /api/auto-ads-
+  // accounts store the batch view and the Cài đặt Ads page use.
+  const appConfigSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function syncAppConfig(patch: Record<string, string>) {
+    if (appConfigSyncTimer.current) clearTimeout(appConfigSyncTimer.current);
+    appConfigSyncTimer.current = setTimeout(() => {
+      fetch("/api/app-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
+    }, 500);
+  }
+  function persistDrawerAccountRow(row: AutoAdsAccountRowLike) {
+    fetch("/api/auto-ads-accounts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep }),
+    }).catch(() => {});
+  }
+
   function patchDrawerAdConfig(patch: Partial<BatchAdConfig>) {
     setDrawerAdConfig((prev) => {
       const next = { ...prev, ...patch };
@@ -183,19 +200,64 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       }
       return next;
     });
+    syncAppConfig({
+      ...(patch.templateId !== undefined ? { batchTemplateId: patch.templateId } : {}),
+      ...(patch.runAds !== undefined ? { batchRunAds: String(patch.runAds) } : {}),
+      ...(patch.ageMinFrom !== undefined ? { batchAgeMinFrom: patch.ageMinFrom } : {}),
+      ...(patch.ageMinTo !== undefined ? { batchAgeMinTo: patch.ageMinTo } : {}),
+      ...(patch.ageMaxFrom !== undefined ? { batchAgeMaxFrom: patch.ageMaxFrom } : {}),
+      ...(patch.ageMaxTo !== undefined ? { batchAgeMaxTo: patch.ageMaxTo } : {}),
+      ...(patch.gender !== undefined ? { batchGender: patch.gender } : {}),
+      ...(patch.budgetMin !== undefined ? { batchBudgetMin: patch.budgetMin } : {}),
+      ...(patch.budgetMax !== undefined ? { batchBudgetMax: patch.budgetMax } : {}),
+      ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
+      ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
+    });
   }
   function patchDrawerRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
-    setDrawerAccountRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+    setDrawerAccountRows((rows) => {
+      const next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+      if (next[idx]) persistDrawerAccountRow(next[idx]);
+      return next;
+    });
   }
   function deleteDrawerRow(idx: number) {
-    setDrawerAccountRows((rows) => rows.filter((_, i) => i !== idx));
+    setDrawerAccountRows((rows) => {
+      const row = rows[idx] as (AutoAdsAccountRowLike & { id?: string }) | undefined;
+      if (row?.id) fetch(`/api/auto-ads-accounts/${row.id}`, { method: "DELETE" }).catch(() => {});
+      return rows.filter((_, i) => i !== idx);
+    });
   }
   function addDrawerRow() {
     const firstFree = adAccountsFull.find((a) => !drawerAccountRows.some((r) => r.accountId === a.accountId));
-    setDrawerAccountRows((rows) => [...rows, {
+    const newRow: AutoAdsAccountRowLike = {
       accountId: firstFree?.accountId ?? adAccountsFull[0]?.accountId ?? "",
       weight: 1, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
-    }]);
+    };
+    setDrawerAccountRows((rows) => [...rows, newRow]);
+    persistDrawerAccountRow(newRow);
+  }
+
+  function patchDrawerComment(patch: {
+    enabled?: boolean; useCaption?: boolean; captionAttachImage?: boolean; captionImageUrls?: string[];
+    customEntries?: CommentEntry[]; sharedImageUrls?: string[]; randomCount?: string;
+  }) {
+    if (patch.enabled !== undefined) setDrawerCommentEnabled(patch.enabled);
+    if (patch.useCaption !== undefined) setDrawerCommentUseCaption(patch.useCaption);
+    if (patch.captionAttachImage !== undefined) setDrawerCommentCaptionAttachImage(patch.captionAttachImage);
+    if (patch.captionImageUrls !== undefined) setDrawerCommentCaptionImageUrls(patch.captionImageUrls);
+    if (patch.customEntries !== undefined) setDrawerCommentEntries(patch.customEntries);
+    if (patch.sharedImageUrls !== undefined) setDrawerCommentSharedImageUrls(patch.sharedImageUrls);
+    if (patch.randomCount !== undefined) setDrawerCommentRandomCount(patch.randomCount);
+    syncAppConfig({
+      ...(patch.enabled !== undefined ? { commentEnabled: String(patch.enabled) } : {}),
+      ...(patch.useCaption !== undefined ? { commentUseCaption: String(patch.useCaption) } : {}),
+      ...(patch.captionAttachImage !== undefined ? { commentCaptionAttachImage: String(patch.captionAttachImage) } : {}),
+      ...(patch.captionImageUrls !== undefined ? { commentCaptionImageUrls: JSON.stringify(patch.captionImageUrls) } : {}),
+      ...(patch.customEntries !== undefined ? { commentCustomEntries: JSON.stringify(patch.customEntries) } : {}),
+      ...(patch.sharedImageUrls !== undefined ? { commentSharedImageUrls: JSON.stringify(patch.sharedImageUrls) } : {}),
+      ...(patch.randomCount !== undefined ? { commentRandomCount: patch.randomCount } : {}),
+    });
   }
 
   // Same field names as BatchImportClient's buildDetailPresetData/applyDetailPresetData
@@ -220,14 +282,19 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
   function applyDrawerPresetData(raw: unknown) {
     const d = raw as Partial<ReturnType<typeof buildDrawerPresetData>>;
-    if (d.commentEnabled !== undefined) setDrawerCommentEnabled(d.commentEnabled);
-    if (d.commentUseCaption !== undefined) setDrawerCommentUseCaption(d.commentUseCaption);
-    if (d.commentCaptionAttachImage !== undefined) setDrawerCommentCaptionAttachImage(d.commentCaptionAttachImage);
-    if (d.commentCaptionImageUrls) setDrawerCommentCaptionImageUrls(d.commentCaptionImageUrls);
-    if (d.commentCustomEntries) setDrawerCommentEntries(d.commentCustomEntries);
-    if (d.commentSharedImageUrls) setDrawerCommentSharedImageUrls(d.commentSharedImageUrls);
-    if (d.commentRandomCount !== undefined) setDrawerCommentRandomCount(d.commentRandomCount);
-    if (d.accountRows) setDrawerAccountRows(d.accountRows);
+    patchDrawerComment({
+      ...(d.commentEnabled !== undefined ? { enabled: d.commentEnabled } : {}),
+      ...(d.commentUseCaption !== undefined ? { useCaption: d.commentUseCaption } : {}),
+      ...(d.commentCaptionAttachImage !== undefined ? { captionAttachImage: d.commentCaptionAttachImage } : {}),
+      ...(d.commentCaptionImageUrls ? { captionImageUrls: d.commentCaptionImageUrls } : {}),
+      ...(d.commentCustomEntries ? { customEntries: d.commentCustomEntries } : {}),
+      ...(d.commentSharedImageUrls ? { sharedImageUrls: d.commentSharedImageUrls } : {}),
+      ...(d.commentRandomCount !== undefined ? { randomCount: d.commentRandomCount } : {}),
+    });
+    if (d.accountRows) {
+      setDrawerAccountRows(d.accountRows);
+      d.accountRows.forEach(r => persistDrawerAccountRow(r));
+    }
     patchDrawerAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -1051,13 +1118,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             />
 
             <CommentSettingsPanel
-              enabled={drawerCommentEnabled} onEnabledChange={setDrawerCommentEnabled}
-              useCaption={drawerCommentUseCaption} onUseCaptionChange={setDrawerCommentUseCaption}
-              captionAttachImage={drawerCommentCaptionAttachImage} onCaptionAttachImageChange={setDrawerCommentCaptionAttachImage}
-              captionImageUrls={drawerCommentCaptionImageUrls} onCaptionImageUrlsChange={setDrawerCommentCaptionImageUrls}
-              sharedImageUrls={drawerCommentSharedImageUrls} onSharedImageUrlsChange={setDrawerCommentSharedImageUrls}
-              randomCount={drawerCommentRandomCount} onRandomCountChange={setDrawerCommentRandomCount}
-              entries={drawerCommentEntries} onEntriesChange={setDrawerCommentEntries}
+              enabled={drawerCommentEnabled} onEnabledChange={v => patchDrawerComment({ enabled: v })}
+              useCaption={drawerCommentUseCaption} onUseCaptionChange={v => patchDrawerComment({ useCaption: v })}
+              captionAttachImage={drawerCommentCaptionAttachImage} onCaptionAttachImageChange={v => patchDrawerComment({ captionAttachImage: v })}
+              captionImageUrls={drawerCommentCaptionImageUrls} onCaptionImageUrlsChange={v => patchDrawerComment({ captionImageUrls: v })}
+              sharedImageUrls={drawerCommentSharedImageUrls} onSharedImageUrlsChange={v => patchDrawerComment({ sharedImageUrls: v })}
+              randomCount={drawerCommentRandomCount} onRandomCountChange={v => patchDrawerComment({ randomCount: v })}
+              entries={drawerCommentEntries} onEntriesChange={v => patchDrawerComment({ customEntries: v })}
             />
           </div>
         </div>

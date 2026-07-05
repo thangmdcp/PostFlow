@@ -131,6 +131,13 @@ function vn7ToDate(s: string): Date {
   return new Date(s + ":00+07:00");
 }
 
+// A saved base time (from a preset or an old app-config value) that's already
+// in the past is useless — it would just fail every schedule check. Future
+// times are left exactly as saved.
+function resolveBaseTime(saved: string): string {
+  return vn7ToDate(saved).getTime() < Date.now() ? vn7Now(0) : saved;
+}
+
 // Format Date → "YYYY-MM-DDTHH:mm" in +7, used for display in inputs
 function dateToVn7(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -222,22 +229,43 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
   const [adAccounts, setAdAccounts] = useState<{ accountId: string; name: string }[]>([]);
   const [accountRows, setAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
-  // Pre-batch panel's own temporary TKQC copy — editable here for convenience,
-  // but never persisted; re-synced whenever the real (server) rows change.
-  const [tempAccountRows, setTempAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
-  useEffect(() => { setTempAccountRows(accountRows); }, [accountRows]);
-  function patchTempRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
-    setTempAccountRows(rows => rows.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  // TKQC rows are the same "Cài đặt Ads" source everywhere — every panel
+  // (pre-batch, in-batch drawer) edits this one list, which writes straight
+  // through to /api/auto-ads-accounts (POST upserts by accountId).
+  function persistAccountRow(row: AutoAdsAccountRowLike, onSaved?: (id: string) => void) {
+    fetch("/api/auto-ads-accounts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep }),
+    }).then(r => r.ok ? r.json() : null).then(saved => { if (saved?.id) onSaved?.(saved.id); }).catch(() => {});
   }
-  function deleteTempRow(idx: number) {
-    setTempAccountRows(rows => rows.filter((_, i) => i !== idx));
+  function patchAccountRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
+    setAccountRows(rows => {
+      const next = rows.map((r, i) => i === idx ? { ...r, ...patch } : r);
+      if (next[idx]) persistAccountRow(next[idx]);
+      return next;
+    });
   }
-  function addTempRow() {
-    const firstFree = adAccounts.find(a => !tempAccountRows.some(r => r.accountId === a.accountId));
-    setTempAccountRows(rows => [...rows, {
+  function deleteAccountRow(idx: number) {
+    setAccountRows(rows => {
+      const row = rows[idx] as (AutoAdsAccountRowLike & { id?: string }) | undefined;
+      if (row?.id) fetch(`/api/auto-ads-accounts/${row.id}`, { method: "DELETE" }).catch(() => {});
+      return rows.filter((_, i) => i !== idx);
+    });
+  }
+  function addAccountRow() {
+    const firstFree = adAccounts.find(a => !accountRows.some(r => r.accountId === a.accountId));
+    const newRow: AutoAdsAccountRowLike = {
       accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
       weight: 0, budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep,
-    }]);
+    };
+    setAccountRows(rows => [...rows, newRow]);
+    persistAccountRow(newRow, id => {
+      setAccountRows(rows => rows.map(r => r === newRow ? { ...r, id } : r));
+    });
+  }
+  function applyAccountRowsFromPreset(rows: AutoAdsAccountRowLike[]) {
+    setAccountRows(rows);
+    rows.forEach(r => persistAccountRow(r));
   }
   const [defaultPageIds, setDefaultPageIds] = useState<string[]>([]);
   const [defaultScheduleMode, setDefaultScheduleMode] = useState<ScheduleMode>("interval");
@@ -254,6 +282,18 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultCommentRandomCount, setDefaultCommentRandomCount] = useState("0");
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
+
+  // ── "Cài đặt Ads" is the single source of truth — any edit made here, in the
+  // pre-batch panel, or in a batch's own "Cài đặt chi tiết" drawer writes
+  // straight back to the same /api/app-config store (confirmed with user:
+  // no more separate "temporary" copies per panel).
+  const appConfigSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function syncAppConfig(patch: Record<string, string>) {
+    if (appConfigSyncTimer.current) clearTimeout(appConfigSyncTimer.current);
+    appConfigSyncTimer.current = setTimeout(() => {
+      fetch("/api/app-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
+    }, 500);
+  }
 
   // Load templates + config + TKQC
   useEffect(() => {
@@ -285,7 +325,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       if (cfg.batchScheduleMode) setDefaultScheduleMode(cfg.batchScheduleMode as ScheduleMode);
       if (cfg.batchStepMinutes) setDefaultStepMinutes(cfg.batchStepMinutes);
       if (cfg.batchPostsPerDay) setDefaultPostsPerDay(cfg.batchPostsPerDay);
-      if (cfg.batchBaseTime) setDefaultBaseTime(cfg.batchBaseTime);
+      if (cfg.batchBaseTime) setDefaultBaseTime(resolveBaseTime(cfg.batchBaseTime));
       if (cfg.batchEndTime !== undefined) setDefaultEndTime(cfg.batchEndTime);
       if (cfg.commentEnabled !== undefined) setDefaultCommentEnabled(cfg.commentEnabled === "true");
       if (cfg.commentUseCaption !== undefined) setDefaultCommentUseCaption(cfg.commentUseCaption === "true");
@@ -339,6 +379,41 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       localStorage.setItem(ADS_CONFIG_KEY, JSON.stringify(next));
       return next;
     });
+    syncAppConfig({
+      ...(patch.templateId !== undefined ? { batchTemplateId: patch.templateId } : {}),
+      ...(patch.runAds !== undefined ? { batchRunAds: String(patch.runAds) } : {}),
+      ...(patch.ageMinFrom !== undefined ? { batchAgeMinFrom: patch.ageMinFrom } : {}),
+      ...(patch.ageMinTo !== undefined ? { batchAgeMinTo: patch.ageMinTo } : {}),
+      ...(patch.ageMaxFrom !== undefined ? { batchAgeMaxFrom: patch.ageMaxFrom } : {}),
+      ...(patch.ageMaxTo !== undefined ? { batchAgeMaxTo: patch.ageMaxTo } : {}),
+      ...(patch.gender !== undefined ? { batchGender: patch.gender } : {}),
+      ...(patch.budgetMin !== undefined ? { batchBudgetMin: patch.budgetMin } : {}),
+      ...(patch.budgetMax !== undefined ? { batchBudgetMax: patch.budgetMax } : {}),
+      ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
+      ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
+    });
+  }
+
+  function patchDefaultComment(patch: {
+    enabled?: boolean; useCaption?: boolean; captionAttachImage?: boolean; captionImageUrls?: string[];
+    customEntries?: CommentEntry[]; sharedImageUrls?: string[]; randomCount?: string;
+  }) {
+    if (patch.enabled !== undefined) setDefaultCommentEnabled(patch.enabled);
+    if (patch.useCaption !== undefined) setDefaultCommentUseCaption(patch.useCaption);
+    if (patch.captionAttachImage !== undefined) setDefaultCommentCaptionAttachImage(patch.captionAttachImage);
+    if (patch.captionImageUrls !== undefined) setDefaultCommentCaptionImageUrls(patch.captionImageUrls);
+    if (patch.customEntries !== undefined) setDefaultCommentCustomEntries(patch.customEntries);
+    if (patch.sharedImageUrls !== undefined) setDefaultCommentSharedImageUrls(patch.sharedImageUrls);
+    if (patch.randomCount !== undefined) setDefaultCommentRandomCount(patch.randomCount);
+    syncAppConfig({
+      ...(patch.enabled !== undefined ? { commentEnabled: String(patch.enabled) } : {}),
+      ...(patch.useCaption !== undefined ? { commentUseCaption: String(patch.useCaption) } : {}),
+      ...(patch.captionAttachImage !== undefined ? { commentCaptionAttachImage: String(patch.captionAttachImage) } : {}),
+      ...(patch.captionImageUrls !== undefined ? { commentCaptionImageUrls: JSON.stringify(patch.captionImageUrls) } : {}),
+      ...(patch.customEntries !== undefined ? { commentCustomEntries: JSON.stringify(patch.customEntries) } : {}),
+      ...(patch.sharedImageUrls !== undefined ? { commentSharedImageUrls: JSON.stringify(patch.sharedImageUrls) } : {}),
+      ...(patch.randomCount !== undefined ? { commentRandomCount: patch.randomCount } : {}),
+    });
   }
 
   // ── Full-cluster preset — shares the same store as "Cài đặt Ads" ────────────
@@ -366,7 +441,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     if (d.batchScheduleMode) setDefaultScheduleMode(d.batchScheduleMode);
     if (d.batchStepMinutes) setDefaultStepMinutes(d.batchStepMinutes);
     if (d.batchPostsPerDay) setDefaultPostsPerDay(d.batchPostsPerDay);
-    if (d.batchBaseTime) setDefaultBaseTime(d.batchBaseTime);
+    if (d.batchBaseTime) setDefaultBaseTime(resolveBaseTime(d.batchBaseTime));
     if (d.batchEndTime !== undefined) setDefaultEndTime(d.batchEndTime);
     if (d.commentEnabled !== undefined) setDefaultCommentEnabled(d.commentEnabled);
     if (d.commentUseCaption !== undefined) setDefaultCommentUseCaption(d.commentUseCaption);
@@ -530,17 +605,17 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               hideInlinePreset
             />
             <AdsConfigPanel
-              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={tempAccountRows} onPatch={patchAdConfig}
-              onPatchRow={patchTempRow} onDeleteRow={deleteTempRow} onAddRow={addTempRow}
+              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows} onPatch={patchAdConfig}
+              onPatchRow={patchAccountRow} onDeleteRow={deleteAccountRow} onAddRow={addAccountRow}
             />
             <CommentSettingsPanel
-              enabled={defaultCommentEnabled} onEnabledChange={setDefaultCommentEnabled}
-              useCaption={defaultCommentUseCaption} onUseCaptionChange={setDefaultCommentUseCaption}
-              captionAttachImage={defaultCommentCaptionAttachImage} onCaptionAttachImageChange={setDefaultCommentCaptionAttachImage}
-              captionImageUrls={defaultCommentCaptionImageUrls} onCaptionImageUrlsChange={setDefaultCommentCaptionImageUrls}
-              sharedImageUrls={defaultCommentSharedImageUrls} onSharedImageUrlsChange={setDefaultCommentSharedImageUrls}
-              randomCount={defaultCommentRandomCount} onRandomCountChange={setDefaultCommentRandomCount}
-              entries={defaultCommentCustomEntries} onEntriesChange={setDefaultCommentCustomEntries}
+              enabled={defaultCommentEnabled} onEnabledChange={v => patchDefaultComment({ enabled: v })}
+              useCaption={defaultCommentUseCaption} onUseCaptionChange={v => patchDefaultComment({ useCaption: v })}
+              captionAttachImage={defaultCommentCaptionAttachImage} onCaptionAttachImageChange={v => patchDefaultComment({ captionAttachImage: v })}
+              captionImageUrls={defaultCommentCaptionImageUrls} onCaptionImageUrlsChange={v => patchDefaultComment({ captionImageUrls: v })}
+              sharedImageUrls={defaultCommentSharedImageUrls} onSharedImageUrlsChange={v => patchDefaultComment({ sharedImageUrls: v })}
+              randomCount={defaultCommentRandomCount} onRandomCountChange={v => patchDefaultComment({ randomCount: v })}
+              entries={defaultCommentCustomEntries} onEntriesChange={v => patchDefaultComment({ customEntries: v })}
             />
           </div>
         </div>
@@ -560,6 +635,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       defaultCommentCustomEntries={defaultCommentCustomEntries}
       defaultCommentSharedImageUrls={defaultCommentSharedImageUrls} defaultCommentRandomCount={defaultCommentRandomCount}
       onPatchAdConfig={patchAdConfig}
+      onPatchAccountRow={patchAccountRow} onDeleteAccountRow={deleteAccountRow} onAddAccountRow={addAccountRow}
+      onApplyAccountRows={applyAccountRowsFromPreset}
+      onPatchComment={patchDefaultComment}
       onNewBatch={() => setBatchId(null)} onToast={show} ToastComponent={ToastComponent}
       mutateBatch={mutateBatch}
     />
@@ -588,13 +666,21 @@ interface BatchViewProps {
   defaultCommentSharedImageUrls: string[];
   defaultCommentRandomCount: string;
   onPatchAdConfig: (patch: Partial<BatchAdConfig>) => void;
+  onPatchAccountRow: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;
+  onDeleteAccountRow: (idx: number) => void;
+  onAddAccountRow: () => void;
+  onApplyAccountRows: (rows: AutoAdsAccountRowLike[]) => void;
+  onPatchComment: (patch: {
+    enabled?: boolean; useCaption?: boolean; captionAttachImage?: boolean; captionImageUrls?: string[];
+    customEntries?: CommentEntry[]; sharedImageUrls?: string[]; randomCount?: string;
+  }) => void;
   onNewBatch: () => void;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
   ToastComponent: React.ReactNode;
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, onPatchAdConfig, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -611,30 +697,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [stepMinutes, setStepMinutes] = useState(defaultStepMinutes);
   const [postsPerDay, setPostsPerDay] = useState(defaultPostsPerDay);
   const [endTime, setEndTime] = useState(defaultEndTime);
-  const [commentEnabled, setCommentEnabled] = useState(defaultCommentEnabled);
-  const [commentUseCaption, setCommentUseCaption] = useState(defaultCommentUseCaption);
+  // Comment defaults + TKQC rows are the same "Cài đặt Ads" source everywhere
+  // now — this drawer reads/patches the props directly (onPatchComment/
+  // onPatchAccountRow etc.), same as adConfig already did.
+  const commentEnabled = defaultCommentEnabled;
+  const commentUseCaption = defaultCommentUseCaption;
+  const commentCaptionAttachImage = defaultCommentCaptionAttachImage;
+  const commentCaptionImageUrls = defaultCommentCaptionImageUrls;
+  const commentCustomEntries = defaultCommentCustomEntries;
+  const commentSharedImageUrls = defaultCommentSharedImageUrls;
+  const commentRandomCount = defaultCommentRandomCount;
   const [commentCustomEntryEnabled, setCommentCustomEntryEnabled] = useState<Record<string, boolean>>({});
-  // Batch-local copies — editable from the "Cài đặt" drawer, never written
-  // back to the global AppConfig/AutoAdsAccount rows (confirmed with user).
-  const [commentCaptionAttachImage, setCommentCaptionAttachImage] = useState(defaultCommentCaptionAttachImage);
-  const [commentCaptionImageUrls, setCommentCaptionImageUrls] = useState(defaultCommentCaptionImageUrls);
-  const [commentCustomEntries, setCommentCustomEntries] = useState(defaultCommentCustomEntries);
-  const [commentSharedImageUrls, setCommentSharedImageUrls] = useState(defaultCommentSharedImageUrls);
-  const [commentRandomCount, setCommentRandomCount] = useState(defaultCommentRandomCount);
-  const [localAccountRows, setLocalAccountRows] = useState<AutoAdsAccountRowLike[]>(() => accountRows);
-  function patchLocalRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
-    setLocalAccountRows(rows => rows.map((r, i) => i === idx ? { ...r, ...patch } : r));
-  }
-  function deleteLocalRow(idx: number) {
-    setLocalAccountRows(rows => rows.filter((_, i) => i !== idx));
-  }
-  function addLocalRow() {
-    const firstFree = adAccounts.find(a => !localAccountRows.some(r => r.accountId === a.accountId));
-    setLocalAccountRows(rows => [...rows, {
-      accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
-      weight: 0, budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep,
-    }]);
-  }
+  const localAccountRows = accountRows;
   const [postTimes, setPostTimes] = useState<Record<string, string>>({});
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -833,19 +907,22 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (d.batchStepMinutes) setStepMinutes(d.batchStepMinutes);
     if (d.batchPostsPerDay) setPostsPerDay(d.batchPostsPerDay);
     if (d.batchBaseTime) {
-      if ((d.batchScheduleMode ?? scheduleMode) === "manual") setManualApplyTime(d.batchBaseTime);
-      else setBaseTime(d.batchBaseTime);
+      const resolved = resolveBaseTime(d.batchBaseTime);
+      if ((d.batchScheduleMode ?? scheduleMode) === "manual") setManualApplyTime(resolved);
+      else setBaseTime(resolved);
     }
     if (d.batchEndTime !== undefined) setEndTime(d.batchEndTime);
-    if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
-    if (d.commentUseCaption !== undefined) setCommentUseCaption(d.commentUseCaption);
+    onPatchComment({
+      ...(d.commentEnabled !== undefined ? { enabled: d.commentEnabled } : {}),
+      ...(d.commentUseCaption !== undefined ? { useCaption: d.commentUseCaption } : {}),
+      ...(d.commentCaptionAttachImage !== undefined ? { captionAttachImage: d.commentCaptionAttachImage } : {}),
+      ...(d.commentCaptionImageUrls ? { captionImageUrls: d.commentCaptionImageUrls } : {}),
+      ...(d.commentCustomEntries ? { customEntries: d.commentCustomEntries } : {}),
+      ...(d.commentSharedImageUrls ? { sharedImageUrls: d.commentSharedImageUrls } : {}),
+      ...(d.commentRandomCount !== undefined ? { randomCount: d.commentRandomCount } : {}),
+    });
     if (d.commentCustomEntryEnabled) setCommentCustomEntryEnabled(d.commentCustomEntryEnabled);
-    if (d.commentCaptionAttachImage !== undefined) setCommentCaptionAttachImage(d.commentCaptionAttachImage);
-    if (d.commentCaptionImageUrls) setCommentCaptionImageUrls(d.commentCaptionImageUrls);
-    if (d.commentCustomEntries) setCommentCustomEntries(d.commentCustomEntries);
-    if (d.commentSharedImageUrls) setCommentSharedImageUrls(d.commentSharedImageUrls);
-    if (d.commentRandomCount !== undefined) setCommentRandomCount(d.commentRandomCount);
-    if (d.accountRows) setLocalAccountRows(d.accountRows);
+    if (d.accountRows) onApplyAccountRows(d.accountRows);
     patchAdConfig({
       ...(d.batchTemplateId !== undefined ? { templateId: d.batchTemplateId } : {}),
       ...(d.batchRunAds !== undefined ? { runAds: d.batchRunAds } : {}),
@@ -1336,17 +1413,17 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
             <AdsConfigPanel
               adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={localAccountRows} onPatch={patchAdConfig}
-              onPatchRow={patchLocalRow} onDeleteRow={deleteLocalRow} onAddRow={addLocalRow}
+              onPatchRow={onPatchAccountRow} onDeleteRow={onDeleteAccountRow} onAddRow={onAddAccountRow}
             />
 
             <CommentSettingsPanel
-              enabled={commentEnabled} onEnabledChange={setCommentEnabled}
-              useCaption={commentUseCaption} onUseCaptionChange={setCommentUseCaption}
-              captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={setCommentCaptionAttachImage}
-              captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={setCommentCaptionImageUrls}
-              sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={setCommentSharedImageUrls}
-              randomCount={commentRandomCount} onRandomCountChange={setCommentRandomCount}
-              entries={commentCustomEntries} onEntriesChange={setCommentCustomEntries}
+              enabled={commentEnabled} onEnabledChange={v => onPatchComment({ enabled: v })}
+              useCaption={commentUseCaption} onUseCaptionChange={v => onPatchComment({ useCaption: v })}
+              captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={v => onPatchComment({ captionAttachImage: v })}
+              captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={v => onPatchComment({ captionImageUrls: v })}
+              sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={v => onPatchComment({ sharedImageUrls: v })}
+              randomCount={commentRandomCount} onRandomCountChange={v => onPatchComment({ randomCount: v })}
+              entries={commentCustomEntries} onEntriesChange={v => onPatchComment({ customEntries: v })}
               entryEnabled={commentCustomEntryEnabled} onEntryEnabledChange={(id, v) => setCommentCustomEntryEnabled(prev => ({ ...prev, [id]: v }))}
             />
           </div>
@@ -1616,10 +1693,12 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   }
 
   const editable = status === "ready" || status === "failed";
-  // Page/schedule time get randomly pre-assigned the moment a row exists
-  // (same as age/gender/budget) — show them right away instead of waiting
-  // for "ready", which just left the cells blank for no real reason.
-  const effectivePageId = (rowPageId || post.pageId) ?? "";
+  // Once a post has an actual pageId saved (scheduled/published), that's the
+  // real page the Facebook post lives on and must win — a later re-render of
+  // the local `rowPageId` auto-fill/random-pick must never override the
+  // already-committed value shown to the user. Only fall back to the local
+  // pre-assigned pick for rows that haven't been scheduled/published yet.
+  const effectivePageId = post.pageId || rowPageId || "";
   const pageName = connections.find(c => c.pageId === effectivePageId)?.pageName ?? effectivePageId ?? "";
   const accountName = adAccounts.find(a => a.accountId === rowAccountId)?.name ?? rowAccountId;
 

@@ -40,6 +40,11 @@ function vn7NextMidnight(): string {
   d.setDate(d.getDate() + 1);
   return `${d.toISOString().slice(0, 10)}T00:00`;
 }
+// A saved base time that's already in the past is useless — reset it to now.
+// A future time (even if saved a while ago) is left exactly as saved.
+function resolveBaseTime(saved: string): string {
+  return new Date(saved + ":00+07:00").getTime() < Date.now() ? vn7Now() : saved;
+}
 
 export function AdSettingsClient() {
   const [settings, setSettings] = useState<AdSettings | null>(null);
@@ -150,7 +155,7 @@ export function AdSettingsClient() {
     if (cfg.batchScheduleMode) setBatchScheduleMode(cfg.batchScheduleMode as "manual"|"interval"|"daily");
     if (cfg.batchStepMinutes) setBatchStepMinutes(cfg.batchStepMinutes);
     if (cfg.batchPostsPerDay) setBatchPostsPerDay(cfg.batchPostsPerDay);
-    if (cfg.batchBaseTime) setBatchBaseTime(cfg.batchBaseTime);
+    if (cfg.batchBaseTime) setBatchBaseTime(resolveBaseTime(cfg.batchBaseTime));
     if (cfg.batchEndTime !== undefined) setBatchEndTime(cfg.batchEndTime);
     if (cfg.commentEnabled !== undefined) setCommentEnabled(cfg.commentEnabled === "true");
     if (cfg.commentUseCaption !== undefined) setCommentUseCaption(cfg.commentUseCaption === "true");
@@ -278,7 +283,7 @@ export function AdSettingsClient() {
     if (d.batchScheduleMode) setBatchScheduleMode(d.batchScheduleMode);
     if (d.batchStepMinutes) setBatchStepMinutes(d.batchStepMinutes);
     if (d.batchPostsPerDay) setBatchPostsPerDay(d.batchPostsPerDay);
-    if (d.batchBaseTime) setBatchBaseTime(d.batchBaseTime);
+    if (d.batchBaseTime) setBatchBaseTime(resolveBaseTime(d.batchBaseTime));
     if (d.batchEndTime !== undefined) setBatchEndTime(d.batchEndTime);
     if (d.commentEnabled !== undefined) setCommentEnabled(d.commentEnabled);
     if (d.commentUseCaption !== undefined) setCommentUseCaption(d.commentUseCaption);
