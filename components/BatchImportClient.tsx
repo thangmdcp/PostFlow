@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X, CircleStop,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -716,6 +716,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
+  // Shared abort handle for whichever long-running bulk network loop is
+  // currently in flight (Lên lịch / Đăng ngay) — Stop aborts it immediately.
+  const bulkAbortRef = useRef<AbortController | null>(null);
+  function stopBulkAction() {
+    bulkAbortRef.current?.abort();
+  }
   const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
   const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>({});
   const [rowPageId, setRowPageId] = useState<Record<string, string>>({});
@@ -814,8 +820,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setPostTimes(prev => ({ ...prev, ...times }));
   }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, localAccountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
 
-  const readyPosts = batch.posts.filter((p) => p.status === "ready" || p.status === "failed");
-  const readyIds = readyPosts.map(p => p.id);
   const allIds = batch.posts.map(p => p.id);
 
   // Auto-fill defaults (page/tuổi/giới tính/ngân sách/TKQC/giờ đăng) as soon as
@@ -847,7 +851,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   }
 
   function applyToolbarToSelection() {
-    const targets = [...checkedIds].filter(id => readyIds.includes(id));
+    // Applies to whatever's checked, not just ready/failed rows — this panel
+    // is also how an already-published ("done") row's saved settings get
+    // updated for its own per-row "Ads" button to pick up later.
+    const targets = [...checkedIds];
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     applyDefaultsToRows(targets);
     onToast(`Đã áp dụng cho ${targets.length} bài`, "success");
@@ -855,7 +862,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   }
 
   function handleRandomize() {
-    const targets = [...checkedIds].filter(id => readyIds.includes(id));
+    const targets = [...checkedIds];
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     if (randomFields.size === 0) { onToast("Chọn ít nhất 1 thông số để random", "error"); return; }
     if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget") || randomFields.has("cta")) {
@@ -1093,31 +1100,39 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       return p && (p.status === "ready" || p.status === "failed") && postTimes[id];
     });
     if (!targets.length) { onToast("Chọn bài và đặt giờ trước", "error"); return; }
+    bulkAbortRef.current = new AbortController();
+    const signal = bulkAbortRef.current.signal;
     setBulkRunning(true);
     let ok = 0;
     for (const id of targets) {
+      if (signal.aborted) break;
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id];
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
-      const res = await fetch(`/api/posts/${id}/schedule`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
-          ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
-          adStatus: adConfig.adStatus,
-          // The table already rolled and displayed this row's budget/age/
-          // gender — persist it now so the cron-triggered ad creation later
-          // uses the exact same values instead of re-rolling its own.
-          ...(runAdsForRow && rp ? {
-            adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
-          } : {}),
-          ...(() => {
-            const jobs = resolveCommentJobs(id);
-            return jobs.length ? { comments: jobs } : {};
-          })(),
-        }),
-      });
-      if (res.ok) ok++;
+      try {
+        const res = await fetch(`/api/posts/${id}/schedule`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
+            ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
+            adStatus: adConfig.adStatus,
+            // The table already rolled and displayed this row's budget/age/
+            // gender — persist it now so the cron-triggered ad creation later
+            // uses the exact same values instead of re-rolling its own.
+            ...(runAdsForRow && rp ? {
+              adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
+            } : {}),
+            ...(() => {
+              const jobs = resolveCommentJobs(id);
+              return jobs.length ? { comments: jobs } : {};
+            })(),
+          }),
+          signal,
+        });
+        if (res.ok) ok++;
+      } catch (e) {
+        if ((e as Error).name === "AbortError") break;
+      }
     }
     setBulkRunning(false);
     await mutateBatch();
@@ -1131,6 +1146,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       return p && (p.status === "ready" || p.status === "failed");
     });
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
+    bulkAbortRef.current = new AbortController();
+    const signal = bulkAbortRef.current.signal;
     setBulkRunning(true);
     // Publish every checked post in parallel instead of one-by-one — each
     // call is its own FB upload/API round trip, so doing them sequentially
@@ -1160,6 +1177,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             return jobs.length ? { comments: jobs } : {};
           })(),
         }),
+        signal,
       }).catch(() => null);
       if (!res?.ok) return { ok: false, adsScheduled: false };
       const data = await res.json().catch(() => null);
@@ -1285,6 +1303,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
           </button>
+          {bulkRunning && (
+            <button onClick={stopBulkAction} title="Huỷ ngay lập tức"
+              className="flex items-center gap-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 text-xs font-semibold transition-colors">
+              <CircleStop size={11} /> {sidebarCollapsed && "Stop"}
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -1325,7 +1349,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 flex gap-4 items-start">
+      <div className="flex-1 min-h-0 flex gap-4">
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {/* ── Table ── */}
       <div className="flex-1 min-h-0 rounded-2xl border bg-card shadow-sm overflow-auto">
@@ -1480,7 +1504,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                   {c.imageUrl && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={c.imageUrl} alt="" referrerPolicy="no-referrer"
-                      className="max-h-40 w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
+                      className="aspect-square w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
                   )}
                   {c.status === "failed" && c.errorMsg && (
                     <p className="text-xs text-red-500">{c.errorMsg}</p>

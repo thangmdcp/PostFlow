@@ -11,7 +11,7 @@ import {
   ExternalLink, RefreshCw, Megaphone, PlusCircle,
   Trash2, CheckSquare, Square, Loader2, CalendarDays,
   Columns3, Check, ChevronDown, ChevronLeft, ChevronRight, X, Zap,
-  Eye, CheckCircle2, MessageCircle,
+  Eye, CheckCircle2, MessageCircle, CircleStop,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -108,6 +108,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   useEffect(() => { setLocalPosts(posts); }, [posts]);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
+  // Shared abort handle for whichever long-running bulk network loop is
+  // currently in flight (Đăng ngay / Tạo ads) — the Stop button aborts it,
+  // cancelling the in-flight request immediately and skipping the rest.
+  const bulkAbortRef = useRef<AbortController | null>(null);
+  function stopBulkAction() {
+    bulkAbortRef.current?.abort();
+  }
   const [selectedPageIds, setSelectedPageIdsRaw] = useState<string[]>(
     connections[0] ? [connections[0].pageId] : []
   );
@@ -348,9 +355,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     if (missing.length > 0) { show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi áp dụng`, "error"); return; }
     if (posts.some((p) => p.status === "pending") && selectedPageIds.length === 0) { show("Chọn ít nhất 1 page", "error"); return; }
 
+    bulkAbortRef.current = new AbortController();
+    const signal = bulkAbortRef.current.signal;
     setDrawerApplying(true);
     let ok = 0, fail = 0;
     for (const p of posts) {
+      if (signal.aborted) break;
       try {
         const accountId = drawerAccountRows.length ? weightedPickAccount(drawerAccountRows) : adAccountsFull[0]?.accountId;
         const row = drawerAccountRows.find((r) => r.accountId === accountId);
@@ -374,6 +384,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               adStatus: drawerAdConfig.adStatus,
               comments: comments.length ? comments : undefined,
             }),
+            signal,
           });
           const data = await res.json();
           if (res.ok) { ok++; setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x))); }
@@ -389,6 +400,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 adAccountId: accountId,
                 dailyBudget: String(budget), ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus,
               }),
+              signal,
             });
             stepOk = res.ok;
             if (res.ok) setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, adCampaignId: "created" } : x)));
@@ -682,16 +694,22 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   async function bulkPublish(postList = checkedPending): Promise<Map<string, string>> {
     const fbPostIdMap = new Map<string, string>();
     if (selectedPageIds.length === 0 || postList.length === 0) return fbPostIdMap;
+    const signal = bulkAbortRef.current?.signal;
     for (const p of postList) {
+      if (signal?.aborted) break;
       const pageId = pickRandomPage(selectedPageIds, connections);
-      const res = await fetch(`/api/posts/${p.id}/publish`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        fbPostIdMap.set(p.id, data.fbPostId ?? "");
-        setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x));
+      try {
+        const res = await fetch(`/api/posts/${p.id}/publish`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pageId }), signal,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fbPostIdMap.set(p.id, data.fbPostId ?? "");
+          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x));
+        }
+      } catch (e) {
+        if ((e as Error).name === "AbortError") break;
       }
     }
     return fbPostIdMap;
@@ -705,6 +723,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       show(`${missing.length} bài chưa điền đủ link aff — kiểm tra lại trước khi đăng`, "error");
       return;
     }
+    bulkAbortRef.current = new AbortController();
     setBulkRunning(true);
     const map = await bulkPublish(checkedPending);
     setBulkRunning(false);
@@ -872,6 +891,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             {bulkRunning ? <Loader2 size={12} className="animate-spin" /> : null}
             Đăng ngay{checkedPending.length > 0 ? ` (${checkedPending.length})` : ""}
           </button>
+          {bulkRunning && (
+            <button onClick={stopBulkAction} title="Huỷ ngay lập tức"
+              className={`${btnActive("bg-slate-700 hover:bg-slate-800")} shrink-0`}>
+              <CircleStop size={12} /> Stop
+            </button>
+          )}
 
           {/* Tạo ads */}
           <button onClick={() => openAdsDrawer(checkedForAds.map((p) => p.id))} disabled={checkedForAds.length === 0}
@@ -912,7 +937,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
       {/* Table — FB Ads Manager style */}
-      <div className="flex-1 min-h-0 flex gap-4 items-start">
+      <div className="flex-1 min-h-0 flex gap-4">
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {filtered.length === 0 ? (
         <EmptyState title="Chưa có bài nào"
@@ -1168,6 +1193,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 className="flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm disabled:opacity-50">
                 {drawerApplying ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />} Áp dụng
               </button>
+              {drawerApplying && (
+                <button onClick={stopBulkAction} title="Huỷ ngay lập tức"
+                  className="flex items-center gap-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm">
+                  <CircleStop size={12} /> Stop
+                </button>
+              )}
               <button onClick={() => setAdsDrawerOpen(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
                 <X size={14} />
               </button>
@@ -1222,7 +1253,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                   {c.imageUrl && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={c.imageUrl} alt="" referrerPolicy="no-referrer"
-                      className="max-h-40 w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
+                      className="aspect-square w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
                   )}
                   {c.status === "failed" && c.errorMsg && (
                     <p className="text-xs text-red-500">{c.errorMsg}</p>

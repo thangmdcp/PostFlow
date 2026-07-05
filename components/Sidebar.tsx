@@ -48,7 +48,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 shadow-[1px_0_0_0_rgba(0,0,0,0.02)] transition-all duration-200",
+        // pb-6 matches <main>'s own py-6 content inset, so the collapse
+        // button's bottom edge lines up with the bottom of the table/panels
+        // in the main content area instead of sitting flush at the viewport edge.
+        "fixed inset-y-0 left-0 z-40 flex flex-col pb-6 bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 shadow-[1px_0_0_0_rgba(0,0,0,0.02)] transition-all duration-200",
         collapsed ? "w-16" : "w-52"
       )}
     >
