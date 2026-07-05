@@ -1023,13 +1023,16 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
                     {colVisible.start && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
-                        {post.fbPostUrl ? (
-                          <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-                            <ExternalLink size={10} />Xem bài
-                          </a>
-                        ) : post.scheduledAt ? (
-                          <ScheduledTime date={post.scheduledAt} />
+                        {post.scheduledAt || post.fbPostUrl ? (
+                          <div className="flex items-center gap-1.5">
+                            {post.scheduledAt && <ScheduledTime date={post.scheduledAt} />}
+                            {post.fbPostUrl && (
+                              <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
+                                className="inline-flex items-center text-blue-600 hover:text-blue-700 shrink-0">
+                                <ExternalLink size={12} />
+                              </a>
+                            )}
+                          </div>
                         ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
                       </td>
                     )}
