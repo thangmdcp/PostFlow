@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Clock } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Loader2, CheckCircle2, Clock, Eye } from "lucide-react";
 
 export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, errorMsg }: {
   commentStatus: string | null | undefined;
@@ -11,6 +11,8 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
   errorMsg: string | null | undefined;
 }) {
   const [now, setNow] = useState<number | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -19,10 +21,47 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
     return () => clearInterval(id);
   }, [commentStatus, commentNextAttemptAt]);
 
+  useEffect(() => {
+    if (!detailOpen) return;
+    function handler(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setDetailOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [detailOpen]);
+
   if (!commentStatus || commentStatus === "skipped") return null;
 
-  if (commentStatus === "creating") {
+  // The planned/attempted text is written to the DB the moment the job is
+  // created — it's already known before Facebook posting even starts, so an
+  // "xem nội dung" affordance can show it regardless of status (pending,
+  // failed, or done), not just once it's successfully posted.
+  function withDetail(badge: React.ReactNode) {
     return (
+      <div className="relative inline-flex items-center gap-1 max-w-full" ref={wrapRef}>
+        {badge}
+        {commentText && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); setDetailOpen((v) => !v); }}
+            title="Xem nội dung bình luận"
+            className="shrink-0 text-slate-400 hover:text-blue-600 transition-colors">
+            <Eye size={11} />
+          </button>
+        )}
+        {detailOpen && (
+          <div onClick={(e) => e.stopPropagation()}
+            className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border bg-white dark:bg-slate-900 shadow-xl p-2.5 text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">
+            {commentText}
+            {commentStatus === "failed" && errorMsg && (
+              <p className="mt-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 text-red-500">{errorMsg}</p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (commentStatus === "creating") {
+    return withDetail(
       <div className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 whitespace-nowrap">
         <Loader2 size={8} className="animate-spin shrink-0" /> Đang bình luận
       </div>
@@ -30,18 +69,17 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
   }
 
   if (commentStatus === "done") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700" title={commentText ?? undefined}>
+    return withDetail(
+      <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700">
         <CheckCircle2 size={10} className="shrink-0" />
-        <span className="line-clamp-2">{commentText}</span>
+        <span className="line-clamp-1">{commentText}</span>
       </div>
     );
   }
 
   if (commentStatus === "failed") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
-        title={errorMsg ?? undefined}>
+    return withDetail(
+      <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap">
         <span className="truncate">Lỗi bình luận (lần {commentAttempt ?? 0})</span>
       </div>
     );
@@ -49,7 +87,7 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
 
   if (commentStatus === "pending" && commentNextAttemptAt) {
     if (now === null) {
-      return (
+      return withDetail(
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
           <Clock size={8} className="shrink-0" /> Chờ bình luận
         </div>
@@ -57,7 +95,7 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
     }
     const remainingMs = new Date(commentNextAttemptAt).getTime() - now;
     if (remainingMs <= 0) {
-      return (
+      return withDetail(
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
           <Loader2 size={8} className="animate-spin shrink-0" /> Sắp bình luận
         </div>
@@ -66,7 +104,7 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
     const totalSec = Math.ceil(remainingMs / 1000);
     const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
-    return (
+    return withDetail(
       <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
         title="Thời gian còn lại tới lần bình luận tiếp theo">
         <Clock size={8} className="shrink-0" />

@@ -315,7 +315,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     if (!drawerCommentEnabled) return [];
     const jobs: { text: string; imageUrl?: string }[] = [];
     if (drawerCommentUseCaption) {
-      const text = (post.finalCaption ?? "").trim();
+      const text = (post.finalCaption ?? post.rawCaption ?? "").trim();
       if (text) jobs.push({ text, imageUrl: resolveDrawerImage(drawerCommentCaptionAttachImage, drawerCommentCaptionImageUrls, drawerCommentSharedImageUrls) });
     }
     const active = drawerCommentEntries.filter((e) => e.text.trim());
