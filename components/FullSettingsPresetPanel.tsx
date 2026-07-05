@@ -10,9 +10,14 @@ interface FullSettingsPresetPanelProps {
   getCurrentData: () => unknown;
   /** Called when the user picks a preset to load — receives the full saved payload */
   onLoad: (data: unknown) => void;
+  /** Which preset (if any) the parent considers "currently loaded" — the parent's own
+   * save button uses this to also write back into that preset instead of only the
+   * global config, so editing after loading a preset doesn't silently drift from it. */
+  activePresetId?: string | null;
+  onActivePresetChange?: (id: string | null) => void;
 }
 
-export function FullSettingsPresetPanel({ getCurrentData, onLoad }: FullSettingsPresetPanelProps) {
+export function FullSettingsPresetPanel({ getCurrentData, onLoad, activePresetId, onActivePresetChange }: FullSettingsPresetPanelProps) {
   const [presets, setPresets] = useState<SettingsPreset[]>([]);
   const [saving, setSaving] = useState(false);
   const [newName, setNewName] = useState("");
@@ -42,6 +47,7 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad }: FullSettings
     setPresets((p) => [...p, data]);
     setNewName("");
     setSaving(false);
+    onActivePresetChange?.(data.id);
   }
 
   async function renamePreset(id: string) {
@@ -57,6 +63,7 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad }: FullSettings
   async function deletePreset(id: string) {
     await fetch(`/api/ad-settings-presets/${id}`, { method: "DELETE" });
     setPresets((p) => p.filter((x) => x.id !== id));
+    if (activePresetId === id) onActivePresetChange?.(null);
   }
 
   return (
@@ -66,7 +73,7 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad }: FullSettings
         className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:border-blue-400 transition-colors"
       >
         <Bookmark size={12} />
-        Preset
+        {activePresetId ? presets.find((p) => p.id === activePresetId)?.name ?? "Preset" : "Preset"}
         {presets.length > 0 && (
           <span className="rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-xs px-1.5 font-medium">
             {presets.length}
@@ -95,9 +102,12 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad }: FullSettings
                     </>
                   ) : (
                     <>
-                      <button onClick={() => { onLoad(p.data); setOpen(false); }} className="flex-1 text-left">
-                        <p className="text-sm font-medium">{p.name}</p>
-                        <p className="text-xs text-slate-400">Lịch đăng, template, thông số ads, phân bổ TKQC</p>
+                      <button onClick={() => { onLoad(p.data); onActivePresetChange?.(p.id); setOpen(false); }} className="flex-1 text-left flex items-center gap-1.5">
+                        {activePresetId === p.id && <Check size={12} className="text-blue-600 shrink-0" />}
+                        <span>
+                          <p className="text-sm font-medium">{p.name}</p>
+                          <p className="text-xs text-slate-400">Lịch đăng, template, thông số ads, phân bổ TKQC</p>
+                        </span>
                       </button>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => { setEditId(p.id); setEditName(p.name); }}

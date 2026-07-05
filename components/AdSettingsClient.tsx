@@ -49,6 +49,9 @@ function resolveBaseTime(saved: string): string {
 export function AdSettingsClient() {
   const [settings, setSettings] = useState<AdSettings | null>(null);
   const [saved, setSaved] = useState(false);
+  // Which preset (if any) is currently loaded — "Lưu cài đặt" also writes
+  // back into this preset so it doesn't silently drift from what's on screen.
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
 
   // Batch default state
   const [batchTemplateId, setBatchTemplateId] = useState("");
@@ -204,6 +207,14 @@ export function AdSettingsClient() {
       });
       const updated = await saveAccountRows();
       setAccountRows(updated);
+      // If a preset is currently loaded, keep it in sync with what's on
+      // screen instead of leaving it stuck with whatever it had when loaded.
+      if (activePresetId) {
+        await fetch(`/api/ad-settings-presets/${activePresetId}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: buildPresetData() }),
+        }).catch(() => {});
+      }
       setSavedBatch(true);
       setTimeout(() => setSavedBatch(false), 2500);
     } finally { setSavingBatch(false); }
@@ -328,7 +339,8 @@ export function AdSettingsClient() {
         <p className="text-xs text-slate-500">
           <span className="font-medium text-slate-600 dark:text-slate-300">Preset cấu hình</span> — áp dụng cho cả lịch đăng, template, thông số ads &amp; phân bổ TKQC
         </p>
-        <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData} />
+        <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData}
+          activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
       </div>
 
       {/* ── Lịch đăng ── */}
