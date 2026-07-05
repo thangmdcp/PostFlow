@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X, CircleStop,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -748,17 +748,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
-  // Shared abort handle for whichever long-running bulk network loop is
-  // currently in flight (Lên lịch / Đăng ngay) — Stop aborts it immediately.
-  const bulkAbortRef = useRef<AbortController | null>(null);
-  function stopBulkAction() {
-    bulkAbortRef.current?.abort();
-    // Aborting only stops the client from sending further requests — any
-    // comment/ad retry already scheduled server-side (via waitUntil or a
-    // queued nextAttemptAt) keeps running unless told to stop too.
-    const ids = [...checkedIds];
-    if (ids.length) fetch("/api/posts/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => {});
-  }
   const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
   const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>({});
   const [rowPageId, setRowPageId] = useState<Record<string, string>>({});
@@ -1178,12 +1167,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       return p && (p.status === "ready" || p.status === "failed") && postTimes[id];
     });
     if (!targets.length) { onToast("Chọn bài và đặt giờ trước", "error"); return; }
-    bulkAbortRef.current = new AbortController();
-    const signal = bulkAbortRef.current.signal;
     setBulkRunning(true);
     let ok = 0;
     for (const id of targets) {
-      if (signal.aborted) break;
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id];
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
@@ -1205,12 +1191,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               return jobs.length ? { comments: jobs } : {};
             })(),
           }),
-          signal,
         });
         if (res.ok) ok++;
-      } catch (e) {
-        if ((e as Error).name === "AbortError") break;
-      }
+      } catch {}
     }
     setBulkRunning(false);
     await mutateBatch();
@@ -1224,8 +1207,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       return p && (p.status === "ready" || p.status === "failed");
     });
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
-    bulkAbortRef.current = new AbortController();
-    const signal = bulkAbortRef.current.signal;
     setBulkRunning(true);
     // Publish every checked post in parallel instead of one-by-one — each
     // call is its own FB upload/API round trip, so doing them sequentially
@@ -1255,7 +1236,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             return jobs.length ? { comments: jobs } : {};
           })(),
         }),
-        signal,
       }).catch(() => null);
       if (!res?.ok) return { ok: false, adsScheduled: false };
       const data = await res.json().catch(() => null);
@@ -1381,12 +1361,6 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
           </button>
-          {bulkRunning && (
-            <button onClick={stopBulkAction} title="Huỷ ngay lập tức"
-              className="flex items-center gap-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 text-xs font-semibold transition-colors">
-              <CircleStop size={11} /> {sidebarCollapsed && "Stop"}
-            </button>
-          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -1679,14 +1653,6 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
       <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
         title={errorMsg ?? undefined}>
         <span className="truncate">Lỗi tạo ads (lần {adAttempt ?? 0})</span>
-      </div>
-    );
-  }
-
-  if (adStatus === "cancelled") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500 whitespace-nowrap">
-        Đã dừng
       </div>
     );
   }

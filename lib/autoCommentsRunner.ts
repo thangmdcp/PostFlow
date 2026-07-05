@@ -50,13 +50,6 @@ export async function scheduleCommentJobs(postId: string, fbPostId: string, acce
 // the first attempt) without going through scheduleCommentJobs' waitUntil.
 export async function attemptComment(commentRowId: string, fbPostId: string, accessToken: string, attemptIndex: number): Promise<void> {
   const attemptNumber = attemptIndex + 1;
-  // Re-check here, right before doing anything — this is the only point
-  // that can actually catch a Stop click that landed after
-  // scheduleCommentJobs' waitUntil() timer was already registered but
-  // before it fired.
-  const existing = await prisma.postComment.findUnique({ where: { id: commentRowId }, select: { status: true } });
-  if (existing?.status === "cancelled") return;
-
   const row = await prisma.postComment.update({
     where: { id: commentRowId },
     data: { status: "creating" },
