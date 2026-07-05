@@ -1,6 +1,3 @@
 {
-  "regions": ["icn1"],
-  "crons": [
-    { "path": "/api/cron/publish", "schedule": "* * * * *" }
-  ]
+  "regions": ["icn1"]
 }
