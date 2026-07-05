@@ -23,7 +23,9 @@ import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
 import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
+import { useElementHeight } from "@/lib/useElementHeight";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -837,11 +839,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     onPatchAdConfig(patch);
   }
 
-  const allChecked = readyPosts.length > 0 && readyPosts.every(p => checkedIds.has(p.id));
+  const allChecked = allIds.length > 0 && allIds.every(id => checkedIds.has(id));
 
   function toggleAll() {
     if (allChecked) setCheckedIds(new Set());
-    else setCheckedIds(new Set(readyIds));
+    else setCheckedIds(new Set(allIds));
   }
 
   function applyToolbarToSelection() {
@@ -1195,6 +1197,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
     "postflow_batch_colorder_v1", COLUMN_DEFS.map(c => c.key)
   );
+  const { ref: toolbarRef, height: toolbarHeight } = useElementHeight<HTMLDivElement>();
   const visibleCols = colOrder
     .map(k => activeColumnDefs.find(c => c.key === k))
     .filter((c): c is typeof activeColumnDefs[number] => !!c && colVisible[c.key]);
@@ -1205,7 +1208,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       {ToastComponent}
 
       {/* ── Thanh thao tác — chia thành các cụm, khoảng cách đều nhau giữa các cụm, luôn chiếm trọn chiều rộng ── */}
-      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
+      <div ref={toolbarRef} className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={onNewBatch} title="Batch mới"
             className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0 whitespace-nowrap">
@@ -1326,13 +1329,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       <div className="flex gap-4 items-start">
       <div className="flex-1 min-w-0">
       {/* ── Table ── */}
-      <div className="rounded-2xl border bg-card shadow-sm overflow-auto max-h-[calc(100vh-160px)]">
+      <div className="rounded-2xl border bg-card shadow-sm overflow-visible">
         <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
           <colgroup>
             <col style={{ width: 40 }} />
             {visibleCols.map(c => <col key={c.key} style={{ width: colWidths[c.key] }} />)}
           </colgroup>
-          <thead className="sticky top-0 z-20">
+          <thead className="sticky z-20" style={{ top: toolbarHeight }}>
             <tr className="border-b bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-medium">
               <th className="px-3 py-2.5 text-center">
                 <button onClick={toggleAll} className="text-slate-400 hover:text-slate-700">
@@ -1615,8 +1618,14 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
     : "";
 
   const genderMap: Record<string, string> = { "": "Tất cả", "1": "Nam", "2": "Nữ" };
+  // Once a post has actually run ads, `post.adBudget`/`adAccountUsed` are the
+  // real, committed values Facebook used — they must win over the local
+  // pre-publish preview (`rowAdParams`/`rowAccountId`), same as `effectivePageId`
+  // above does for the page column, otherwise this cell can show a stale/
+  // different number than what Dashboard shows for the same post after publish.
+  const effectiveBudget = post.adBudget ?? (rowAdParams ? String(rowAdParams.budget) : undefined);
   const ageDisplay = rowAdParams ? `${rowAdParams.ageMin} – ${rowAdParams.ageMax}` : "–";
-  const budgetDisplay = rowAdParams ? Number(rowAdParams.budget).toLocaleString("vi-VN") : "–";
+  const budgetDisplay = effectiveBudget ? Number(effectiveBudget).toLocaleString("vi-VN") : "–";
   const genderDisplay = rowAdParams ? (genderMap[rowAdParams.gender] ?? "Tất cả") : "–";
 
   const displayCaption = post.finalCaption ?? post.rawCaption ?? "";
@@ -1638,7 +1647,8 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   // pre-assigned pick for rows that haven't been scheduled/published yet.
   const effectivePageId = post.pageId || rowPageId || "";
   const pageName = connections.find(c => c.pageId === effectivePageId)?.pageName ?? effectivePageId ?? "";
-  const accountName = adAccounts.find(a => a.accountId === rowAccountId)?.name ?? rowAccountId;
+  const effectiveAccountId = post.adAccountUsed || rowAccountId || "";
+  const accountName = adAccounts.find(a => a.accountId === effectiveAccountId)?.name ?? effectiveAccountId;
 
   return (
     <tr className={["border-b transition-colors", rowBg, checked ? "ring-1 ring-inset ring-blue-300" : ""].join(" ")}>
@@ -1725,16 +1735,20 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "scheduledAt" && cell("scheduledAt",
-        status === "pending" && post.scheduledAt ? (
-          <span className="flex items-center gap-1 text-amber-600 text-[11px]"><Calendar size={11} />{fmtVn7(dateToVn7(new Date(post.scheduledAt)))}</span>
-        ) : status === "done" ? (
-          <div className="flex items-center gap-1 text-emerald-600 text-[11px]">
-            <CheckCircle2 size={11} /> Đã đăng
-            {fbPostUrl && <a href={fbPostUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">Xem</a>}
-          </div>
-        ) : scheduledTime ? (
-          <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums">{fmtVn7(scheduledTime)}</span>
-        ) : <span className="text-slate-300 text-xs">–</span>
+        (() => {
+          const effectiveDate = post.scheduledAt ?? (scheduledTime ? vn7ToDate(scheduledTime) : null);
+          return effectiveDate || fbPostUrl ? (
+            <div className="flex items-center gap-1.5">
+              {effectiveDate && <ScheduledTime date={effectiveDate} />}
+              {fbPostUrl && (
+                <a href={fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
+                  className="inline-flex items-center text-green-600 hover:text-green-700 shrink-0">
+                  <ExternalLink size={12} />
+                </a>
+              )}
+            </div>
+          ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>;
+        })()
       )}
 
       {col.key === "page" && cell("page",
@@ -1756,14 +1770,14 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "budget" && cell("budget",
-        runAds && rowAdParams
+        runAds && effectiveBudget
           ? <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums font-medium">{budgetDisplay}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
       {col.key === "account" && cell("account",
         runAds
-          ? (accountName
+          ? (effectiveAccountId
               ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{accountName}</span>
               : <span className="text-slate-300 text-xs">Tự động</span>)
           : <span className="text-slate-300 text-xs">–</span>

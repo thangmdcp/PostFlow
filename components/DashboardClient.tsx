@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { formatDate, truncate } from "@/lib/utils";
 import {
   ExternalLink, RefreshCw, Megaphone, PlusCircle,
-  Trash2, CheckSquare, Square, Loader2, Clock, CalendarDays,
+  Trash2, CheckSquare, Square, Loader2, CalendarDays,
   Columns3, Check, ChevronDown, ChevronLeft, ChevronRight, X, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
@@ -21,7 +21,9 @@ import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
+import { useElementHeight } from "@/lib/useElementHeight";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -63,21 +65,6 @@ interface Props {
   adAccounts: FbAdAccount[];
 }
 
-function ScheduledTime({ date }: { date: Date | string }) {
-  const d = new Date(date);
-  const timeStr = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-  const dateStr = d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
-
-  return (
-    <div className="flex items-center gap-1.5">
-      <Clock size={12} className="text-slate-400" />
-      <span className="text-xs tabular-nums text-slate-700 dark:text-slate-300">
-        {timeStr} · {dateStr}
-      </span>
-    </div>
-  );
-}
-
 const STATUS_FILTERS = ["all", "pending", "done", "failed"] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
@@ -98,7 +85,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "age",       label: "Độ tuổi",             defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
   { key: "gender",    label: "Giới tính",           defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
   { key: "account",   label: "TKQC",                defaultWidth: 130, minWidth: 90,  defaultVisible: true },
-  { key: "start",     label: "Bắt đầu",             defaultWidth: 155, minWidth: 100, defaultVisible: true },
+  { key: "start",     label: "Giờ đăng",            defaultWidth: 155, minWidth: 100, defaultVisible: true },
   { key: "page",      label: "Page",                defaultWidth: 145, minWidth: 80,  defaultVisible: true },
   { key: "status",    label: "Trạng thái",          defaultWidth: 105, minWidth: 75,  defaultVisible: true },
   { key: "comment",   label: "Bình luận",           defaultWidth: 180, minWidth: 100, defaultVisible: true },
@@ -415,6 +402,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
     "postflow_dashboard_colorder_v1", COLUMN_DEFS.map((c) => c.key)
   );
+  const { ref: toolbarRef, height: toolbarHeight } = useElementHeight<HTMLDivElement>();
   const orderedCols = colOrder.map((k) => COLUMN_DEFS.find((c) => c.key === k)!).filter((c) => colVisible[c.key]);
 
   // ── Comment column popover (only one open at a time) ───────────────────────
@@ -830,7 +818,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
 
       {/* Filter tabs + action buttons */}
-      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
+      <div ref={toolbarRef} className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden">
           {STATUS_FILTERS.map((s) => (
@@ -846,7 +834,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-1.5 overflow-x-auto min-w-0 [&::-webkit-scrollbar]:hidden lg:justify-end">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0 lg:justify-end">
           {/* Page multi-select + preset */}
           <div className="w-40 shrink-0">
             <PageMultiSelect connections={connections} selected={selectedPageIds} onChange={setSelectedPageIds} />
@@ -914,7 +902,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         <EmptyState title="Chưa có bài nào"
           action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
       ) : (
-        <div className="rounded-xl border shadow-sm bg-white dark:bg-slate-900 overflow-auto max-h-[calc(100vh-220px)]">
+        <div className="rounded-xl border shadow-sm bg-white dark:bg-slate-900 overflow-visible">
           <table className="text-sm border-collapse" style={{
               tableLayout: "fixed",
               width: orderedCols.reduce((s, c) => s + colWidths[c.key], 40),
@@ -926,7 +914,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 <col key={col.key} style={{ width: colWidths[col.key] }} />
               ))}
             </colgroup>
-            <thead className="sticky top-0 z-20">
+            <thead className="sticky z-20" style={{ top: toolbarHeight }}>
               <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
                 <th className="w-10 px-3 py-3 sticky left-0 bg-slate-50 dark:bg-slate-800/80 z-10">
                   <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">
