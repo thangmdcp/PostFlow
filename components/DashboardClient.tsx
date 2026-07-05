@@ -107,9 +107,26 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   useEffect(() => { setLocalPosts(posts); }, [posts]);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [selectedPageIds, setSelectedPageIds] = useState<string[]>(
+  const [selectedPageIds, setSelectedPageIdsRaw] = useState<string[]>(
     connections[0] ? [connections[0].pageId] : []
   );
+  // Shares the same server-side "batchDefaultPageIds" key BatchImportClient's
+  // pre-batch panel writes to — otherwise this reset to connections[0] on
+  // every reload, making it look like unchecking a page never stuck.
+  function setSelectedPageIds(ids: string[]) {
+    setSelectedPageIdsRaw(ids);
+    syncAppConfig({ batchDefaultPageIds: JSON.stringify(ids) });
+  }
+  useEffect(() => {
+    fetch("/api/app-config").then((r) => r.json()).then((cfg: Record<string, string>) => {
+      if (cfg.batchDefaultPageIds === undefined) return;
+      try {
+        const ids = (JSON.parse(cfg.batchDefaultPageIds) as string[]).filter((id) => connections.some((c) => c.pageId === id));
+        setSelectedPageIdsRaw(ids);
+      } catch { /* ignore */ }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
   const { show, ToastComponent } = useToast();
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -914,7 +931,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             </colgroup>
             <thead className="sticky top-0 z-20">
               <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
-                <th className="w-10 px-3 py-3 sticky left-0 bg-slate-50 dark:bg-slate-800/80 z-10">
+                <th className="w-10 px-3 py-3">
                   <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">
                     {allChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
                   </button>
@@ -970,7 +987,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                     ].join(" ")}>
 
                     {/* Checkbox */}
-                    <td className={`px-3 py-2.5 sticky left-0 z-20 ${isChecked ? "bg-blue-50 dark:bg-blue-900/10" : "bg-white dark:bg-slate-900 group-hover:bg-slate-50/70 dark:group-hover:bg-slate-800/30"}`}>
+                    <td className="px-3 py-2.5">
                       <button onClick={() => toggleCheck(post.id)} className="text-slate-400 hover:text-blue-600 transition-colors">
                         {isChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
                       </button>
