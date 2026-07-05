@@ -10,7 +10,7 @@ export default async function DashboardPage() {
       prisma.post.findMany({
         where: { status: { in: ["pending", "publishing", "done", "failed"] } },
         orderBy: { createdAt: "desc" },
-        include: { extractedLinks: true },
+        include: { extractedLinks: true, comments: true },
         take: 100,
       }),
       prisma.fbConnection.findMany({ orderBy: { createdAt: "desc" } }),

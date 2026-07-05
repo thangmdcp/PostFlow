@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import type { Post, ExtractedLink, FbConnection, FbAdAccount } from "@prisma/client";
+import type { Post, ExtractedLink, FbConnection, FbAdAccount, PostComment } from "@prisma/client";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { formatDate, truncate } from "@/lib/utils";
@@ -20,8 +20,10 @@ import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignT
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
+import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { useColumnOrder } from "@/lib/useColumnOrder";
 
-type PostWithLinks = Post & { extractedLinks: ExtractedLink[] };
+type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
 const EMPTY_AD_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
@@ -63,21 +65,15 @@ interface Props {
 
 function ScheduledTime({ date }: { date: Date | string }) {
   const d = new Date(date);
-  const now = new Date();
-  const diffMs = d.getTime() - now.getTime();
-
   const timeStr = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
   const dateStr = d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  const isOverdue = diffMs < 0;
-
   return (
     <div className="flex items-center gap-1.5">
-      <Clock size={12} className={isOverdue ? "text-red-400" : "text-slate-400"} />
-      <span className={`text-xs tabular-nums ${isOverdue ? "text-red-500" : "text-slate-700 dark:text-slate-300"}`}>
+      <Clock size={12} className="text-slate-400" />
+      <span className="text-xs tabular-nums text-slate-700 dark:text-slate-300">
         {timeStr} · {dateStr}
       </span>
-      {isOverdue && <span className="text-xs text-red-400">Đã qua</span>}
     </div>
   );
 }
@@ -93,7 +89,7 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
 };
 
 // ── Column config ─────────────────────────────────────────────────────────────
-type ColKey = "campaign" | "content" | "budget" | "age" | "gender" | "start" | "page" | "status" | "actions";
+type ColKey = "campaign" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "actions";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "campaign",  label: "Tên chiến dịch",    defaultWidth: 210, minWidth: 100, defaultVisible: true },
@@ -101,9 +97,11 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "budget",    label: "Ngân sách",           defaultWidth: 105, minWidth: 70,  defaultVisible: true },
   { key: "age",       label: "Độ tuổi",             defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
   { key: "gender",    label: "Giới tính",           defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
+  { key: "account",   label: "TKQC",                defaultWidth: 130, minWidth: 90,  defaultVisible: true },
   { key: "start",     label: "Bắt đầu",             defaultWidth: 155, minWidth: 100, defaultVisible: true },
   { key: "page",      label: "Page",                defaultWidth: 145, minWidth: 80,  defaultVisible: true },
   { key: "status",    label: "Trạng thái",          defaultWidth: 105, minWidth: 75,  defaultVisible: true },
+  { key: "comment",   label: "Bình luận",           defaultWidth: 180, minWidth: 100, defaultVisible: true },
   { key: "actions",   label: "Hành động",           defaultWidth: 145, minWidth: 90,  defaultVisible: true },
 ];
 
@@ -414,6 +412,22 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [colVisible, setColVisible] = useState<Record<ColKey, boolean>>(defaultVisible);
   const [colPanelOpen, setColPanelOpen] = useState(false);
   const colPanelRef = useRef<HTMLDivElement>(null);
+  const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
+    "postflow_dashboard_colorder_v1", COLUMN_DEFS.map((c) => c.key)
+  );
+  const orderedCols = colOrder.map((k) => COLUMN_DEFS.find((c) => c.key === k)!).filter((c) => colVisible[c.key]);
+
+  // ── Comment column popover (only one open at a time) ───────────────────────
+  const [openCommentPopoverId, setOpenCommentPopoverId] = useState<string | null>(null);
+  const commentPopoverRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openCommentPopoverId) return;
+    function handler(e: MouseEvent) {
+      if (commentPopoverRef.current && !commentPopoverRef.current.contains(e.target as Node)) setOpenCommentPopoverId(null);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openCommentPopoverId]);
 
   // ── Date range filter ─────────────────────────────────────────────────────
   type DatePreset = "today" | "yesterday" | "last7" | "last30" | "thisMonth" | "custom";
@@ -816,7 +830,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
 
       {/* Filter tabs + action buttons */}
-      <div className="flex flex-col gap-2.5 mb-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden">
           {STATUS_FILTERS.map((s) => (
@@ -900,35 +914,40 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         <EmptyState title="Chưa có bài nào"
           action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
       ) : (
-        <div className="rounded-xl border overflow-x-auto shadow-sm bg-white dark:bg-slate-900">
+        <div className="rounded-xl border shadow-sm bg-white dark:bg-slate-900 overflow-auto max-h-[calc(100vh-220px)]">
           <table className="text-sm border-collapse" style={{
               tableLayout: "fixed",
-              width: COLUMN_DEFS.filter((c) => colVisible[c.key]).reduce((s, c) => s + colWidths[c.key], 40),
+              width: orderedCols.reduce((s, c) => s + colWidths[c.key], 40),
               minWidth: "100%",
             }}>
             <colgroup>
               <col style={{ width: 40 }} />
-              {COLUMN_DEFS.filter((c) => colVisible[c.key]).map((col) => (
+              {orderedCols.map((col) => (
                 <col key={col.key} style={{ width: colWidths[col.key] }} />
               ))}
             </colgroup>
-            <thead>
+            <thead className="sticky top-0 z-20">
               <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
                 <th className="w-10 px-3 py-3 sticky left-0 bg-slate-50 dark:bg-slate-800/80 z-10">
                   <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">
                     {allChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
                   </button>
                 </th>
-                {COLUMN_DEFS.filter((c) => colVisible[c.key]).map((col) => (
+                {orderedCols.map((col) => (
                   <th key={col.key}
-                    className="relative text-left px-3 py-3 font-semibold text-slate-600 dark:text-slate-300 text-xs whitespace-nowrap border-l border-slate-100 dark:border-slate-700/50"
+                    draggable
+                    onDragStart={onDragStart(col.key)}
+                    onDragOver={onDragOver}
+                    onDrop={onDrop(col.key)}
+                    className={`relative text-left px-3 py-3 font-semibold text-slate-600 dark:text-slate-300 text-xs whitespace-nowrap border-l border-slate-100 dark:border-slate-700/50 cursor-grab active:cursor-grabbing ${dragKey === col.key ? "opacity-40" : ""}`}
                     style={{ width: colWidths[col.key], maxWidth: colWidths[col.key] }}>
                     {/* Label — padded right so it doesn't overlap the resize handle */}
-                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", paddingRight: 16 }}>
+                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", paddingRight: 16 }} title="Kéo để đổi vị trí cột">
                       {col.label}
                     </span>
                     {/* Resize handle — inline style so overflow:hidden on parent can't clip it */}
                     <div
+                      draggable={false}
                       onMouseDown={(e) => onResizeMouseDown(col.key, e)}
                       title="Kéo để thay đổi độ rộng"
                       style={{
@@ -956,6 +975,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 const budget = (post as PostWithLinks & { adBudget?: string }).adBudget;
                 const ageMin = (post as PostWithLinks & { adAgeMin?: number }).adAgeMin;
                 const ageMax = (post as PostWithLinks & { adAgeMax?: number }).adAgeMax;
+                const accountName = adAccounts.find((a) => a.accountId === post.adAccountUsed)?.name;
 
                 return (
                   <tr key={post.id}
@@ -970,7 +990,9 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </button>
                     </td>
 
-                    {colVisible.campaign && (
+                    {orderedCols.map((col) => (
+                    <Fragment key={col.key}>
+                    {col.key === "campaign" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-2">
                           {post.thumbnailUrl ? (
@@ -987,7 +1009,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.content && (
+                    {col.key === "content" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed break-words whitespace-pre-wrap">
                           {post.finalCaption ?? post.rawCaption ?? "Chưa có nội dung"}
@@ -995,7 +1017,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.budget && (
+                    {col.key === "budget" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         {budget ? (
                           <span className="text-xs font-medium text-slate-700 dark:text-slate-300 tabular-nums">
@@ -1005,7 +1027,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.age && (
+                    {col.key === "age" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         {ageMin && ageMax
                           ? <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums">{ageMin} – {ageMax}</span>
@@ -1013,7 +1035,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.gender && (
+                    {col.key === "gender" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         {rawGender != null
                           ? <span className="text-xs text-slate-700 dark:text-slate-300">{genderLabel}</span>
@@ -1021,14 +1043,24 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.start && (
+                    {col.key === "account" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.adCampaignId
+                          ? (accountName
+                              ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{accountName}</span>
+                              : <span className="text-slate-300 text-xs">Tự động</span>)
+                          : <span className="text-slate-300 text-xs">–</span>}
+                      </td>
+                    )}
+
+                    {col.key === "start" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         {post.scheduledAt || post.fbPostUrl ? (
                           <div className="flex items-center gap-1.5">
                             {post.scheduledAt && <ScheduledTime date={post.scheduledAt} />}
                             {post.fbPostUrl && (
                               <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
-                                className="inline-flex items-center text-blue-600 hover:text-blue-700 shrink-0">
+                                className="inline-flex items-center text-green-600 hover:text-green-700 shrink-0">
                                 <ExternalLink size={12} />
                               </a>
                             )}
@@ -1038,7 +1070,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                     )}
 
 
-                    {colVisible.page && (
+                    {col.key === "page" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <span className="text-xs text-slate-600 dark:text-slate-400 truncate block" title={pageName}>
                           {pageName}
@@ -1046,14 +1078,50 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {colVisible.status && (
+                    {col.key === "status" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <StatusBadge status={post.status} />
                         {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.errorMsg}</p>}
                       </td>
                     )}
 
-                    {colVisible.actions && (
+                    {col.key === "comment" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.comments.length > 1 ? (
+                          <div className="relative" ref={openCommentPopoverId === post.id ? commentPopoverRef : undefined}>
+                            <button type="button" onClick={() => setOpenCommentPopoverId(v => v === post.id ? null : post.id)}
+                              className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
+                              {post.comments.length} comment
+                            </button>
+                            {openCommentPopoverId === post.id && (
+                              <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
+                                {post.comments.map(c => (
+                                  <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
+                                    <CommentStatusBadge
+                                      commentStatus={c.status}
+                                      commentNextAttemptAt={c.nextAttemptAt}
+                                      commentAttempt={c.attempt}
+                                      commentText={c.text}
+                                      errorMsg={c.errorMsg}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : post.comments.length === 1 ? (
+                          <CommentStatusBadge
+                            commentStatus={post.comments[0].status}
+                            commentNextAttemptAt={post.comments[0].nextAttemptAt}
+                            commentAttempt={post.comments[0].attempt}
+                            commentText={post.comments[0].text}
+                            errorMsg={post.comments[0].errorMsg}
+                          />
+                        ) : <span className="text-slate-300 text-xs">–</span>}
+                      </td>
+                    )}
+
+                    {col.key === "actions" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
                           {post.status === "done" && (
@@ -1085,6 +1153,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                         </div>
                       </td>
                     )}
+                    </Fragment>
+                    ))}
                   </tr>
                 );
               })}

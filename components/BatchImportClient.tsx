@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import useSWR, { mutate as globalMutate, type KeyedMutator } from "swr";
 import * as XLSX from "xlsx";
 import type { Post, ExtractedLink, FbConnection, PostComment } from "@prisma/client";
@@ -22,6 +22,8 @@ import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSet
 import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
+import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { useColumnOrder } from "@/lib/useColumnOrder";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -1190,7 +1192,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500";
   const numInp = inp + " w-16 text-center";
   const activeColumnDefs = COLUMN_DEFS.filter(c => c.key !== "comment" || commentEnabled);
-  const visibleCols = activeColumnDefs.filter(c => colVisible[c.key]);
+  const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
+    "postflow_batch_colorder_v1", COLUMN_DEFS.map(c => c.key)
+  );
+  const visibleCols = colOrder
+    .map(k => activeColumnDefs.find(c => c.key === k))
+    .filter((c): c is typeof activeColumnDefs[number] => !!c && colVisible[c.key]);
   const tableWidth = 40 + visibleCols.reduce((s, c) => s + colWidths[c.key], 0);
 
   return (
@@ -1319,13 +1326,13 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       <div className="flex gap-4 items-start">
       <div className="flex-1 min-w-0">
       {/* ── Table ── */}
-      <div className="rounded-2xl border bg-card shadow-sm overflow-x-auto">
+      <div className="rounded-2xl border bg-card shadow-sm overflow-auto max-h-[calc(100vh-160px)]">
         <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
           <colgroup>
             <col style={{ width: 40 }} />
             {visibleCols.map(c => <col key={c.key} style={{ width: colWidths[c.key] }} />)}
           </colgroup>
-          <thead>
+          <thead className="sticky top-0 z-20">
             <tr className="border-b bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-medium">
               <th className="px-3 py-2.5 text-center">
                 <button onClick={toggleAll} className="text-slate-400 hover:text-slate-700">
@@ -1333,10 +1340,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 </button>
               </th>
               {visibleCols.map(col => (
-                <th key={col.key} className="text-left py-2.5 pl-3 pr-2 relative select-none"
+                <th key={col.key}
+                  draggable
+                  onDragStart={onDragStart(col.key)}
+                  onDragOver={onDragOver}
+                  onDrop={onDrop(col.key)}
+                  className={`text-left py-2.5 pl-3 pr-2 relative select-none cursor-grab active:cursor-grabbing ${dragKey === col.key ? "opacity-40" : ""}`}
                   style={{ width: colWidths[col.key], maxWidth: colWidths[col.key] }}>
-                  <span className="pr-3 truncate block">{col.label}</span>
-                  <div onMouseDown={(e) => onResizeMouseDown(col.key, e)}
+                  <span className="pr-3 truncate block" title="Kéo để đổi vị trí cột">{col.label}</span>
+                  <div draggable={false} onMouseDown={(e) => onResizeMouseDown(col.key, e)}
                     className="group/resize absolute right-0 top-0 bottom-0 w-3 flex items-center justify-center cursor-col-resize hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors">
                     <div className="w-px h-4 bg-slate-200 opacity-0 group-hover/resize:opacity-60 transition-opacity" />
                   </div>
@@ -1367,6 +1379,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 adAccounts={adAccounts}
                 colVisible={colVisible}
                 colWidths={colWidths}
+                visibleCols={visibleCols}
                 onCtaHeadlineChange={(postId, value) => setRowAdParams(prev => ({
                   ...prev,
                   [postId]: { ...(prev[postId] ?? genRowParams(adConfig)), ctaHeadline: value },
@@ -1451,6 +1464,7 @@ interface PostRowProps {
   adAccounts: { accountId: string; name: string }[];
   colVisible: Record<ColKey, boolean>;
   colWidths: Record<ColKey, number>;
+  visibleCols: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[];
   onCtaHeadlineChange: (postId: string, value: string) => void;
   justImportedLinkIds: Set<string>;
   commentEnabled: boolean;
@@ -1547,83 +1561,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   return null;
 }
 
-// Same shape/states as AdStatusBadge, just for the comment pipeline.
-function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, errorMsg }: {
-  commentStatus: string | null | undefined;
-  commentNextAttemptAt: Date | string | null | undefined;
-  commentAttempt: number | null | undefined;
-  commentText: string | null | undefined;
-  errorMsg: string | null | undefined;
-}) {
-  const [now, setNow] = useState<number | null>(null);
-
-  useEffect(() => {
-    setNow(Date.now());
-    if (commentStatus !== "pending" || !commentNextAttemptAt) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [commentStatus, commentNextAttemptAt]);
-
-  if (!commentStatus || commentStatus === "skipped") return null;
-
-  if (commentStatus === "creating") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 whitespace-nowrap">
-        <Loader2 size={8} className="animate-spin shrink-0" /> Đang bình luận
-      </div>
-    );
-  }
-
-  if (commentStatus === "done") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700" title={commentText ?? undefined}>
-        <CheckCircle2 size={10} className="shrink-0" />
-        <span className="line-clamp-2">{commentText}</span>
-      </div>
-    );
-  }
-
-  if (commentStatus === "failed") {
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
-        title={errorMsg ?? undefined}>
-        <span className="truncate">Lỗi bình luận (lần {commentAttempt ?? 0})</span>
-      </div>
-    );
-  }
-
-  if (commentStatus === "pending" && commentNextAttemptAt) {
-    if (now === null) {
-      return (
-        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
-          <Clock size={8} className="shrink-0" /> Chờ bình luận
-        </div>
-      );
-    }
-    const remainingMs = new Date(commentNextAttemptAt).getTime() - now;
-    if (remainingMs <= 0) {
-      return (
-        <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
-          <Loader2 size={8} className="animate-spin shrink-0" /> Sắp bình luận
-        </div>
-      );
-    }
-    const totalSec = Math.ceil(remainingMs / 1000);
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    return (
-      <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
-        title="Thời gian còn lại tới lần bình luận tiếp theo">
-        <Clock size={8} className="shrink-0" />
-        <span className="tabular-nums">{m}:{String(s).padStart(2, "0")}</span>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview }: PostRowProps) {
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, visibleCols, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -1711,7 +1649,9 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         </button>
       </td>
 
-      {cell("status",
+      {visibleCols.map((col) => (
+      <Fragment key={col.key}>
+      {col.key === "status" && cell("status",
         <div className="space-y-1">
           <StatusBadge status={status} />
           {status === "failed" && post.errorMsg && (
@@ -1727,7 +1667,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         </div>
       )}
 
-      {cell("title",
+      {col.key === "title" && cell("title",
         status === "fetching"
           ? <div className="flex items-center gap-2">
               <div className="h-9 w-9 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0">
@@ -1755,7 +1695,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             </div>
       )}
 
-      {cell("caption",
+      {col.key === "caption" && cell("caption",
         status === "fetching"
           ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><div className="space-y-1 flex-1"><Skeleton className="h-2 w-full rounded" /><Skeleton className="h-2 w-3/4 rounded" /></div></div>
           : displayCaption ? (
@@ -1772,7 +1712,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           ) : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("linkAff",
+      {col.key === "linkAff" && cell("linkAff",
         status === "fetching"
           ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><Skeleton className="h-6 flex-1 rounded" /></div>
           : links.length === 0
@@ -1784,7 +1724,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               </div>
       )}
 
-      {cell("scheduledAt",
+      {col.key === "scheduledAt" && cell("scheduledAt",
         status === "pending" && post.scheduledAt ? (
           <span className="flex items-center gap-1 text-amber-600 text-[11px]"><Calendar size={11} />{fmtVn7(dateToVn7(new Date(post.scheduledAt)))}</span>
         ) : status === "done" ? (
@@ -1797,31 +1737,31 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         ) : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("page",
+      {col.key === "page" && cell("page",
         pageName
           ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{pageName}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("age",
+      {col.key === "age" && cell("age",
         runAds && rowAdParams
           ? <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums font-medium">{ageDisplay}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("gender",
+      {col.key === "gender" && cell("gender",
         runAds && rowAdParams
           ? <span className="text-xs text-slate-700 dark:text-slate-300">{genderDisplay}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("budget",
+      {col.key === "budget" && cell("budget",
         runAds && rowAdParams
           ? <span className="text-xs text-slate-700 dark:text-slate-300 tabular-nums font-medium">{budgetDisplay}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("account",
+      {col.key === "account" && cell("account",
         runAds
           ? (accountName
               ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{accountName}</span>
@@ -1829,20 +1769,20 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("runAds",
+      {col.key === "runAds" && cell("runAds",
         <span className={["text-[10px] px-2 py-1 rounded-full font-medium",
             runAds ? "bg-violet-50 text-violet-600" : "bg-slate-50 text-slate-400"].join(" ")}>
           {runAds ? "Bật" : "Tắt"}
         </span>
       )}
 
-      {cell("darkOverride",
+      {col.key === "darkOverride" && cell("darkOverride",
         adConfig.postType === "dark" && editable
           ? <span className="text-[10px] text-slate-500">{rowOverride ? "Đăng trang" : "Chạy ẩn"}</span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
-      {cell("ctaHeadline",
+      {col.key === "ctaHeadline" && cell("ctaHeadline",
         adConfig.postType === "dark" && rowAdParams
           ? <input
               type="text"
@@ -1853,7 +1793,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             />
           : <span className="text-slate-300 text-xs">–</span>
       )}
-      {commentEnabled && cell("comment",
+      {col.key === "comment" && commentEnabled && cell("comment",
         post.comments.length > 1 || commentJobsPreview.length > 1
           ? <div className="relative" ref={commentPopoverRef}>
               <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
@@ -1902,6 +1842,8 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                 </ul>
               : <span className="text-slate-300 text-xs">–</span>
       )}
+      </Fragment>
+      ))}
     </tr>
   );
 }
