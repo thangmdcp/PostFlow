@@ -48,10 +48,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        // pb-6 matches <main>'s own py-6 content inset, so the collapse
-        // button's bottom edge lines up with the bottom of the table/panels
-        // in the main content area instead of sitting flush at the viewport edge.
-        "fixed inset-y-0 left-0 z-40 flex flex-col pb-6 bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 shadow-[1px_0_0_0_rgba(0,0,0,0.02)] transition-all duration-200",
+        // pb-[65px] is calibrated (via getBoundingClientRect in preview) so the
+        // collapse button's border-top divider — not its bottom edge — lines up
+        // exactly with the bottom border of the table/panels in the main content area.
+        "fixed inset-y-0 left-0 z-40 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 shadow-[1px_0_0_0_rgba(0,0,0,0.02)] transition-all duration-200",
         collapsed ? "w-16" : "w-52"
       )}
     >
@@ -103,15 +103,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </ul>
       </nav>
 
-      {/* Collapse / expand control */}
-      <button
-        onClick={onToggle}
-        className="mt-auto flex items-center justify-center gap-2 border-t border-slate-200/80 dark:border-slate-800 py-3 text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-white transition-colors duration-200 w-full"
-        title={collapsed ? "Mở rộng" : "Thu gọn"}
-      >
-        <ChevronLeft size={16} className={cn("transition-transform duration-200", collapsed && "rotate-180")} />
-        {!collapsed && <span className="text-xs font-medium">Thu gọn</span>}
-      </button>
+      {/* Collapse / expand control — divider lives on its own sibling div (not
+          the button) so its Y position can be tuned independently of the
+          button's own content height, to line up with the table's bottom border. */}
+      <div className="mt-auto">
+        <div className="border-t border-slate-200/80 dark:border-slate-800" />
+        <button
+          onClick={onToggle}
+          className="flex items-center justify-center gap-2 py-1 text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-white transition-colors duration-200 w-full"
+          title={collapsed ? "Mở rộng" : "Thu gọn"}
+        >
+          <ChevronLeft size={16} className={cn("transition-transform duration-200", collapsed && "rotate-180")} />
+          {!collapsed && <span className="text-xs font-medium">Thu gọn</span>}
+        </button>
+      </div>
     </aside>
   );
 }

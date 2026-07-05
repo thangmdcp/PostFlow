@@ -24,6 +24,7 @@ import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
 import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
+import { LinkBankPanel } from "@/components/LinkBankPanel";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
@@ -471,6 +472,15 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const extractUrl = (line: string) => { const m = line.match(/https?:\/\/\S+/); return m ? m[0] : null; };
   const urlCount = urlText.trim().split("\n").filter((u) => extractUrl(u)).length;
 
+  function handleBankImport(urls: string[]) {
+    setUrlText((prev) => {
+      const existing = new Set(prev.split("\n").map((l) => extractUrl(l.trim())).filter((u): u is string => !!u));
+      const toAdd = urls.filter((u) => !existing.has(u));
+      if (!toAdd.length) return prev;
+      return prev.trim() ? `${prev.trim()}\n${toAdd.join("\n")}` : toAdd.join("\n");
+    });
+  }
+
   const { data: batch, mutate: mutateBatch } = useSWR<BatchData>(
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
@@ -550,11 +560,14 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               {urlCount > 0 && <> · <span className="text-blue-600 font-medium">{urlCount} link hợp lệ</span></>}
             </p>
           </div>
-          <button onClick={handleFetch} disabled={loading || urlCount === 0}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm shrink-0">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
-            {loading ? "Đang xử lý..." : "Fetch tất cả"}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <LinkBankPanel connections={connections} onImport={handleBankImport} />
+            <button onClick={handleFetch} disabled={loading || urlCount === 0}
+              className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm shrink-0">
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+              {loading ? "Đang xử lý..." : "Fetch tất cả"}
+            </button>
+          </div>
         </div>
 
         {/* Main body: URLs left, ads settings right */}
