@@ -753,6 +753,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const bulkAbortRef = useRef<AbortController | null>(null);
   function stopBulkAction() {
     bulkAbortRef.current?.abort();
+    // Aborting only stops the client from sending further requests — any
+    // comment/ad retry already scheduled server-side (via waitUntil or a
+    // queued nextAttemptAt) keeps running unless told to stop too.
+    const ids = [...checkedIds];
+    if (ids.length) fetch("/api/posts/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => {});
   }
   const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
   const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>({});
@@ -1674,6 +1679,14 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
       <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
         title={errorMsg ?? undefined}>
         <span className="truncate">Lỗi tạo ads (lần {adAttempt ?? 0})</span>
+      </div>
+    );
+  }
+
+  if (adStatus === "cancelled") {
+    return (
+      <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500 whitespace-nowrap">
+        Đã dừng
       </div>
     );
   }

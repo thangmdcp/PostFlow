@@ -116,6 +116,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const bulkAbortRef = useRef<AbortController | null>(null);
   function stopBulkAction() {
     bulkAbortRef.current?.abort();
+    // Aborting only stops the client from sending further requests — any
+    // comment/ad retry already scheduled server-side (via waitUntil or a
+    // queued nextAttemptAt) keeps running unless told to stop too.
+    const ids = [...new Set([...checkedIds, ...drawerPostIds])];
+    if (ids.length) fetch("/api/posts/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => {});
   }
   const [selectedPageIds, setSelectedPageIdsRaw] = useState<string[]>(
     connections[0] ? [connections[0].pageId] : []

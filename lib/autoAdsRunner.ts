@@ -73,6 +73,12 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
 // the first attempt) without going through scheduleAutoAds' waitUntil.
 export async function attemptAutoAds(params: AutoAdsRunParams, attemptIndex: number): Promise<void> {
   const attemptNumber = attemptIndex + 1;
+  // Re-check here, right before doing anything — this is the only point
+  // that can actually catch a Stop click that landed after scheduleAutoAds'
+  // waitUntil() timer was already registered but before it fired.
+  const current = await prisma.post.findUnique({ where: { id: params.postId }, select: { adStatus: true } });
+  if (current?.adStatus === "cancelled") return;
+
   await prisma.post.update({
     where: { id: params.postId },
     data: { adStatus: "creating" },
