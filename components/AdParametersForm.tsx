@@ -12,23 +12,15 @@ export interface AdParametersFormProps {
   onAgeMinFromChange: (v: string) => void; onAgeMinToChange: (v: string) => void;
   onAgeMaxFromChange: (v: string) => void; onAgeMaxToChange: (v: string) => void;
   gender: string; onGenderChange: (v: string) => void;
-  budgetMin: string; budgetMax: string; budgetStep: string;
-  onBudgetMinChange: (v: string) => void; onBudgetMaxChange: (v: string) => void; onBudgetStepChange: (v: string) => void;
   /** "blue" (BatchImportClient's AdsConfigPanel) or "violet" (AdSettingsClient) accent for the gender toggle buttons */
   accent?: "blue" | "violet";
-  budgetLabel?: string;
-  budgetStepLabel?: string;
 }
 
 export function AdParametersForm({
   ageMinFrom, ageMinTo, ageMaxFrom, ageMaxTo,
   onAgeMinFromChange, onAgeMinToChange, onAgeMaxFromChange, onAgeMaxToChange,
   gender, onGenderChange,
-  budgetMin, budgetMax, budgetStep,
-  onBudgetMinChange, onBudgetMaxChange, onBudgetStepChange,
   accent = "violet",
-  budgetLabel = "Ngân sách",
-  budgetStepLabel = "Bước",
 }: AdParametersFormProps) {
   const ring = accent === "blue" ? "focus:ring-blue-500" : "focus:ring-violet-500";
   const inp = `rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 ${ring}`;
@@ -66,26 +58,6 @@ export function AdParametersForm({
               {o.label}
             </button>
           ))}
-        </div>
-      </div>
-
-      {/* Budget */}
-      <div className="space-y-0.5">
-        <div className="flex items-center gap-1 min-w-0">
-          <span className="shrink-0 w-[60px]" aria-hidden />
-          <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
-            <p className="text-[9px] text-slate-400 text-center">Min</p>
-            <p className="text-[9px] text-slate-400 text-center">Max</p>
-            <p className="text-[9px] text-slate-400 text-center">{budgetStepLabel}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1 min-w-0">
-          {budgetLabel && <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">{budgetLabel}</span>}
-          <div className="grid grid-cols-3 gap-1 flex-1 min-w-0">
-            <input type="number" value={budgetMin} onChange={e => onBudgetMinChange(e.target.value)} className={inp + " w-full text-center"} placeholder="100000" />
-            <input type="number" value={budgetMax} onChange={e => onBudgetMaxChange(e.target.value)} className={inp + " w-full text-center"} placeholder="200000" />
-            <input type="number" value={budgetStep} onChange={e => onBudgetStepChange(e.target.value)} className={inp + " w-full text-center"} placeholder="10000" />
-          </div>
         </div>
       </div>
     </div>

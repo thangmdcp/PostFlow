@@ -18,10 +18,11 @@ import { randomInteger, randomStep } from "@/lib/adSettings";
 import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import { ScheduleModeSelector, type ScheduleMode } from "@/components/ScheduleModeSelector";
 import { AutoAdsAccountEditor, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
+import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
-import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
+import { AdsConfigPanel, genRowParams, pickAccountAndBudget, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
 import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { LinkBankPanel } from "@/components/LinkBankPanel";
@@ -243,10 +244,14 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep }),
     }).then(r => r.ok ? r.json() : null).then(saved => { if (saved?.id) onSaved?.(saved.id); }).catch(() => {});
   }
+  // Adding/removing a row re-splits % evenly across all rows (1→100%,
+  // 2→50/50, 3→33/33/34); editing one row's % pulls the difference from the
+  // others evenly instead of leaving the total off from 100%.
   function patchAccountRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
     setAccountRows(rows => {
-      const next = rows.map((r, i) => i === idx ? { ...r, ...patch } : r);
-      if (next[idx]) persistAccountRow(next[idx]);
+      let next = rows.map((r, i) => i === idx ? { ...r, ...patch } : r);
+      if (patch.weight !== undefined) next = rebalanceWeights(next, idx, patch.weight);
+      next.forEach(r => persistAccountRow(r));
       return next;
     });
   }
@@ -254,7 +259,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     setAccountRows(rows => {
       const row = rows[idx] as (AutoAdsAccountRowLike & { id?: string }) | undefined;
       if (row?.id) fetch(`/api/auto-ads-accounts/${row.id}`, { method: "DELETE" }).catch(() => {});
-      return rows.filter((_, i) => i !== idx);
+      const next = applyEvenWeights(rows.filter((_, i) => i !== idx));
+      next.forEach(r => persistAccountRow(r));
+      return next;
     });
   }
   function addAccountRow() {
@@ -263,10 +270,11 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
       weight: 0, budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep,
     };
-    setAccountRows(rows => [...rows, newRow]);
-    persistAccountRow(newRow, id => {
-      setAccountRows(rows => rows.map(r => r === newRow ? { ...r, id } : r));
-    });
+    const next = applyEvenWeights([...accountRows, newRow]);
+    setAccountRows(next);
+    next.forEach(r => persistAccountRow(r, id => {
+      if (r === newRow) setAccountRows(rows => rows.map(x => x === newRow ? { ...x, id } : x));
+    }));
   }
   function applyAccountRowsFromPreset(rows: AutoAdsAccountRowLike[]) {
     setAccountRows(rows);
@@ -837,9 +845,24 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const applyDefaultsToRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     const times = computeScheduleTimes(ids, scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime);
-    setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = genRowParams(adConfig); }); return n; });
+    const fallbackBudget = { budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep };
+    // Account + budget are picked together — budget must come from whichever
+    // account actually gets used, never a global range rolled beforehand.
+    const picks: Record<string, { accountId: string; budget: number }> = {};
+    ids.forEach(id => {
+      if (bulkAccountId) {
+        const row = localAccountRows.find(r => r.accountId === bulkAccountId);
+        picks[id] = {
+          accountId: bulkAccountId,
+          budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+        };
+      } else {
+        picks[id] = pickAccountAndBudget(localAccountRows, fallbackBudget);
+      }
+    });
+    setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = { ...genRowParams(adConfig), budget: picks[id].budget }; }); return n; });
     setRowPageId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = pickPage(); }); return n; });
-    setRowAccountId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = bulkAccountId || weightedPickAccount(localAccountRows); }); return n; });
+    setRowAccountId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = picks[id].accountId; }); return n; });
     setRowRunAds(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = adConfig.runAds; }); return n; });
     setPostTimes(prev => ({ ...prev, ...times }));
   }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, localAccountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
@@ -889,17 +912,26 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const targets = [...checkedIds];
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     if (randomFields.size === 0) { onToast("Chọn ít nhất 1 thông số để random", "error"); return; }
+    const fallbackBudget = { budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep };
     if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget") || randomFields.has("cta")) {
       setRowAdParams(prev => {
         const n = { ...prev };
         targets.forEach(id => {
-          const cur = n[id] ?? genRowParams(adConfig);
+          const cur = n[id] ?? { ...genRowParams(adConfig), budget: pickAccountAndBudget(localAccountRows, fallbackBudget).budget };
           const fresh = genRowParams(adConfig);
+          // Re-rolling budget uses the row's CURRENT account's own range —
+          // switching accounts is the separate "account" random field below.
+          const account = localAccountRows.find(r => r.accountId === rowAccountId[id]);
+          const freshBudget = randomStep(
+            Number(account?.budgetMin ?? fallbackBudget.budgetMin),
+            Number(account?.budgetMax ?? fallbackBudget.budgetMax),
+            Number(account?.budgetStep ?? fallbackBudget.budgetStep)
+          );
           n[id] = {
             ageMin: randomFields.has("age") ? fresh.ageMin : cur.ageMin,
             ageMax: randomFields.has("age") ? fresh.ageMax : cur.ageMax,
             gender: randomFields.has("gender") ? fresh.gender : cur.gender,
-            budget: randomFields.has("budget") ? fresh.budget : cur.budget,
+            budget: randomFields.has("budget") ? freshBudget : cur.budget,
             ctaHeadline: randomFields.has("cta") ? fresh.ctaHeadline : cur.ctaHeadline,
           };
         });
@@ -910,7 +942,24 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       setRowPageId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = pickPage(); }); return n; });
     }
     if (randomFields.has("account")) {
-      setRowAccountId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = bulkAccountId || weightedPickAccount(localAccountRows); }); return n; });
+      // Re-picking the account also re-rolls its budget from the NEW
+      // account's own range — keeping the old account's budget number
+      // attached to a different account is exactly the mismatch bug this
+      // whole account/budget pairing was built to avoid.
+      const newPicks: Record<string, { accountId: string; budget: number }> = {};
+      targets.forEach(id => {
+        if (bulkAccountId) {
+          const row = localAccountRows.find(r => r.accountId === bulkAccountId);
+          newPicks[id] = {
+            accountId: bulkAccountId,
+            budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+          };
+        } else {
+          newPicks[id] = pickAccountAndBudget(localAccountRows, fallbackBudget);
+        }
+      });
+      setRowAccountId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = newPicks[id].accountId; }); return n; });
+      setRowAdParams(prev => { const n = { ...prev }; targets.forEach(id => { if (n[id]) n[id] = { ...n[id], budget: newPicks[id].budget }; }); return n; });
     }
     onToast(`Đã random cho ${targets.length} bài`, "success");
   }

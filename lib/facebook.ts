@@ -1,6 +1,29 @@
 const FB_API = "https://graph.facebook.com/v19.0";
 const FB_VIDEO_API = "https://graph-video.facebook.com/v19.0";
 
+// Facebook's Marketing API takes daily_budget in the account currency's
+// smallest unit (cents for USD, etc.) — a "zero decimal" currency like VND
+// or JPY has no subunit, so its display value already IS the API value.
+// Full list per Meta's currency docs.
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG",
+  "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
+]);
+
+async function toFbMinorUnits(adAccountId: string, accessToken: string, amount: string): Promise<string> {
+  try {
+    const res = await fetch(`${FB_API}/act_${adAccountId}?fields=currency&access_token=${accessToken}`);
+    const json = await res.json();
+    const currency = (json.currency as string | undefined)?.toUpperCase();
+    const decimals = currency && ZERO_DECIMAL_CURRENCIES.has(currency) ? 0 : 2;
+    return String(Math.round(Number(amount) * 10 ** decimals));
+  } catch {
+    // If the currency lookup itself fails, fall back to the raw amount
+    // (matches the previous behavior) rather than blocking ad creation.
+    return amount;
+  }
+}
+
 export async function publishToPage(
   pageId: string,
   accessToken: string,
@@ -153,11 +176,18 @@ export async function cloneAdCampaign(
   gender?: string,
   adStatus: "ACTIVE" | "PAUSED" = "PAUSED"
 ): Promise<{ campaignId: string; adSetId: string; adId: string }> {
-  // 1. Get template campaign objective + adset targeting (like FB Ads tool)
-  const [campRes, adSetsRes] = await Promise.all([
+  // 1. Get template campaign objective + adset targeting (like FB Ads tool),
+  // and convert dailyBudget (in the account's display currency, e.g. "2.75"
+  // USD) into the minor-unit integer the Marketing API actually expects
+  // (e.g. "275" cents) — sending the display value directly only happens to
+  // work for zero-decimal currencies like VND, and silently fails/creates a
+  // near-zero budget for anything else (USD, EUR, ...).
+  const [campRes, adSetsRes, minorUnitBudget] = await Promise.all([
     fetch(`${FB_API}/${templateCampaignId}?fields=name,objective,special_ad_categories,daily_budget,lifetime_budget&access_token=${accessToken}`),
     fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,billing_event,optimization_goal&access_token=${accessToken}`),
+    toFbMinorUnits(adAccountId, accessToken, dailyBudget),
   ]);
+  dailyBudget = minorUnitBudget;
   const camp = await campRes.json();
   if (camp.error) throw new Error(`[get campaign] ${camp.error.message}`);
   const adSets = await adSetsRes.json();

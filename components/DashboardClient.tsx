@@ -19,6 +19,7 @@ import { PageMultiSelect, PresetPanel, pickRandomPage } from "@/components/PageS
 import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
+import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
@@ -227,10 +228,14 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
     });
   }
+  // Adding/removing a row re-splits % evenly across all rows (1→100%,
+  // 2→50/50, 3→33/33/34); editing one row's % pulls the difference from the
+  // others evenly instead of leaving the total off from 100%.
   function patchDrawerRow(idx: number, patch: Partial<AutoAdsAccountRowLike>) {
     setDrawerAccountRows((rows) => {
-      const next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
-      if (next[idx]) persistDrawerAccountRow(next[idx]);
+      let next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+      if (patch.weight !== undefined) next = rebalanceWeights(next, idx, patch.weight);
+      next.forEach((r) => persistDrawerAccountRow(r));
       return next;
     });
   }
@@ -238,17 +243,20 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     setDrawerAccountRows((rows) => {
       const row = rows[idx] as (AutoAdsAccountRowLike & { id?: string }) | undefined;
       if (row?.id) fetch(`/api/auto-ads-accounts/${row.id}`, { method: "DELETE" }).catch(() => {});
-      return rows.filter((_, i) => i !== idx);
+      const next = applyEvenWeights(rows.filter((_, i) => i !== idx));
+      next.forEach((r) => persistDrawerAccountRow(r));
+      return next;
     });
   }
   function addDrawerRow() {
     const firstFree = adAccountsFull.find((a) => !drawerAccountRows.some((r) => r.accountId === a.accountId));
     const newRow: AutoAdsAccountRowLike = {
       accountId: firstFree?.accountId ?? adAccountsFull[0]?.accountId ?? "",
-      weight: 1, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
+      weight: 0, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
     };
-    setDrawerAccountRows((rows) => [...rows, newRow]);
-    persistDrawerAccountRow(newRow);
+    const next = applyEvenWeights([...drawerAccountRows, newRow]);
+    setDrawerAccountRows(next);
+    next.forEach((r) => persistDrawerAccountRow(r));
   }
 
   function patchDrawerComment(patch: {

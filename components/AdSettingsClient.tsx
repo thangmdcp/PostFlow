@@ -5,6 +5,7 @@ import {
   Save, CheckCircle, Loader2, Megaphone,
 } from "lucide-react";
 import { loadAdSettings, saveAdSettings, type AdSettings } from "@/lib/adSettings";
+import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { ScheduleModeSelector } from "@/components/ScheduleModeSelector";
 import { AdParametersForm } from "@/components/AdParametersForm";
 import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
@@ -221,14 +222,17 @@ export function AdSettingsClient() {
   }
 
   // ── Account row helpers ───────────────────────────────────────────────────
+  // Adding/removing a row re-splits % evenly across all rows (1→100%,
+  // 2→50/50, 3→33/33/34); editing one row's % pulls the difference from the
+  // others evenly instead of leaving the total off from 100%.
   function addRow() {
     const firstFree = adAccounts.find((a) => !accountRows.some((r) => r.accountId === a.accountId));
-    setAccountRows((rows) => [...rows, {
+    setAccountRows((rows) => applyEvenWeights([...rows, {
       id: "", accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
       weight: 0, assignedCount: 0,
       budgetMin: batchBudgetMin, budgetMax: batchBudgetMax, budgetStep: batchBudgetStep,
       dirty: true, isNew: true,
-    }]);
+    }]).map((r) => ({ ...r, dirty: true })));
   }
 
   async function handleResetCounts() {
@@ -237,7 +241,10 @@ export function AdSettingsClient() {
   }
 
   function patchRow(idx: number, patch: Partial<AutoAdsAccountRow>) {
-    setAccountRows((rows) => rows.map((r, i) => i === idx ? { ...r, ...patch, dirty: true } : r));
+    setAccountRows((rows) => {
+      if (patch.weight !== undefined) return rebalanceWeights(rows, idx, patch.weight).map((r) => ({ ...r, dirty: true }));
+      return rows.map((r, i) => i === idx ? { ...r, ...patch, dirty: true } : r);
+    });
   }
 
   async function deleteRow(idx: number) {
@@ -245,7 +252,7 @@ export function AdSettingsClient() {
     if (!row.isNew && row.id) {
       await fetch(`/api/auto-ads-accounts/${row.id}`, { method: "DELETE" });
     }
-    setAccountRows((rows) => rows.filter((_, i) => i !== idx));
+    setAccountRows((rows) => applyEvenWeights(rows.filter((_, i) => i !== idx)).map((r) => ({ ...r, dirty: true })));
   }
 
   // ── Upsert account rows to server ────────────────────────────────────────
@@ -413,15 +420,11 @@ export function AdSettingsClient() {
 
             <AdParametersForm
               accent="violet"
-              budgetLabel="Ngân sách"
-              budgetStepLabel="Bước nhảy"
               ageMinFrom={batchAgeMinFrom} ageMinTo={batchAgeMinTo}
               ageMaxFrom={batchAgeMaxFrom} ageMaxTo={batchAgeMaxTo}
               onAgeMinFromChange={setBatchAgeMinFrom} onAgeMinToChange={setBatchAgeMinTo}
               onAgeMaxFromChange={setBatchAgeMaxFrom} onAgeMaxToChange={setBatchAgeMaxTo}
               gender={batchGender} onGenderChange={setBatchGender}
-              budgetMin={batchBudgetMin} budgetMax={batchBudgetMax} budgetStep={batchBudgetStep}
-              onBudgetMinChange={setBatchBudgetMin} onBudgetMaxChange={setBatchBudgetMax} onBudgetStepChange={setBatchBudgetStep}
             />
 
             {/* TKQC editable */}

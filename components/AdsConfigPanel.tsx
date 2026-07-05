@@ -19,17 +19,24 @@ export interface BatchAdConfig {
   ageMinFrom: string; ageMinTo: string;
   ageMaxFrom: string; ageMaxTo: string;
   gender: string;
+  // Kept as the fallback range for a freshly-added TKQC row (and for the
+  // rare case no accounts are configured at all) — no longer surfaced as
+  // its own editable field in "Thông số ads" since each account's own
+  // budget range (AutoAdsAccountEditor) is what actually gets used once an
+  // account is picked; see pickAccountAndBudget below.
   budgetMin: string; budgetMax: string; budgetStep: string;
   adStatus: "ACTIVE" | "PAUSED";
 }
 
 export interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
 
-export function genRowParams(cfg: BatchAdConfig): RowAdParams {
+// Budget is NOT included here — it depends on which TKQC account ends up
+// getting picked (each account has its own budget range), so it's resolved
+// together with the account pick via pickAccountAndBudget below, not here.
+export function genRowParams(cfg: BatchAdConfig): Omit<RowAdParams, "budget"> {
   const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
   const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
-  const budget = randomStep(Number(cfg.budgetMin), Number(cfg.budgetMax), Number(cfg.budgetStep));
-  return { ageMin, ageMax, budget, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
+  return { ageMin, ageMax, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
 }
 
 // Simple weighted-random TKQC account pick for the batch preview table (the
@@ -44,6 +51,26 @@ export function weightedPickAccount(rows: { accountId: string; weight: number }[
     if (r <= 0) return row.accountId;
   }
   return rows[rows.length - 1].accountId;
+}
+
+// Picks an account AND rolls its budget from THAT account's own min/max/step
+// — budget must never be rolled from a global range before the account is
+// known, since each TKQC can be configured with a completely different
+// currency/range (e.g. VND in the thousands vs. USD with 2-decimal steps).
+// `fallback` only applies when there are no TKQC rows configured at all.
+export function pickAccountAndBudget(
+  rows: AutoAdsAccountRowLike[],
+  fallback: { budgetMin: string; budgetMax: string; budgetStep: string } = { budgetMin: "100000", budgetMax: "200000", budgetStep: "10000" }
+): { accountId: string; budget: number } {
+  if (rows.length === 0) return { accountId: "", budget: randomStep(Number(fallback.budgetMin), Number(fallback.budgetMax), Number(fallback.budgetStep)) };
+  const accountId = weightedPickAccount(rows);
+  const row = rows.find((r) => r.accountId === accountId);
+  const budget = randomStep(
+    Number(row?.budgetMin ?? fallback.budgetMin),
+    Number(row?.budgetMax ?? fallback.budgetMax),
+    Number(row?.budgetStep ?? fallback.budgetStep)
+  );
+  return { accountId, budget };
 }
 
 interface AdsConfigPanelProps {
@@ -126,8 +153,6 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
             onAgeMinFromChange={v => onPatch({ ageMinFrom: v })} onAgeMinToChange={v => onPatch({ ageMinTo: v })}
             onAgeMaxFromChange={v => onPatch({ ageMaxFrom: v })} onAgeMaxToChange={v => onPatch({ ageMaxTo: v })}
             gender={adConfig.gender} onGenderChange={v => onPatch({ gender: v })}
-            budgetMin={adConfig.budgetMin} budgetMax={adConfig.budgetMax} budgetStep={adConfig.budgetStep}
-            onBudgetMinChange={v => onPatch({ budgetMin: v })} onBudgetMaxChange={v => onPatch({ budgetMax: v })} onBudgetStepChange={v => onPatch({ budgetStep: v })}
           />
         </div>
       )}
