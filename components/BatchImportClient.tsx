@@ -181,7 +181,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "runAds",      label: "Chạy ads",      defaultWidth: 90,  minWidth: 75,  defaultVisible: true },
   { key: "darkOverride",label: "Đăng trang",   defaultWidth: 100, minWidth: 80,  defaultVisible: true },
   { key: "ctaHeadline", label: "Tiêu đề CTA",   defaultWidth: 150, minWidth: 100, defaultVisible: true },
-  { key: "comment",     label: "Comment",       defaultWidth: 160, minWidth: 100, defaultVisible: true },
+  { key: "comment",     label: "Bình luận",     defaultWidth: 160, minWidth: 100, defaultVisible: true },
 ];
 
 const BATCH_COLS_KEY = "postflow_batch_cols_v1";
@@ -1734,7 +1734,10 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 
       {col.key === "scheduledAt" && cell("scheduledAt",
         (() => {
-          const effectiveDate = post.scheduledAt ?? (scheduledTime ? vn7ToDate(scheduledTime) : null);
+          // "Đăng ngay" posts never get a scheduledAt — once actually published,
+          // prefer the real updatedAt (bumped on publish) over the pre-publish
+          // draft time estimate, which goes stale the moment it's posted.
+          const effectiveDate = post.scheduledAt ?? (fbPostUrl ? post.updatedAt : (scheduledTime ? vn7ToDate(scheduledTime) : null));
           return effectiveDate || fbPostUrl ? (
             <div className="flex items-center gap-1.5">
               {effectiveDate && <ScheduledTime date={effectiveDate} />}
@@ -1805,54 +1808,65 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             />
           : <span className="text-slate-300 text-xs">–</span>
       )}
-      {col.key === "comment" && commentEnabled && cell("comment",
-        post.comments.length > 1 || commentJobsPreview.length > 1
-          ? <div className="relative" ref={commentPopoverRef}>
-              <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
-                className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
-                {post.comments.length > 0 ? post.comments.length : commentJobsPreview.length} comment
-              </button>
-              {commentPopoverOpen && (
-                <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
-                  {post.comments.length > 0
-                    ? post.comments.map(c => (
-                        <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
-                          <CommentStatusBadge
-                            commentStatus={c.status}
-                            commentNextAttemptAt={c.nextAttemptAt}
-                            commentAttempt={c.attempt}
-                            commentText={c.text}
-                            errorMsg={c.errorMsg}
-                          />
-                        </div>
-                      ))
-                    : commentJobsPreview.map((job, i) => (
-                        <div key={i} className="text-xs text-slate-600 dark:text-slate-300 p-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
-                          {job.text}
-                        </div>
-                      ))}
-                </div>
-              )}
-            </div>
-          : post.comments.length > 0
-            ? <div className="space-y-0.5">
-                {post.comments.map(c => (
-                  <CommentStatusBadge key={c.id}
-                    commentStatus={c.status}
-                    commentNextAttemptAt={c.nextAttemptAt}
-                    commentAttempt={c.attempt}
-                    commentText={c.text}
-                    errorMsg={c.errorMsg}
-                  />
-                ))}
+      {col.key === "comment" && commentEnabled && colVisible.comment && (
+        // Rendered directly instead of via cell() — that helper wraps content
+        // in an overflow-hidden div, which would clip the comment popover.
+        <td className="px-3 py-2 align-middle" style={{ width: colWidths.comment, maxWidth: colWidths.comment }}>
+          {post.comments.length > 1 || commentJobsPreview.length > 1
+            ? <div className="relative" ref={commentPopoverRef}>
+                <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
+                  className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
+                  {post.comments.length > 0 ? post.comments.length : commentJobsPreview.length} comment
+                </button>
+                {commentPopoverOpen && (
+                  <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
+                    {post.comments.length > 0
+                      ? post.comments.map(c => (
+                          <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
+                            <CommentStatusBadge
+                              commentStatus={c.status}
+                              commentNextAttemptAt={c.nextAttemptAt}
+                              commentAttempt={c.attempt}
+                              commentText={c.text}
+                              commentImageUrl={c.imageUrl}
+                              errorMsg={c.errorMsg}
+                            />
+                          </div>
+                        ))
+                      : commentJobsPreview.map((job, i) => (
+                          <div key={i} className="text-xs text-slate-600 dark:text-slate-300 p-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
+                            {job.text}
+                            {job.imageUrl && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={job.imageUrl} alt="" referrerPolicy="no-referrer"
+                                className="mt-1.5 max-h-28 w-full rounded-md object-cover border border-slate-100 dark:border-slate-800" />
+                            )}
+                          </div>
+                        ))}
+                  </div>
+                )}
               </div>
-            : commentJobsPreview.length > 0
-              ? <ul className="space-y-0.5">
-                  {commentJobsPreview.map((job, i) => (
-                    <li key={i} className="text-xs text-slate-500 line-clamp-1">• {job.text}</li>
+            : post.comments.length > 0
+              ? <div className="space-y-0.5">
+                  {post.comments.map(c => (
+                    <CommentStatusBadge key={c.id}
+                      commentStatus={c.status}
+                      commentNextAttemptAt={c.nextAttemptAt}
+                      commentAttempt={c.attempt}
+                      commentText={c.text}
+                      commentImageUrl={c.imageUrl}
+                      errorMsg={c.errorMsg}
+                    />
                   ))}
-                </ul>
-              : <span className="text-slate-300 text-xs">–</span>
+                </div>
+              : commentJobsPreview.length > 0
+                ? <ul className="space-y-0.5">
+                    {commentJobsPreview.map((job, i) => (
+                      <li key={i} className="text-xs text-slate-500 line-clamp-1">• {job.text}</li>
+                    ))}
+                  </ul>
+                : <span className="text-slate-300 text-xs">–</span>}
+        </td>
       )}
       </Fragment>
       ))}

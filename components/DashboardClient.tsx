@@ -576,9 +576,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     document.addEventListener("mouseup", onUp);
   }
 
+  // Filter by the same date the "Giờ đăng" column shows (scheduledAt, falling
+  // back to updatedAt for immediate "Đăng ngay" posts) — not createdAt, so
+  // e.g. posts scheduled today for tomorrow/the day after show up when the
+  // user picks tomorrow/the day after, not "today" (when they were created).
   const dateFiltered = (dateFrom && dateTo)
     ? localPosts.filter((p) => {
-        const d = new Date(p.createdAt);
+        const d = new Date(p.scheduledAt ?? (p.fbPostUrl ? p.updatedAt : p.createdAt));
         return d >= dateFrom! && d <= dateTo!;
       })
     : localPosts;
@@ -1056,21 +1060,28 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
-                    {col.key === "start" && (
-                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
-                        {post.scheduledAt || post.fbPostUrl ? (
-                          <div className="flex items-center gap-1.5">
-                            {post.scheduledAt && <ScheduledTime date={post.scheduledAt} />}
-                            {post.fbPostUrl && (
-                              <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
-                                className="inline-flex items-center text-green-600 hover:text-green-700 shrink-0">
-                                <ExternalLink size={12} />
-                              </a>
-                            )}
-                          </div>
-                        ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
-                      </td>
-                    )}
+                    {col.key === "start" && (() => {
+                      // "Đăng ngay" posts never get a scheduledAt (only the batch/
+                      // cron scheduling flow sets it) — fall back to updatedAt,
+                      // which is bumped right when the post flips to "done" on a
+                      // successful immediate publish, so the column isn't blank.
+                      const effectiveDate = post.scheduledAt ?? (post.fbPostUrl ? post.updatedAt : null);
+                      return (
+                        <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                          {effectiveDate || post.fbPostUrl ? (
+                            <div className="flex items-center gap-1.5">
+                              {effectiveDate && <ScheduledTime date={effectiveDate} />}
+                              {post.fbPostUrl && (
+                                <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
+                                  className="inline-flex items-center text-green-600 hover:text-green-700 shrink-0">
+                                  <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </div>
+                          ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
+                        </td>
+                      );
+                    })()}
 
 
                     {col.key === "page" && (
@@ -1089,7 +1100,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                     )}
 
                     {col.key === "comment" && (
-                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                      // No overflow-hidden here (unlike other columns) — it would
+                      // clip the comment popover, which needs to render outside
+                      // this cell's bounds.
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50" style={{ maxWidth: 0 }}>
                         {post.comments.length > 1 ? (
                           <div className="relative" ref={openCommentPopoverId === post.id ? commentPopoverRef : undefined}>
                             <button type="button" onClick={() => setOpenCommentPopoverId(v => v === post.id ? null : post.id)}
@@ -1105,6 +1119,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                                       commentNextAttemptAt={c.nextAttemptAt}
                                       commentAttempt={c.attempt}
                                       commentText={c.text}
+                                      commentImageUrl={c.imageUrl}
                                       errorMsg={c.errorMsg}
                                     />
                                   </div>
@@ -1118,6 +1133,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                             commentNextAttemptAt={post.comments[0].nextAttemptAt}
                             commentAttempt={post.comments[0].attempt}
                             commentText={post.comments[0].text}
+                            commentImageUrl={post.comments[0].imageUrl}
                             errorMsg={post.comments[0].errorMsg}
                           />
                         ) : <span className="text-slate-300 text-xs">–</span>}

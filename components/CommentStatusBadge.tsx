@@ -3,11 +3,12 @@
 import { useState, useEffect, useRef } from "react";
 import { Loader2, CheckCircle2, Clock, Eye } from "lucide-react";
 
-export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, errorMsg }: {
+export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, commentImageUrl, errorMsg }: {
   commentStatus: string | null | undefined;
   commentNextAttemptAt: Date | string | null | undefined;
   commentAttempt: number | null | undefined;
   commentText: string | null | undefined;
+  commentImageUrl?: string | null;
   errorMsg: string | null | undefined;
 }) {
   const [now, setNow] = useState<number | null>(null);
@@ -51,6 +52,11 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
           <div onClick={(e) => e.stopPropagation()}
             className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border bg-white dark:bg-slate-900 shadow-xl p-2.5 text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">
             {commentText}
+            {commentImageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={commentImageUrl} alt="" referrerPolicy="no-referrer"
+                className="mt-1.5 max-h-32 w-full rounded-md object-cover border border-slate-100 dark:border-slate-800" />
+            )}
             {commentStatus === "failed" && errorMsg && (
               <p className="mt-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 text-red-500">{errorMsg}</p>
             )}
