@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { CustomSelect } from "@/components/ui/CustomSelect";
 
 export interface AutoAdsAccountRowLike {
   accountId: string;
@@ -92,9 +93,8 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
           {rows.map((row, idx) => (
             <div key={idx} className={["rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2", row.dirty ? "border-violet-300" : ""].join(" ")}>
               <div className="flex items-center gap-2">
-                <select value={row.accountId} onChange={e => onPatchRow(idx, { accountId: e.target.value })} className={inp + " flex-1 min-w-0"}>
-                  {adAccounts.map(a => <option key={a.accountId} value={a.accountId}>{a.name}</option>)}
-                </select>
+                <CustomSelect className="flex-1 min-w-0" value={row.accountId} onChange={v => onPatchRow(idx, { accountId: v })}
+                  options={adAccounts.map(a => ({ value: a.accountId, label: a.name }))} />
                 <div className="flex items-center gap-1 shrink-0">
                   <input type="number" min={1} max={100} value={row.weight} onChange={e => onPatchRow(idx, { weight: Number(e.target.value) })}
                     className={inp + " w-14 text-center"} />

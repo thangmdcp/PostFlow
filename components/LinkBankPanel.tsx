@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Bookmark, ChevronDown, Loader2 } from "lucide-react";
 import type { FbConnection } from "@prisma/client";
 import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
+import { CustomSelect } from "@/components/ui/CustomSelect";
 
 interface BankEntry {
   sourceUrl: string;
@@ -75,13 +76,9 @@ export function LinkBankPanel({ connections, onImport }: LinkBankPanelProps) {
       {open && (
         <div className="absolute top-full mt-1 right-0 z-50 w-[480px] rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-3 space-y-3">
           <div className="flex items-center gap-2">
-            <select value={pageFilter ?? ""} onChange={(e) => setPageFilter(e.target.value || null)}
-              className="flex-1 min-w-0 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="">Tất cả page</option>
-              {connections.map((c) => (
-                <option key={c.pageId} value={c.pageId}>{c.pageName}</option>
-              ))}
-            </select>
+            <CustomSelect className="flex-1 min-w-0" value={pageFilter ?? ""} onChange={(v) => setPageFilter(v || null)}
+              placeholder="Tất cả page"
+              options={[{ value: "", label: "Tất cả page" }, ...connections.map((c) => ({ value: c.pageId, label: c.pageName }))]} />
             <DateRangeFilter value={dateRange} onChange={setDateRange} />
           </div>
 

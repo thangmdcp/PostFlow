@@ -1,5 +1,7 @@
 "use client";
 
+import { CustomSelect } from "@/components/ui/CustomSelect";
+
 export interface CampaignTemplateLike {
   id: string;
   templateName: string;
@@ -19,10 +21,9 @@ export interface CampaignTemplateSelectProps {
 }
 
 export function CampaignTemplateSelect({
-  templates, value, onChange, accent = "violet",
+  templates, value, onChange,
   overridePublish, onOverridePublishChange,
 }: CampaignTemplateSelectProps) {
-  const ring = accent === "blue" ? "focus:ring-blue-500" : "focus:ring-violet-500";
   const selTpl = templates.find(t => t.campaignId === value);
   const postType = selTpl?.settings?.postType ?? "published";
 
@@ -34,15 +35,11 @@ export function CampaignTemplateSelect({
           Chưa có template — vào <a href="/settings/campaigns" className="underline">Cài đặt → Quảng cáo</a> để tạo.
         </p>
       ) : (
-        <select value={value} onChange={e => onChange(e.target.value)}
-          className={`w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 ${ring}`}>
-          <option value="">-- Chọn template --</option>
-          {templates.map(t => (
-            <option key={t.id} value={t.campaignId}>
-              {t.templateName} ({t.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"})
-            </option>
-          ))}
-        </select>
+        <CustomSelect value={value} onChange={onChange} placeholder="-- Chọn template --"
+          options={templates.map(t => ({
+            value: t.campaignId,
+            label: `${t.templateName} (${t.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"})`,
+          }))} />
       )}
       {value && selTpl && (
         <div className={["flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs border",

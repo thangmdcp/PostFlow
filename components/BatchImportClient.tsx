@@ -226,6 +226,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     return localStorage.getItem(LAST_BATCH_KEY);
   });
   const [loading, setLoading] = useState(false);
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const { show, ToastComponent } = useToast();
 
   // ── Lifted ads config (persists across batches via localStorage) ──────────────
@@ -436,11 +437,19 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       commentCaptionAttachImage: defaultCommentCaptionAttachImage, commentCaptionImageUrls: defaultCommentCaptionImageUrls,
       commentCustomEntries: defaultCommentCustomEntries,
       commentSharedImageUrls: defaultCommentSharedImageUrls, commentRandomCount: defaultCommentRandomCount,
+      accountRows: accountRows.map(r => ({
+        accountId: r.accountId, weight: r.weight,
+        budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
+      })),
     };
   }
 
   function applyPresetData(raw: unknown) {
     const d = raw as Partial<ReturnType<typeof buildPresetData>>;
+    // TKQC allocation was previously never saved/restored by this preset at
+    // all — fetching new posts right after loading a preset would silently
+    // keep whatever accountRows was already in state (often empty/stale).
+    if (d.accountRows) applyAccountRowsFromPreset(d.accountRows);
     if (d.batchDefaultPageIds) setDefaultPageIds(d.batchDefaultPageIds);
     if (d.batchScheduleMode) setDefaultScheduleMode(d.batchScheduleMode);
     if (d.batchStepMinutes) setDefaultStepMinutes(d.batchStepMinutes);
@@ -606,7 +615,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               <p className="text-xs text-slate-500">
                 <span className="font-medium text-slate-600 dark:text-slate-300">Preset cấu hình</span> — áp dụng cho lịch đăng, template &amp; thông số ads bên dưới
               </p>
-              <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData} />
+              <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData}
+                activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
             </div>
             <ScheduleModeSelector
               connections={connections}
@@ -702,6 +712,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     return connections.length > 0 ? [connections[0].pageId] : [];
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeDetailPresetId, setActiveDetailPresetId] = useState<string | null>(null);
   useEffect(() => {
     setSidebarCollapsed(localStorage.getItem("sidebar_collapsed") === "true");
     const h = (e: Event) => setSidebarCollapsed((e as CustomEvent<boolean>).detail);
@@ -1441,7 +1452,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
             <div className="flex items-center gap-2">
               <p className="text-xs font-medium text-slate-500">Áp dụng cho {checkedIds.size} dòng</p>
-              <FullSettingsPresetPanel getCurrentData={buildDetailPresetData} onLoad={applyDetailPresetData} />
+              <FullSettingsPresetPanel getCurrentData={buildDetailPresetData} onLoad={applyDetailPresetData}
+                activePresetId={activeDetailPresetId} onActivePresetChange={setActiveDetailPresetId} />
             </div>
             <button onClick={applyToolbarToSelection}
               className="flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm shrink-0">

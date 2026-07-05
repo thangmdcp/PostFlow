@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { FbAdAccount, CampaignTemplate } from "@prisma/client";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Search, Save, Globe, EyeOff } from "lucide-react";
+import { CustomSelect } from "@/components/ui/CustomSelect";
 
 // ─── Translation maps ───────────────────────────────────────────────────────
 const OBJECTIVE: Record<string, string> = {
@@ -463,14 +464,9 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
         ) : <>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Tài khoản quảng cáo</label>
-            <div className="relative">
-              <select value={selectedAccount} onChange={e => { setSelectedAccount(e.target.value); setFoundCampaign(null); setCampName(""); }}
-                className="w-full appearance-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring pr-8">
-                <option value="">-- Chọn TKQC --</option>
-                {adAccounts.map(a => <option key={a.id} value={a.id}>{a.name} ({a.accountId})</option>)}
-              </select>
-              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            </div>
+            <CustomSelect value={selectedAccount} onChange={v => { setSelectedAccount(v); setFoundCampaign(null); setCampName(""); }}
+              placeholder="-- Chọn TKQC --"
+              options={adAccounts.map(a => ({ value: a.id, label: `${a.name} (${a.accountId})` }))} />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Tên campaign mẫu</label>

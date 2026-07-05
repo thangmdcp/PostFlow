@@ -145,6 +145,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     adAccounts.map((a) => ({ accountId: a.accountId, name: a.name }))
   );
   const [adsDrawerOpen, setAdsDrawerOpen] = useState(false);
+  const [activeDrawerPresetId, setActiveDrawerPresetId] = useState<string | null>(null);
   const [drawerPostIds, setDrawerPostIds] = useState<string[]>([]);
   const [drawerAdConfig, setDrawerAdConfig] = useState<BatchAdConfig>(EMPTY_AD_CONFIG);
   const [drawerAccountRows, setDrawerAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
@@ -160,6 +161,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   async function openAdsDrawer(ids: string[]) {
     setCommentDrawerPostId(null);
     setDrawerPostIds(ids);
+    setActiveDrawerPresetId(null);
     setAdsDrawerOpen(true);
     try {
       const [accs, rows, cfg] = await Promise.all([
@@ -1002,7 +1004,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
             <div className="flex items-center gap-2">
               <p className="text-xs font-medium text-slate-500">Áp dụng cho {drawerPostIds.length} bài</p>
-              <FullSettingsPresetPanel getCurrentData={buildDrawerPresetData} onLoad={applyDrawerPresetData} />
+              <FullSettingsPresetPanel getCurrentData={buildDrawerPresetData} onLoad={applyDrawerPresetData}
+                activePresetId={activeDrawerPresetId} onActivePresetChange={setActiveDrawerPresetId} />
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={applyAdsDrawer} disabled={drawerApplying}
