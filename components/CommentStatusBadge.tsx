@@ -3,6 +3,38 @@
 import { useState, useEffect, useRef } from "react";
 import { Loader2, CheckCircle2, Clock, Eye } from "lucide-react";
 
+// Small rollup badge for a table cell showing N comments at a glance — full
+// detail (each comment's text/image) lives in the drawer opened by the "Xem
+// chi tiết" eye button next to it, not in a cramped inline popover anymore.
+export function CommentAggregateStatus({ comments }: { comments: { status: string | null }[] }) {
+  const failed = comments.filter((c) => c.status === "failed").length;
+  const active = comments.filter((c) => c.status === "pending" || c.status === "creating").length;
+  const done = comments.filter((c) => c.status === "done").length;
+
+  if (failed > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-500 whitespace-nowrap">
+        Lỗi {failed}/{comments.length}
+      </span>
+    );
+  }
+  if (active > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 whitespace-nowrap">
+        <Loader2 size={9} className="animate-spin shrink-0" /> Đang bình luận
+      </span>
+    );
+  }
+  if (done > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 whitespace-nowrap">
+        <CheckCircle2 size={9} className="shrink-0" /> Đã bình luận ({done})
+      </span>
+    );
+  }
+  return <span className="text-slate-300 text-xs">–</span>;
+}
+
 export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commentAttempt, commentText, commentImageUrl, errorMsg }: {
   commentStatus: string | null | undefined;
   commentNextAttemptAt: Date | string | null | undefined;

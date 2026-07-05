@@ -11,6 +11,7 @@ import {
   ExternalLink, RefreshCw, Megaphone, PlusCircle,
   Trash2, CheckSquare, Square, Loader2, CalendarDays,
   Columns3, Check, ChevronDown, ChevronLeft, ChevronRight, X, Zap,
+  Eye, CheckCircle2, MessageCircle,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -20,7 +21,7 @@ import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignT
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
-import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 
@@ -149,6 +150,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [drawerCommentEntries, setDrawerCommentEntries] = useState<CommentEntry[]>([]);
 
   async function openAdsDrawer(ids: string[]) {
+    setCommentDrawerPostId(null);
     setDrawerPostIds(ids);
     setAdsDrawerOpen(true);
     try {
@@ -420,17 +422,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   );
   const orderedCols = colOrder.map((k) => COLUMN_DEFS.find((c) => c.key === k)!).filter((c) => colVisible[c.key]);
 
-  // ── Comment column popover (only one open at a time) ───────────────────────
-  const [openCommentPopoverId, setOpenCommentPopoverId] = useState<string | null>(null);
-  const commentPopoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openCommentPopoverId) return;
-    function handler(e: MouseEvent) {
-      if (commentPopoverRef.current && !commentPopoverRef.current.contains(e.target as Node)) setOpenCommentPopoverId(null);
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [openCommentPopoverId]);
+  // ── Comment detail drawer (right-side panel, same slot as the Ads drawer) ──
+  const [commentDrawerPostId, setCommentDrawerPostId] = useState<string | null>(null);
+  function openCommentDrawer(postId: string) {
+    setAdsDrawerOpen(false);
+    setCommentDrawerPostId(postId);
+  }
 
   // ── Date range filter ─────────────────────────────────────────────────────
   type DatePreset = "today" | "yesterday" | "last7" | "last30" | "thisMonth" | "custom";
@@ -1100,42 +1097,16 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                     )}
 
                     {col.key === "comment" && (
-                      // No overflow-hidden here (unlike other columns) — it would
-                      // clip the comment popover, which needs to render outside
-                      // this cell's bounds.
-                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50" style={{ maxWidth: 0 }}>
-                        {post.comments.length > 1 ? (
-                          <div className="relative" ref={openCommentPopoverId === post.id ? commentPopoverRef : undefined}>
-                            <button type="button" onClick={() => setOpenCommentPopoverId(v => v === post.id ? null : post.id)}
-                              className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
-                              {post.comments.length} comment
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.comments.length > 0 ? (
+                          <div className="flex items-center gap-1.5">
+                            <CommentAggregateStatus comments={post.comments} />
+                            <button type="button" onClick={() => openCommentDrawer(post.id)}
+                              title="Xem chi tiết bình luận"
+                              className="shrink-0 text-slate-400 hover:text-blue-600 transition-colors">
+                              <Eye size={13} />
                             </button>
-                            {openCommentPopoverId === post.id && (
-                              <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
-                                {post.comments.map(c => (
-                                  <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
-                                    <CommentStatusBadge
-                                      commentStatus={c.status}
-                                      commentNextAttemptAt={c.nextAttemptAt}
-                                      commentAttempt={c.attempt}
-                                      commentText={c.text}
-                                      commentImageUrl={c.imageUrl}
-                                      errorMsg={c.errorMsg}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            )}
                           </div>
-                        ) : post.comments.length === 1 ? (
-                          <CommentStatusBadge
-                            commentStatus={post.comments[0].status}
-                            commentNextAttemptAt={post.comments[0].nextAttemptAt}
-                            commentAttempt={post.comments[0].attempt}
-                            commentText={post.comments[0].text}
-                            commentImageUrl={post.comments[0].imageUrl}
-                            errorMsg={post.comments[0].errorMsg}
-                          />
                         ) : <span className="text-slate-300 text-xs">–</span>}
                       </td>
                     )}
@@ -1221,6 +1192,47 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           </div>
         </div>
       )}
+
+      {/* Comment detail drawer — full text + image per comment, same slot/behavior as the Ads drawer */}
+      {commentDrawerPostId && (() => {
+        const post = filtered.find((p) => p.id === commentDrawerPostId);
+        if (!post) return null;
+        return (
+          <div className="w-[380px] shrink-0 sticky top-4 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm flex flex-col max-h-[calc(100vh-2rem)]">
+            <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                <MessageCircle size={14} className="text-slate-400" /> Bình luận ({post.comments.length})
+              </p>
+              <button onClick={() => setCommentDrawerPostId(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="p-4 pt-3 space-y-2 overflow-y-auto">
+              {post.comments.map((c) => (
+                <div key={c.id} className="rounded-xl border border-slate-100 dark:border-slate-800 p-2.5 space-y-1.5">
+                  <CommentStatusBadge
+                    commentStatus={c.status}
+                    commentNextAttemptAt={c.nextAttemptAt}
+                    commentAttempt={c.attempt}
+                    commentText={null}
+                    commentImageUrl={c.imageUrl}
+                    errorMsg={c.errorMsg}
+                  />
+                  <p className="text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">{c.text}</p>
+                  {c.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={c.imageUrl} alt="" referrerPolicy="no-referrer"
+                      className="max-h-40 w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
+                  )}
+                  {c.status === "failed" && c.errorMsg && (
+                    <p className="text-xs text-red-500">{c.errorMsg}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       </div>
     </div>
   );

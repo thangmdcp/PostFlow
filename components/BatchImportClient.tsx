@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -22,7 +22,7 @@ import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSet
 import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
-import { CommentStatusBadge } from "@/components/CommentStatusBadge";
+import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 
@@ -723,6 +723,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>({});
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  const [commentDrawerPostId, setCommentDrawerPostId] = useState<string | null>(null);
   const [randomFieldsOpen, setRandomFieldsOpen] = useState(false);
   const [randomFields, setRandomFields] = useState<Set<RandomField>>(new Set(["age", "gender", "budget", "page", "account", "cta"]));
   const randomPanelRef = useRef<HTMLDivElement>(null);
@@ -1388,6 +1389,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 justImportedLinkIds={justImportedLinkIds}
                 commentEnabled={commentEnabled}
                 commentJobsPreview={commentEnabled ? resolveCommentJobs(post.id) : []}
+                onOpenCommentDrawer={setCommentDrawerPostId}
               />
             ))}
           </tbody>
@@ -1443,6 +1445,52 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           </div>
         </div>
       )}
+
+      {/* Comment detail drawer — full text + image per comment, same slot/behavior as Cài đặt chi tiết */}
+      {commentDrawerPostId && (() => {
+        const post = batch.posts.find(p => p.id === commentDrawerPostId);
+        if (!post) return null;
+        const items = post.comments.length > 0
+          ? post.comments.map(c => ({ key: c.id, status: c.status, nextAttemptAt: c.nextAttemptAt, attempt: c.attempt, text: c.text, imageUrl: c.imageUrl, errorMsg: c.errorMsg }))
+          : resolveCommentJobs(post.id).map((job, i) => ({ key: String(i), status: null, nextAttemptAt: null, attempt: null, text: job.text, imageUrl: job.imageUrl ?? null, errorMsg: null }));
+        return (
+          <div className="w-[380px] shrink-0 sticky top-16 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm flex flex-col max-h-[calc(100vh-5rem)]">
+            <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                <MessageCircle size={14} className="text-slate-400" /> Bình luận ({items.length})
+              </p>
+              <button onClick={() => setCommentDrawerPostId(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="p-4 pt-3 space-y-2 overflow-y-auto">
+              {items.map(c => (
+                <div key={c.key} className="rounded-xl border border-slate-100 dark:border-slate-800 p-2.5 space-y-1.5">
+                  {c.status && (
+                    <CommentStatusBadge
+                      commentStatus={c.status}
+                      commentNextAttemptAt={c.nextAttemptAt}
+                      commentAttempt={c.attempt}
+                      commentText={null}
+                      commentImageUrl={c.imageUrl}
+                      errorMsg={c.errorMsg}
+                    />
+                  )}
+                  <p className="text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">{c.text}</p>
+                  {c.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={c.imageUrl} alt="" referrerPolicy="no-referrer"
+                      className="max-h-40 w-full rounded-lg object-cover border border-slate-100 dark:border-slate-800" />
+                  )}
+                  {c.status === "failed" && c.errorMsg && (
+                    <p className="text-xs text-red-500">{c.errorMsg}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       </div>
     </div>
   );
@@ -1470,6 +1518,7 @@ interface PostRowProps {
   justImportedLinkIds: Set<string>;
   commentEnabled: boolean;
   commentJobsPreview: { text: string; imageUrl?: string }[];
+  onOpenCommentDrawer: (postId: string) => void;
 }
 
 // Ticks its own 1s interval — isolated so a live countdown doesn't force the
@@ -1562,24 +1611,13 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   return null;
 }
 
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, visibleCols, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview }: PostRowProps) {
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, visibleCols, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview, onOpenCommentDrawer }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [fbPostUrl] = useState(post.fbPostUrl ?? "");
   const [status, setStatus] = useState(post.status);
   const [showCaption, setShowCaption] = useState(false);
-  const [commentPopoverOpen, setCommentPopoverOpen] = useState(false);
-  const commentPopoverRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!commentPopoverOpen) return;
-    const h = (e: MouseEvent) => {
-      if (commentPopoverRef.current && !commentPopoverRef.current.contains(e.target as Node)) setCommentPopoverOpen(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [commentPopoverOpen]);
 
   useEffect(() => { setStatus(post.status); }, [post.status]);
   useEffect(() => { setLinks(post.extractedLinks); }, [post.extractedLinks]);
@@ -1809,63 +1847,22 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           : <span className="text-slate-300 text-xs">–</span>
       )}
       {col.key === "comment" && commentEnabled && colVisible.comment && (
-        // Rendered directly instead of via cell() — that helper wraps content
-        // in an overflow-hidden div, which would clip the comment popover.
-        <td className="px-3 py-2 align-middle" style={{ width: colWidths.comment, maxWidth: colWidths.comment }}>
-          {post.comments.length > 1 || commentJobsPreview.length > 1
-            ? <div className="relative" ref={commentPopoverRef}>
-                <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
-                  className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
-                  {post.comments.length > 0 ? post.comments.length : commentJobsPreview.length} comment
-                </button>
-                {commentPopoverOpen && (
-                  <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
-                    {post.comments.length > 0
-                      ? post.comments.map(c => (
-                          <div key={c.id} className="rounded-lg border border-slate-100 dark:border-slate-800 p-1.5">
-                            <CommentStatusBadge
-                              commentStatus={c.status}
-                              commentNextAttemptAt={c.nextAttemptAt}
-                              commentAttempt={c.attempt}
-                              commentText={c.text}
-                              commentImageUrl={c.imageUrl}
-                              errorMsg={c.errorMsg}
-                            />
-                          </div>
-                        ))
-                      : commentJobsPreview.map((job, i) => (
-                          <div key={i} className="text-xs text-slate-600 dark:text-slate-300 p-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
-                            {job.text}
-                            {job.imageUrl && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={job.imageUrl} alt="" referrerPolicy="no-referrer"
-                                className="mt-1.5 max-h-28 w-full rounded-md object-cover border border-slate-100 dark:border-slate-800" />
-                            )}
-                          </div>
-                        ))}
-                  </div>
-                )}
-              </div>
-            : post.comments.length > 0
-              ? <div className="space-y-0.5">
-                  {post.comments.map(c => (
-                    <CommentStatusBadge key={c.id}
-                      commentStatus={c.status}
-                      commentNextAttemptAt={c.nextAttemptAt}
-                      commentAttempt={c.attempt}
-                      commentText={c.text}
-                      commentImageUrl={c.imageUrl}
-                      errorMsg={c.errorMsg}
-                    />
-                  ))}
-                </div>
-              : commentJobsPreview.length > 0
-                ? <ul className="space-y-0.5">
-                    {commentJobsPreview.map((job, i) => (
-                      <li key={i} className="text-xs text-slate-500 line-clamp-1">• {job.text}</li>
-                    ))}
-                  </ul>
-                : <span className="text-slate-300 text-xs">–</span>}
+        <td className="px-3 py-2 align-middle overflow-hidden" style={{ width: colWidths.comment, maxWidth: colWidths.comment }}>
+          {post.comments.length > 0 ? (
+            <div className="flex items-center gap-1.5">
+              <CommentAggregateStatus comments={post.comments} />
+              <button type="button" onClick={() => onOpenCommentDrawer(post.id)}
+                title="Xem chi tiết bình luận"
+                className="shrink-0 text-slate-400 hover:text-blue-600 transition-colors">
+                <Eye size={13} />
+              </button>
+            </div>
+          ) : commentJobsPreview.length > 0 ? (
+            <button type="button" onClick={() => onOpenCommentDrawer(post.id)}
+              className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
+              {commentJobsPreview.length} comment
+            </button>
+          ) : <span className="text-slate-300 text-xs">–</span>}
         </td>
       )}
       </Fragment>
