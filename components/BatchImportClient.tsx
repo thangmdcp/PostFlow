@@ -25,7 +25,6 @@ import { AdsConfigPanel, genRowParams, weightedPickAccount, type BatchAdConfig, 
 import { CommentStatusBadge } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
-import { useElementHeight } from "@/lib/useElementHeight";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -1197,18 +1196,17 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
     "postflow_batch_colorder_v1", COLUMN_DEFS.map(c => c.key)
   );
-  const { ref: toolbarRef, height: toolbarHeight } = useElementHeight<HTMLDivElement>();
   const visibleCols = colOrder
     .map(k => activeColumnDefs.find(c => c.key === k))
     .filter((c): c is typeof activeColumnDefs[number] => !!c && colVisible[c.key]);
   const tableWidth = 40 + visibleCols.reduce((s, c) => s + colWidths[c.key], 0);
 
   return (
-    <div className="w-full">
+    <div className="flex flex-col h-full min-h-0">
       {ToastComponent}
 
       {/* ── Thanh thao tác — chia thành các cụm, khoảng cách đều nhau giữa các cụm, luôn chiếm trọn chiều rộng ── */}
-      <div ref={toolbarRef} className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
+      <div className="shrink-0 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 mb-2 py-2 border-b border-slate-100 dark:border-slate-800 flex-wrap">
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={onNewBatch} title="Batch mới"
             className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600 border rounded-lg px-2.5 py-1.5 hover:border-blue-300 transition-colors shrink-0 whitespace-nowrap">
@@ -1326,16 +1324,16 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
       </div>
 
-      <div className="flex gap-4 items-start">
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-h-0 flex gap-4 items-start">
+      <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {/* ── Table ── */}
-      <div className="rounded-2xl border bg-card shadow-sm overflow-visible">
+      <div className="flex-1 min-h-0 rounded-2xl border bg-card shadow-sm overflow-auto">
         <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
           <colgroup>
             <col style={{ width: 40 }} />
             {visibleCols.map(c => <col key={c.key} style={{ width: colWidths[c.key] }} />)}
           </colgroup>
-          <thead className="sticky z-20" style={{ top: toolbarHeight }}>
+          <thead className="sticky top-0 z-20">
             <tr className="border-b bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-medium">
               <th className="px-3 py-2.5 text-center">
                 <button onClick={toggleAll} className="text-slate-400 hover:text-slate-700">

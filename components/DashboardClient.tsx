@@ -23,7 +23,6 @@ import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { CommentStatusBadge } from "@/components/CommentStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { useColumnOrder } from "@/lib/useColumnOrder";
-import { useElementHeight } from "@/lib/useElementHeight";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -402,7 +401,6 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
     "postflow_dashboard_colorder_v1", COLUMN_DEFS.map((c) => c.key)
   );
-  const { ref: toolbarRef, height: toolbarHeight } = useElementHeight<HTMLDivElement>();
   const orderedCols = colOrder.map((k) => COLUMN_DEFS.find((c) => c.key === k)!).filter((c) => colVisible[c.key]);
 
   // ── Comment column popover (only one open at a time) ───────────────────────
@@ -701,11 +699,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const btnDim = `${btnBase} bg-muted text-muted-foreground opacity-50 cursor-not-allowed`;
 
   return (
-    <div className="pb-10">
+    <div className="flex flex-col h-full min-h-0">
       {ToastComponent}
 
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between gap-4">
+      <div className="shrink-0 mb-6 flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Dashboard</h1>
 
         <div className="flex items-center gap-2">
@@ -818,7 +816,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
 
       {/* Filter tabs + action buttons */}
-      <div ref={toolbarRef} className="sticky top-0 z-30 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
+      <div className="shrink-0 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden">
           {STATUS_FILTERS.map((s) => (
@@ -896,13 +894,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
       {/* Table — FB Ads Manager style */}
-      <div className="flex gap-4 items-start">
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-h-0 flex gap-4 items-start">
+      <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {filtered.length === 0 ? (
         <EmptyState title="Chưa có bài nào"
           action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
       ) : (
-        <div className="rounded-xl border shadow-sm bg-white dark:bg-slate-900 overflow-visible">
+        <div className="flex-1 min-h-0 rounded-xl border shadow-sm bg-white dark:bg-slate-900 overflow-auto">
           <table className="text-sm border-collapse" style={{
               tableLayout: "fixed",
               width: orderedCols.reduce((s, c) => s + colWidths[c.key], 40),
@@ -914,7 +912,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 <col key={col.key} style={{ width: colWidths[col.key] }} />
               ))}
             </colgroup>
-            <thead className="sticky z-20" style={{ top: toolbarHeight }}>
+            <thead className="sticky top-0 z-20">
               <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
                 <th className="w-10 px-3 py-3 sticky left-0 bg-slate-50 dark:bg-slate-800/80 z-10">
                   <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">

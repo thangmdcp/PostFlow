@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <main className={`${mainML} flex-1 overflow-y-auto transition-all duration-200`}>
-        <div className="mx-auto max-w-[1600px] px-6 py-6">{children}</div>
+        <div className="mx-auto max-w-[1600px] px-6 py-6 h-full flex flex-col">{children}</div>
       </main>
     </>
   );
