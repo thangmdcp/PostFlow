@@ -1810,7 +1810,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           ? <div className="relative" ref={commentPopoverRef}>
               <button type="button" onClick={() => setCommentPopoverOpen(v => !v)}
                 className="text-xs text-violet-600 hover:text-violet-700 font-medium underline decoration-dotted underline-offset-2">
-                {post.comments.length > 0 ? `${post.comments.length} comment` : `${commentJobsPreview.length} comment (dự kiến)`}
+                {post.comments.length > 0 ? post.comments.length : commentJobsPreview.length} comment
               </button>
               {commentPopoverOpen && (
                 <div className="absolute left-0 top-6 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 max-h-72 overflow-y-auto">
