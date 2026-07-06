@@ -8,7 +8,20 @@ import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { maybeScheduleStory } from "@/lib/autoStoryRunner";
 
 export async function publishDuePost(post: Post): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
-  await prisma.post.update({ where: { id: post.id }, data: { status: "publishing" } });
+  // Atomic claim: the cron route's findMany + loop has a window where two
+  // overlapping invocations (e.g. an external pinger firing twice close
+  // together) can both fetch the same "pending" post before either flips
+  // its status away — without this guard both would publish it, doubling
+  // the FB post, ads, comments, and story scheduling. The WHERE clause
+  // makes this a single atomic row update: only the first caller's UPDATE
+  // actually matches (status still "pending"); the second's affects 0 rows.
+  const claim = await prisma.post.updateMany({
+    where: { id: post.id, status: "pending" },
+    data: { status: "publishing" },
+  });
+  if (claim.count === 0) {
+    return { id: post.id, status: "skipped" };
+  }
 
   try {
     if (!post.pageId || !post.finalCaption) throw new Error("Missing pageId or finalCaption");

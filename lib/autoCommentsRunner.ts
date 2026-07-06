@@ -23,8 +23,17 @@ export interface CommentJob {
 export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Promise<void> {
   await prisma.postComment.deleteMany({ where: { postId, status: null } });
   if (jobs.length === 0) return;
+  // jobs.length is the TOTAL target count, not "how many more to add" — if
+  // settings get re-applied (e.g. Dashboard's "Cài đặt" -> Áp dụng) on a post
+  // whose comments already fired/are in flight, only top up the remainder
+  // instead of piling more on top of what's already committed.
+  const alreadyCommitted = await prisma.postComment.count({
+    where: { postId, status: { in: ["pending", "creating", "done"] } },
+  });
+  const toCreate = Math.max(0, jobs.length - alreadyCommitted);
+  if (toCreate === 0) return;
   await prisma.postComment.createMany({
-    data: jobs.map((j) => ({ postId, text: j.text, imageUrl: j.imageUrl ?? null })),
+    data: jobs.slice(0, toCreate).map((j) => ({ postId, text: j.text, imageUrl: j.imageUrl ?? null })),
   });
 }
 
