@@ -5,6 +5,7 @@ import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { persistCommentJobs, scheduleCommentJobs } from "@/lib/autoCommentsRunner";
+import { maybeScheduleStory } from "@/lib/autoStoryRunner";
 
 // The first ads attempt (1 min after publish) runs via waitUntil, which
 // extends THIS invocation's lifetime — maxDuration must cover the publish
@@ -30,6 +31,7 @@ export async function POST(
       ctaHeadline?: string;
       adStatus?: "ACTIVE" | "PAUSED";
       comments?: { text: string; imageUrl?: string }[];
+      storyEnabled?: boolean; storyCount?: number;
     };
     const { pageId } = body;
 
@@ -158,7 +160,7 @@ export async function POST(
 
     await prisma.post.update({
       where: { id: params.id },
-      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null },
+      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null, fbMediaId: result.mediaId ?? null },
     });
 
     // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
@@ -188,6 +190,8 @@ export async function POST(
       await persistCommentJobs(params.id, body.comments);
       await scheduleCommentJobs(params.id, fbPostId, fbConn.accessToken);
     }
+
+    await maybeScheduleStory(params.id, pageId, result.mediaId, body.storyEnabled, body.storyCount);
 
     return NextResponse.json({ ok: true, fbPostUrl, autoAds: adsWillRun ? { scheduled: true } : null });
   } catch (err) {

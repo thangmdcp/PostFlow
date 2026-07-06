@@ -53,6 +53,13 @@ model Post {
   commentNextAttemptAt DateTime?
   commentAttempt       Int?      @default(0)
   commentId            String?
+  storyEnabled       Boolean?   @default(false)
+  storyCount         Int?
+  storyStatus        String?
+  storyNextAttemptAt DateTime?
+  storyAttempt       Int?       @default(0)
+  storyPostId        String?
+  fbMediaId          String?    // the FB-native photo/video id from the feed post's own upload, reused for the story so it doesn't depend on the temp Cloudinary asset (deleted right after publish) still being alive 15 min later
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

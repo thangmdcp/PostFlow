@@ -32,7 +32,7 @@ export async function publishToPage(
   mediaType?: string,
   mediaUrls?: string | null,
   publishedToPage = true
-): Promise<{ id: string; post_id?: string }> {
+): Promise<{ id: string; post_id?: string; mediaId?: string }> {
   // Carousel post: upload each photo as unpublished then attach all
   if (mediaType === "carousel" && (mediaUrls || mediaUrl)) {
     const urls: string[] = mediaUrls ? JSON.parse(mediaUrls) : [mediaUrl!];
@@ -55,7 +55,9 @@ export async function publishToPage(
     });
     const json = await res.json();
     if (json.error) throw new Error(json.error.message);
-    return json;
+    // A Story can only use one image — the first of the carousel is as
+    // good a pick as any since there's no "primary" concept for carousels.
+    return { ...json, mediaId: photoIds[0] };
   }
 
   if (mediaUrl && mediaType === "video") {
@@ -72,7 +74,10 @@ export async function publishToPage(
       body: params.toString(),
     });
     const json = await res.json();
-    if (!json.error) return json;
+    // json.id here is the permanent FB-native video id (not a temp URL), so
+    // it can be reused later (e.g. for an auto-story) without depending on
+    // the original temp Cloudinary asset still being alive.
+    if (!json.error) return { ...json, mediaId: json.id };
 
     // Fallback: post as feed with video link in caption
     console.warn("Video upload failed, falling back to feed post:", json.error?.message);
@@ -96,14 +101,16 @@ export async function publishToPage(
     });
     const json = await res.json();
     if (json.error) throw new Error(json.error.message);
+    // json.id here is the permanent FB-native photo id, reusable later the
+    // same way as the video case above.
     // Photo dark post: FB returns {id} but post_id is pageId_id
     if (!publishedToPage && json.id && !json.post_id) {
-      return { ...json, post_id: `${pageId}_${json.id}` };
+      return { ...json, post_id: `${pageId}_${json.id}`, mediaId: json.id };
     }
-    return json;
+    return { ...json, mediaId: json.id };
   }
 
-  // Text-only post
+  // Text-only post — no media, so nothing to reuse for a story.
   const res = await fetch(`${FB_API}/${pageId}/feed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,6 +119,32 @@ export async function publishToPage(
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);
   return json;
+}
+
+// Facebook Stories are media-only via the Graph API — there is no caption/
+// text-overlay field and no way to attach a clickable link (link stickers
+// are a manual mobile-app-only feature), confirmed against the actual API
+// during development. Reuses the FB-native photo/video id already uploaded
+// for the feed post itself (Post.fbMediaId) rather than re-uploading —
+// the original temp Cloudinary URL is deleted right after the feed post
+// publishes, long before the ~15-minute story delay elapses.
+export async function publishStoryToPage(
+  pageId: string,
+  accessToken: string,
+  fbMediaId: string,
+  mediaType: string | null
+): Promise<{ postId: string }> {
+  const isVideo = mediaType === "video";
+  const endpoint = isVideo ? "video_stories" : "photo_stories";
+  const idField = isVideo ? "video_id" : "photo_id";
+  const storyRes = await fetch(`${FB_API}/${pageId}/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ [idField]: fbMediaId, access_token: accessToken }),
+  });
+  const storyJson = await storyRes.json();
+  if (storyJson.error) throw new Error(`[${endpoint}] ${storyJson.error.message}`);
+  return { postId: storyJson.post_id ?? storyJson.id };
 }
 
 export async function postComment(objectId: string, accessToken: string, message: string, attachmentUrl?: string): Promise<{ id: string }> {

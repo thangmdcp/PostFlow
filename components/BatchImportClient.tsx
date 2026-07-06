@@ -24,6 +24,7 @@ import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { AdsConfigPanel, genRowParams, pickAccountAndBudget, type BatchAdConfig, type CampaignTemplate, type RowAdParams } from "@/components/AdsConfigPanel";
 import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
+import { StoryStatusBadge } from "@/components/StoryStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { LinkBankPanel } from "@/components/LinkBankPanel";
 import { useColumnOrder } from "@/lib/useColumnOrder";
@@ -167,7 +168,7 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "title" | "campaignName" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment";
+type ColKey = "status" | "title" | "campaignName" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment" | "story";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
@@ -185,6 +186,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "darkOverride",label: "Đăng trang",   defaultWidth: 100, minWidth: 80,  defaultVisible: true },
   { key: "ctaHeadline", label: "Tiêu đề CTA",   defaultWidth: 150, minWidth: 100, defaultVisible: true },
   { key: "comment",     label: "Bình luận",     defaultWidth: 160, minWidth: 100, defaultVisible: true },
+  { key: "story",       label: "Story",         defaultWidth: 120, minWidth: 90,  defaultVisible: true },
 ];
 
 const BATCH_COLS_KEY = "postflow_batch_cols_v1";
@@ -294,6 +296,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultCommentCustomEntries, setDefaultCommentCustomEntries] = useState<CommentEntry[]>([]);
   const [defaultCommentSharedImageUrls, setDefaultCommentSharedImageUrls] = useState<string[]>([]);
   const [defaultCommentRandomCount, setDefaultCommentRandomCount] = useState("0");
+  const [defaultStoryEnabled, setDefaultStoryEnabled] = useState(false);
+  const [defaultStoryCount, setDefaultStoryCount] = useState("2");
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
 
@@ -348,6 +352,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       if (cfg.commentCustomEntries) { try { setDefaultCommentCustomEntries(JSON.parse(cfg.commentCustomEntries)); } catch { /* ignore */ } }
       if (cfg.commentSharedImageUrls) { try { setDefaultCommentSharedImageUrls(JSON.parse(cfg.commentSharedImageUrls)); } catch { /* ignore */ } }
       if (cfg.commentRandomCount !== undefined) setDefaultCommentRandomCount(cfg.commentRandomCount);
+      if (cfg.storyEnabled !== undefined) setDefaultStoryEnabled(cfg.storyEnabled === "true");
+      if (cfg.storyCount !== undefined) setDefaultStoryCount(cfg.storyCount);
     }
 
     // Apply sessionStorage cache instantly
@@ -427,6 +433,15 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(patch.customEntries !== undefined ? { commentCustomEntries: JSON.stringify(patch.customEntries) } : {}),
       ...(patch.sharedImageUrls !== undefined ? { commentSharedImageUrls: JSON.stringify(patch.sharedImageUrls) } : {}),
       ...(patch.randomCount !== undefined ? { commentRandomCount: patch.randomCount } : {}),
+    });
+  }
+
+  function patchDefaultStory(patch: { enabled?: boolean; count?: string }) {
+    if (patch.enabled !== undefined) setDefaultStoryEnabled(patch.enabled);
+    if (patch.count !== undefined) setDefaultStoryCount(patch.count);
+    syncAppConfig({
+      ...(patch.enabled !== undefined ? { storyEnabled: String(patch.enabled) } : {}),
+      ...(patch.count !== undefined ? { storyCount: patch.count } : {}),
     });
   }
 
@@ -652,6 +667,36 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               randomCount={defaultCommentRandomCount} onRandomCountChange={v => patchDefaultComment({ randomCount: v })}
               entries={defaultCommentCustomEntries} onEntriesChange={v => patchDefaultComment({ customEntries: v })}
             />
+            <div className={`${adsPanel} p-4 space-y-3`}>
+              <div className="flex items-center gap-2">
+                <Megaphone size={14} className="text-violet-600 shrink-0" />
+                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt Story</span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tự động đăng story</span>
+                  <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                    defaultStoryEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
+                    {defaultStoryEnabled ? "Bật" : "Tắt"}
+                  </span>
+                </div>
+                <button type="button" onClick={() => patchDefaultStory({ enabled: !defaultStoryEnabled })}
+                  className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
+                    defaultStoryEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+                  <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                    defaultStoryEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
+                </button>
+              </div>
+              {defaultStoryEnabled && (
+                <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200" title="Đăng story (chỉ ảnh/video, không có chữ hay link) khoảng 15 phút sau khi N bài đầu tiên trong ngày lên sóng trên mỗi page">
+                    Số bài đầu tiên mỗi ngày (mỗi page)
+                  </span>
+                  <input type="number" min={0} value={defaultStoryCount} onChange={e => patchDefaultStory({ count: e.target.value })}
+                    className="w-16 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-500 shrink-0" />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -669,6 +714,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       defaultCommentCaptionAttachImage={defaultCommentCaptionAttachImage} defaultCommentCaptionImageUrls={defaultCommentCaptionImageUrls}
       defaultCommentCustomEntries={defaultCommentCustomEntries}
       defaultCommentSharedImageUrls={defaultCommentSharedImageUrls} defaultCommentRandomCount={defaultCommentRandomCount}
+      defaultStoryEnabled={defaultStoryEnabled} defaultStoryCount={defaultStoryCount}
       onPatchAdConfig={patchAdConfig}
       onPatchAccountRow={patchAccountRow} onDeleteAccountRow={deleteAccountRow} onAddAccountRow={addAccountRow}
       onApplyAccountRows={applyAccountRowsFromPreset}
@@ -700,6 +746,8 @@ interface BatchViewProps {
   defaultCommentCustomEntries: CommentEntry[];
   defaultCommentSharedImageUrls: string[];
   defaultCommentRandomCount: string;
+  defaultStoryEnabled: boolean;
+  defaultStoryCount: string;
   onPatchAdConfig: (patch: Partial<BatchAdConfig>) => void;
   onPatchAccountRow: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;
   onDeleteAccountRow: (idx: number) => void;
@@ -715,7 +763,7 @@ interface BatchViewProps {
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, defaultStoryEnabled, defaultStoryCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -743,6 +791,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const commentCustomEntries = defaultCommentCustomEntries;
   const commentSharedImageUrls = defaultCommentSharedImageUrls;
   const commentRandomCount = defaultCommentRandomCount;
+  const storyEnabled = defaultStoryEnabled;
+  const storyCount = defaultStoryCount;
   const [commentCustomEntryEnabled, setCommentCustomEntryEnabled] = useState<Record<string, boolean>>({});
   const localAccountRows = accountRows;
   const [postTimes, setPostTimes] = useState<Record<string, string>>({});
@@ -1197,6 +1247,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               const jobs = resolveCommentJobs(id);
               return jobs.length ? { comments: jobs } : {};
             })(),
+            storyEnabled, storyCount: Number(storyCount) || 0,
           }),
         });
         if (res.ok) ok++;
@@ -1242,6 +1293,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             const jobs = resolveCommentJobs(id);
             return jobs.length ? { comments: jobs } : {};
           })(),
+          storyEnabled, storyCount: Number(storyCount) || 0,
         }),
       }).catch(() => null);
       if (!res?.ok) return { ok: false, adsScheduled: false };
@@ -1951,6 +2003,14 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               {commentJobsPreview.length} comment
             </button>
           ) : <span className="text-slate-300 text-xs">–</span>}
+        </td>
+      )}
+
+      {col.key === "story" && colVisible.story && (
+        <td className="px-3 py-2 align-middle overflow-hidden" style={{ width: colWidths.story, maxWidth: colWidths.story }}>
+          {post.storyStatus
+            ? <StoryStatusBadge storyStatus={post.storyStatus} storyNextAttemptAt={post.storyNextAttemptAt} errorMsg={post.errorMsg} />
+            : <span className="text-slate-300 text-xs">–</span>}
         </td>
       )}
       </Fragment>

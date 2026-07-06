@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { processDueAdRetries } from "@/lib/autoAdsRunner";
 import { processDueCommentRetries } from "@/lib/autoCommentsRunner";
+import { processDueStoryRetries } from "@/lib/autoStoryRunner";
 import { publishDuePost } from "@/lib/publishDuePost";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
@@ -38,6 +39,7 @@ export async function GET(req: Request) {
   // Ads retries (2nd/3rd attempt) that came due since the last tick.
   await processDueAdRetries().catch((err) => console.error("[cron] processDueAdRetries failed:", err));
   await processDueCommentRetries().catch((err) => console.error("[cron] processDueCommentRetries failed:", err));
+  await processDueStoryRetries().catch((err) => console.error("[cron] processDueStoryRetries failed:", err));
 
   return NextResponse.json({ processed: results.length, results });
 }

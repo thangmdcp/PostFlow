@@ -23,9 +23,11 @@ import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { CommentStatusBadge, CommentAggregateStatus } from "@/components/CommentStatusBadge";
+import { StoryStatusBadge } from "@/components/StoryStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
 import { useColumnOrder } from "@/lib/useColumnOrder";
+import { adsPanel } from "@/lib/ui-classes";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -78,7 +80,7 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
 };
 
 // ── Column config ─────────────────────────────────────────────────────────────
-type ColKey = "campaign" | "campaignName" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "actions";
+type ColKey = "campaign" | "campaignName" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "story" | "actions";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "campaign",     label: "Bài viết",        defaultWidth: 210, minWidth: 100, defaultVisible: true },
@@ -92,6 +94,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "page",      label: "Page",                defaultWidth: 145, minWidth: 80,  defaultVisible: true },
   { key: "status",    label: "Trạng thái",          defaultWidth: 105, minWidth: 75,  defaultVisible: true },
   { key: "comment",   label: "Bình luận",           defaultWidth: 180, minWidth: 100, defaultVisible: true },
+  { key: "story",     label: "Story",               defaultWidth: 120, minWidth: 90,  defaultVisible: true },
   { key: "actions",   label: "Hành động",           defaultWidth: 145, minWidth: 90,  defaultVisible: true },
 ];
 
@@ -152,6 +155,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [drawerCommentSharedImageUrls, setDrawerCommentSharedImageUrls] = useState<string[]>([]);
   const [drawerCommentRandomCount, setDrawerCommentRandomCount] = useState("0");
   const [drawerCommentEntries, setDrawerCommentEntries] = useState<CommentEntry[]>([]);
+  const [drawerStoryEnabled, setDrawerStoryEnabled] = useState(false);
+  const [drawerStoryCount, setDrawerStoryCount] = useState("2");
 
   async function openAdsDrawer(ids: string[]) {
     setCommentDrawerPostId(null);
@@ -177,6 +182,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       try { setDrawerCommentEntries(cfg.commentCustomEntries ? JSON.parse(cfg.commentCustomEntries) : []); } catch { setDrawerCommentEntries([]); }
       try { setDrawerCommentSharedImageUrls(cfg.commentSharedImageUrls ? JSON.parse(cfg.commentSharedImageUrls) : []); } catch { setDrawerCommentSharedImageUrls([]); }
       setDrawerCommentRandomCount(cfg.commentRandomCount ?? "0");
+      setDrawerStoryEnabled(cfg.storyEnabled === "true");
+      setDrawerStoryCount(cfg.storyCount ?? "2");
     } catch {
       setDrawerAdConfig(buildAdConfigFromCfg({}, templates[0]));
     }
@@ -272,6 +279,15 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(patch.customEntries !== undefined ? { commentCustomEntries: JSON.stringify(patch.customEntries) } : {}),
       ...(patch.sharedImageUrls !== undefined ? { commentSharedImageUrls: JSON.stringify(patch.sharedImageUrls) } : {}),
       ...(patch.randomCount !== undefined ? { commentRandomCount: patch.randomCount } : {}),
+    });
+  }
+
+  function patchDrawerStory(patch: { enabled?: boolean; count?: string }) {
+    if (patch.enabled !== undefined) setDrawerStoryEnabled(patch.enabled);
+    if (patch.count !== undefined) setDrawerStoryCount(patch.count);
+    syncAppConfig({
+      ...(patch.enabled !== undefined ? { storyEnabled: String(patch.enabled) } : {}),
+      ...(patch.count !== undefined ? { storyCount: patch.count } : {}),
     });
   }
 
@@ -392,6 +408,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               adAccountId: accountId,
               adStatus: drawerAdConfig.adStatus,
               comments: comments.length ? comments : undefined,
+              storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
             }),
           });
           const data = await res.json();
@@ -966,6 +983,14 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
+                    {col.key === "story" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.storyStatus
+                          ? <StoryStatusBadge storyStatus={post.storyStatus} storyNextAttemptAt={post.storyNextAttemptAt} errorMsg={post.errorMsg} />
+                          : <span className="text-slate-300 text-xs">–</span>}
+                      </td>
+                    )}
+
                     {col.key === "actions" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
@@ -1045,6 +1070,37 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               randomCount={drawerCommentRandomCount} onRandomCountChange={v => patchDrawerComment({ randomCount: v })}
               entries={drawerCommentEntries} onEntriesChange={v => patchDrawerComment({ customEntries: v })}
             />
+
+            <div className={`${adsPanel} p-4 space-y-3`}>
+              <div className="flex items-center gap-2">
+                <Megaphone size={14} className="text-violet-600 shrink-0" />
+                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt Story</span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tự động đăng story</span>
+                  <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                    drawerStoryEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
+                    {drawerStoryEnabled ? "Bật" : "Tắt"}
+                  </span>
+                </div>
+                <button type="button" onClick={() => patchDrawerStory({ enabled: !drawerStoryEnabled })}
+                  className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
+                    drawerStoryEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+                  <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                    drawerStoryEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
+                </button>
+              </div>
+              {drawerStoryEnabled && (
+                <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200" title="Đăng story (chỉ ảnh/video, không có chữ hay link) khoảng 15 phút sau khi N bài đầu tiên trong ngày lên sóng trên mỗi page">
+                    Số bài đầu tiên mỗi ngày (mỗi page)
+                  </span>
+                  <input type="number" min={0} value={drawerStoryCount} onChange={e => patchDrawerStory({ count: e.target.value })}
+                    className="w-16 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-500 shrink-0" />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

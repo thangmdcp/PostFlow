@@ -5,6 +5,7 @@ import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
+import { maybeScheduleStory } from "@/lib/autoStoryRunner";
 
 export async function publishDuePost(post: Post): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
   await prisma.post.update({ where: { id: post.id }, data: { status: "publishing" } });
@@ -82,7 +83,7 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
 
     await prisma.post.update({
       where: { id: post.id },
-      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null },
+      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null, fbMediaId: result.mediaId ?? null },
     });
 
     // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
@@ -110,6 +111,8 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
     if (fbPostId) {
       await scheduleCommentJobs(post.id, fbPostId, fbConn.accessToken);
     }
+
+    await maybeScheduleStory(post.id, post.pageId, result.mediaId, post.storyEnabled, post.storyCount);
 
     return { id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) };
   } catch (err: unknown) {

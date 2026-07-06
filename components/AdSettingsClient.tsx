@@ -81,6 +81,8 @@ export function AdSettingsClient() {
   const [commentCustomEntries, setCommentCustomEntries] = useState<CommentEntry[]>([]);
   const [commentSharedImageUrls, setCommentSharedImageUrls] = useState<string[]>([]);
   const [commentRandomCount, setCommentRandomCount] = useState("0");
+  const [storyEnabled, setStoryEnabled] = useState(false);
+  const [storyCount, setStoryCount] = useState("2");
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatch, setSavedBatch] = useState(false);
 
@@ -170,6 +172,8 @@ export function AdSettingsClient() {
     if (cfg.commentCustomEntries) { try { setCommentCustomEntries(JSON.parse(cfg.commentCustomEntries)); } catch { /* ignore */ } }
     if (cfg.commentSharedImageUrls) { try { setCommentSharedImageUrls(JSON.parse(cfg.commentSharedImageUrls)); } catch { /* ignore */ } }
     if (cfg.commentRandomCount !== undefined) setCommentRandomCount(cfg.commentRandomCount);
+    if (cfg.storyEnabled !== undefined) setStoryEnabled(cfg.storyEnabled === "true");
+    if (cfg.storyCount !== undefined) setStoryCount(cfg.storyCount);
   }
 
   if (!settings) return null;
@@ -215,6 +219,8 @@ export function AdSettingsClient() {
           commentCustomEntries: JSON.stringify(commentCustomEntries),
           commentSharedImageUrls: JSON.stringify(commentSharedImageUrls),
           commentRandomCount,
+          storyEnabled: String(storyEnabled),
+          storyCount,
         }),
       });
       const updated = await saveAccountRows();
@@ -295,6 +301,7 @@ export function AdSettingsClient() {
       batchBudgetMin, batchBudgetMax, batchBudgetStep,
       commentEnabled, commentUseCaption, commentCaptionAttachImage, commentCaptionImageUrls, commentCustomEntries,
       commentSharedImageUrls, commentRandomCount,
+      storyEnabled, storyCount,
       accountRows: accountRows.map(r => ({
         accountId: r.accountId, weight: r.weight,
         budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
@@ -317,6 +324,8 @@ export function AdSettingsClient() {
     if (d.commentCustomEntries) setCommentCustomEntries(d.commentCustomEntries);
     if (d.commentSharedImageUrls) setCommentSharedImageUrls(d.commentSharedImageUrls);
     if (d.commentRandomCount !== undefined) setCommentRandomCount(d.commentRandomCount);
+    if (d.storyEnabled !== undefined) setStoryEnabled(d.storyEnabled);
+    if (d.storyCount !== undefined) setStoryCount(d.storyCount);
     if (d.batchTemplateId !== undefined) setBatchTemplateId(d.batchTemplateId);
     if (d.batchRunAds !== undefined) setBatchRunAds(d.batchRunAds);
     if (d.autoAdsStatus === "ACTIVE" || d.autoAdsStatus === "PAUSED") setBatchAdStatus(d.autoAdsStatus);
@@ -453,6 +462,37 @@ export function AdSettingsClient() {
         randomCount={commentRandomCount} onRandomCountChange={setCommentRandomCount}
         entries={commentCustomEntries} onEntriesChange={setCommentCustomEntries}
       />
+
+      <div className={`${adsPanel} p-4 space-y-3`}>
+        <div className="flex items-center gap-2">
+          <Megaphone size={14} className="text-violet-600 shrink-0" />
+          <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt Story</span>
+        </div>
+        <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tự động đăng story</span>
+            <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+              storyEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
+              {storyEnabled ? "Bật" : "Tắt"}
+            </span>
+          </div>
+          <button type="button" onClick={() => setStoryEnabled(!storyEnabled)}
+            className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
+              storyEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
+            <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+              storyEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
+          </button>
+        </div>
+        {storyEnabled && (
+          <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200" title="Đăng story (chỉ ảnh/video, không có chữ hay link) khoảng 15 phút sau khi N bài đầu tiên trong ngày lên sóng trên mỗi page">
+              Số bài đầu tiên mỗi ngày (mỗi page)
+            </span>
+            <input type="number" min={0} value={storyCount} onChange={e => setStoryCount(e.target.value)}
+              className="w-16 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-500 shrink-0" />
+          </div>
+        )}
+      </div>
 
       <button onClick={handleSaveBatch} disabled={savingBatch}
         className={["flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-all",
