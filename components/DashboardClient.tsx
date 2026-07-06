@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Post, ExtractedLink, FbConnection, FbAdAccount, PostComment } from "@prisma/client";
@@ -12,10 +12,11 @@ import {
   Trash2, CheckSquare, Square, Loader2,
   Columns3, Check, X, Zap,
   Eye, CheckCircle2, MessageCircle,
+  SlidersHorizontal, Search, Filter,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { randomInteger, randomStep } from "@/lib/adSettings";
-import { PageMultiSelect, PresetPanel, pickRandomPage } from "@/components/PageSelector";
+import { PageMultiSelect, pickRandomPage } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
@@ -80,7 +81,7 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
 };
 
 // ── Column config ─────────────────────────────────────────────────────────────
-type ColKey = "campaign" | "campaignName" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "story" | "actions";
+type ColKey = "campaign" | "campaignName" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "story" | "ctaHeadline" | "darkOverride" | "actions";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "campaign",     label: "Bài viết",        defaultWidth: 210, minWidth: 100, defaultVisible: true },
@@ -95,6 +96,8 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "status",    label: "Trạng thái",          defaultWidth: 105, minWidth: 75,  defaultVisible: true },
   { key: "comment",   label: "Bình luận",           defaultWidth: 180, minWidth: 100, defaultVisible: true },
   { key: "story",     label: "Story",               defaultWidth: 120, minWidth: 90,  defaultVisible: true },
+  { key: "ctaHeadline", label: "Tiêu đề CTA",       defaultWidth: 150, minWidth: 100, defaultVisible: true },
+  { key: "darkOverride", label: "Đăng trang",       defaultWidth: 100, minWidth: 80,  defaultVisible: true },
   { key: "actions",   label: "Hành động",           defaultWidth: 145, minWidth: 90,  defaultVisible: true },
 ];
 
@@ -103,6 +106,13 @@ const COLS_STORAGE_KEY = "postflow_dashboard_cols_v1";
 export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const router = useRouter();
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pageFilterIds, setPageFilterIds] = useState<Set<string>>(new Set());
+  const [tkqcFilterIds, setTkqcFilterIds] = useState<Set<string>>(new Set());
+  const [pageFilterOpen, setPageFilterOpen] = useState(false);
+  const [tkqcFilterOpen, setTkqcFilterOpen] = useState(false);
+  const pageFilterRef = useRef<HTMLDivElement>(null);
+  const tkqcFilterRef = useRef<HTMLDivElement>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [localPosts, setLocalPosts] = useState(posts);
   // `posts` only seeds initial state — router.refresh() re-renders this
@@ -143,6 +153,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     adAccounts.map((a) => ({ accountId: a.accountId, name: a.name }))
   );
   const [adsDrawerOpen, setAdsDrawerOpen] = useState(false);
+  // Opened via the toolbar's standalone "Cài đặt" button — same drawer body
+  // as "Tạo ads" (adsDrawerOpen), but not tied to any selected posts; the
+  // footer just persists these as the defaults instead of applying them to
+  // specific rows.
+  const [settingsOnlyOpen, setSettingsOnlyOpen] = useState(false);
+  const [applyingDefaults, setApplyingDefaults] = useState(false);
+  const [appliedDefaults, setAppliedDefaults] = useState(false);
   const [activeDrawerPresetId, setActiveDrawerPresetId] = useState<string | null>(null);
   const [drawerPostIds, setDrawerPostIds] = useState<string[]>([]);
   const [drawerAdConfig, setDrawerAdConfig] = useState<BatchAdConfig>(EMPTY_AD_CONFIG);
@@ -158,11 +175,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [drawerStoryEnabled, setDrawerStoryEnabled] = useState(false);
   const [drawerStoryCount, setDrawerStoryCount] = useState("2");
 
-  async function openAdsDrawer(ids: string[]) {
-    setCommentDrawerPostId(null);
-    setDrawerPostIds(ids);
-    setActiveDrawerPresetId(null);
-    setAdsDrawerOpen(true);
+  // Shared by the initial page-load fetch (so the plain "Đăng ngay" button
+  // always has real defaults, not just whatever useState() started with)
+  // and both drawer-opening paths ("Tạo ads" and the standalone "Cài đặt").
+  const loadDrawerDefaults = useCallback(async () => {
     try {
       const [accs, rows, cfg] = await Promise.all([
         fetch("/api/ad-accounts").then((r) => r.json()).catch(() => []),
@@ -187,6 +203,21 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     } catch {
       setDrawerAdConfig(buildAdConfigFromCfg({}, templates[0]));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates]);
+
+  // Load real defaults as soon as templates are available — otherwise the
+  // plain "Đăng ngay" button (which never opens either drawer) would send
+  // storyEnabled/storyCount from their useState() initial values instead of
+  // whatever's actually configured.
+  useEffect(() => { loadDrawerDefaults(); }, [loadDrawerDefaults]);
+
+  async function openAdsDrawer(ids: string[]) {
+    setCommentDrawerPostId(null);
+    setDrawerPostIds(ids);
+    setActiveDrawerPresetId(null);
+    setAdsDrawerOpen(true);
+    await loadDrawerDefaults();
   }
 
   // "Cài đặt Ads" is the single source of truth — edits made from this
@@ -198,6 +229,37 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     appConfigSyncTimer.current = setTimeout(() => {
       fetch("/api/app-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
     }, 500);
+  }
+  // "Cài đặt" (standalone, not tied to selected posts) — flushes the full
+  // current default config immediately instead of relying on the per-field
+  // debounce above, same rationale as BatchImportClient's pre-batch "Áp
+  // dụng" button.
+  async function handleApplyDefaults() {
+    if (appConfigSyncTimer.current) clearTimeout(appConfigSyncTimer.current);
+    setApplyingDefaults(true);
+    try {
+      await fetch("/api/app-config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchTemplateId: drawerAdConfig.templateId, batchRunAds: String(drawerAdConfig.runAds),
+          batchAgeMinFrom: drawerAdConfig.ageMinFrom, batchAgeMinTo: drawerAdConfig.ageMinTo,
+          batchAgeMaxFrom: drawerAdConfig.ageMaxFrom, batchAgeMaxTo: drawerAdConfig.ageMaxTo,
+          batchGender: drawerAdConfig.gender,
+          batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
+          autoAdsStatus: drawerAdConfig.adStatus,
+          batchDefaultPageIds: JSON.stringify(selectedPageIds),
+          commentEnabled: String(drawerCommentEnabled), commentUseCaption: String(drawerCommentUseCaption),
+          commentCaptionAttachImage: String(drawerCommentCaptionAttachImage),
+          commentCaptionImageUrls: JSON.stringify(drawerCommentCaptionImageUrls),
+          commentCustomEntries: JSON.stringify(drawerCommentEntries),
+          commentSharedImageUrls: JSON.stringify(drawerCommentSharedImageUrls),
+          commentRandomCount: drawerCommentRandomCount,
+          storyEnabled: String(drawerStoryEnabled), storyCount: drawerStoryCount,
+        }),
+      });
+      setAppliedDefaults(true);
+      setTimeout(() => setAppliedDefaults(false), 2500);
+    } finally { setApplyingDefaults(false); }
   }
   function persistDrawerAccountRow(row: AutoAdsAccountRowLike) {
     fetch("/api/auto-ads-accounts", {
@@ -504,6 +566,24 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     return () => document.removeEventListener("mousedown", handler);
   }, [colPanelOpen]);
 
+  useEffect(() => {
+    if (!pageFilterOpen) return;
+    function handler(e: MouseEvent) {
+      if (pageFilterRef.current && !pageFilterRef.current.contains(e.target as Node)) setPageFilterOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [pageFilterOpen]);
+
+  useEffect(() => {
+    if (!tkqcFilterOpen) return;
+    function handler(e: MouseEvent) {
+      if (tkqcFilterRef.current && !tkqcFilterRef.current.contains(e.target as Node)) setTkqcFilterOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [tkqcFilterOpen]);
+
   // Use refs so event handlers always see latest values without stale closures
   const colWidthsRef = useRef(colWidths);
   useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
@@ -556,9 +636,28 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     fetching: dateFiltered.filter((p) => p.status === "fetching").length,
   };
 
-  const filtered = filter === "all"
+  const statusFiltered = filter === "all"
     ? dateFiltered.filter((p) => p.status !== "failed")
     : dateFiltered.filter((p) => p.status === filter);
+
+  const searchFiltered = searchQuery.trim()
+    ? statusFiltered.filter((p) => {
+        const q = searchQuery.trim().toLowerCase();
+        return (p.title ?? "").toLowerCase().includes(q)
+          || (p.finalCaption ?? p.rawCaption ?? "").toLowerCase().includes(q)
+          || (p.campaignName ?? "").toLowerCase().includes(q)
+          || p.sourceUrl.toLowerCase().includes(q);
+      })
+    : statusFiltered;
+
+  const distinctPageIds = Array.from(new Set(searchFiltered.map((p) => p.pageId).filter((v): v is string => !!v)));
+  const distinctAccountIds = Array.from(new Set(searchFiltered.map((p) => p.adAccountUsed).filter((v): v is string => !!v)));
+
+  const filtered = searchFiltered.filter((p) => {
+    if (pageFilterIds.size > 0 && !pageFilterIds.has(p.pageId ?? "")) return false;
+    if (tkqcFilterIds.size > 0 && !tkqcFilterIds.has(p.adAccountUsed ?? "")) return false;
+    return true;
+  });
 
   // Auto-refresh when posts are in a transient state (fetching or publishing)
   useEffect(() => {
@@ -650,12 +749,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       try {
         const res = await fetch(`/api/posts/${p.id}/publish`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pageId }),
+          body: JSON.stringify({ pageId, storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0 }),
         });
         const data = await res.json();
         if (res.ok) {
           fbPostIdMap.set(p.id, data.fbPostId ?? "");
-          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x));
+          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl, pageId } : x));
         }
       } catch {}
     }
@@ -700,10 +799,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
 
-      {/* Filter tabs + action buttons */}
-      <div className="shrink-0 bg-white dark:bg-slate-900 flex flex-col gap-2.5 mb-4 py-2 lg:flex-row lg:items-center lg:justify-between">
+      {/* Filter tabs + action buttons — single row, horizontal-scroll fallback on narrow screens */}
+      <div className="shrink-0 bg-white dark:bg-slate-900 flex items-center gap-1.5 mb-4 py-2 overflow-x-auto flex-nowrap [&::-webkit-scrollbar]:hidden">
         {/* Tabs */}
-        <div className="flex gap-1 overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-1 shrink-0">
           {STATUS_FILTERS.map((s) => (
             <button key={s} onClick={() => { setFilter(s); setCheckedIds(new Set()); }}
               className={["shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
@@ -716,15 +815,92 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           ))}
         </div>
 
+        {/* Search */}
+        <div className="relative shrink-0 w-44 ml-1">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Tìm bài viết..."
+            className="w-full rounded-lg border bg-white dark:bg-slate-800 pl-7 pr-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+
         {/* Action buttons */}
-        <div className="flex items-center gap-1.5 flex-wrap min-w-0 lg:justify-end">
-          {/* Page multi-select + preset */}
-          <div className="w-40 shrink-0">
-            <PageMultiSelect connections={connections} selected={selectedPageIds} onChange={setSelectedPageIds} />
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+          {/* Page filter */}
+          <div className="relative shrink-0" ref={pageFilterRef}>
+            <button onClick={() => setPageFilterOpen((v) => !v)} title="Lọc theo Page"
+              className={`${btnBase} border shrink-0 ${pageFilterIds.size > 0 ? "border-blue-400 text-blue-600 bg-blue-50" : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"}`}>
+              <Filter size={13} />
+            </button>
+            {pageFilterOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-2 min-w-[200px] max-h-72 overflow-y-auto">
+                <div className="flex items-center justify-between px-2 pt-1 pb-2">
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Lọc theo Page</p>
+                  {pageFilterIds.size > 0 && (
+                    <button onClick={() => setPageFilterIds(new Set())} className="text-[10px] text-blue-600 hover:underline">Xoá lọc</button>
+                  )}
+                </div>
+                {distinctPageIds.length === 0 && <p className="px-2 py-1 text-xs text-slate-400">Không có page nào</p>}
+                {distinctPageIds.map((pid) => {
+                  const name = connections.find((c) => c.pageId === pid)?.pageName ?? pid;
+                  const checked = pageFilterIds.has(pid);
+                  return (
+                    <button key={pid} onClick={() => {
+                      const next = new Set(pageFilterIds);
+                      checked ? next.delete(pid) : next.add(pid);
+                      setPageFilterIds(next);
+                    }} className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-sm text-slate-700 dark:text-slate-300 transition-colors">
+                      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${checked ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+                        {checked && <Check size={10} strokeWidth={3} />}
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <div className="shrink-0">
-            <PresetPanel connections={connections} selected={selectedPageIds} onLoad={setSelectedPageIds} />
+
+          {/* TKQC filter */}
+          <div className="relative shrink-0" ref={tkqcFilterRef}>
+            <button onClick={() => setTkqcFilterOpen((v) => !v)} title="Lọc theo TKQC"
+              className={`${btnBase} border shrink-0 ${tkqcFilterIds.size > 0 ? "border-blue-400 text-blue-600 bg-blue-50" : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"}`}>
+              <Megaphone size={13} />
+            </button>
+            {tkqcFilterOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-2 min-w-[200px] max-h-72 overflow-y-auto">
+                <div className="flex items-center justify-between px-2 pt-1 pb-2">
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Lọc theo TKQC</p>
+                  {tkqcFilterIds.size > 0 && (
+                    <button onClick={() => setTkqcFilterIds(new Set())} className="text-[10px] text-blue-600 hover:underline">Xoá lọc</button>
+                  )}
+                </div>
+                {distinctAccountIds.length === 0 && <p className="px-2 py-1 text-xs text-slate-400">Chưa có TKQC nào</p>}
+                {distinctAccountIds.map((aid) => {
+                  const name = adAccountsFull.find((a) => a.accountId === aid)?.name ?? aid;
+                  const checked = tkqcFilterIds.has(aid);
+                  return (
+                    <button key={aid} onClick={() => {
+                      const next = new Set(tkqcFilterIds);
+                      checked ? next.delete(aid) : next.add(aid);
+                      setTkqcFilterIds(next);
+                    }} className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-sm text-slate-700 dark:text-slate-300 transition-colors">
+                      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${checked ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+                        {checked && <Check size={10} strokeWidth={3} />}
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
+
+          {/* Cài đặt — standalone defaults panel, not tied to selection */}
+          <button onClick={() => setSettingsOnlyOpen(true)} title="Cài đặt mặc định"
+            className={`${btnBase} border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0`}>
+            <SlidersHorizontal size={13} />
+            Cài đặt
+          </button>
 
           {/* Xóa */}
           <button onClick={bulkDelete} disabled={!hasSelection || bulkRunning}
@@ -991,6 +1167,20 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       </td>
                     )}
 
+                    {col.key === "ctaHeadline" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{post.ctaHeadline || "–"}</p>
+                      </td>
+                    )}
+
+                    {col.key === "darkOverride" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        {post.status === "done"
+                          ? <span className="text-[10px] text-slate-500">{post.fbPostUrl ? "Đăng trang" : "Chạy ẩn"}</span>
+                          : <span className="text-slate-300 text-xs">–</span>}
+                      </td>
+                    )}
+
                     {col.key === "actions" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
@@ -1035,27 +1225,47 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
       {/* Ads drawer — single post or bulk selection, editable before applying */}
-      {adsDrawerOpen && (
+      {(adsDrawerOpen || settingsOnlyOpen) && (
         <div className="w-[420px] shrink-0 sticky top-4 rounded-2xl border bg-white dark:bg-slate-900 shadow-sm flex flex-col max-h-[calc(100vh-2rem)]">
           {/* Header stays outside the scroll area so the Preset dropdown never gets clipped */}
           <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
             <div className="flex items-center gap-2">
-              <p className="text-xs font-medium text-slate-500">Áp dụng cho {drawerPostIds.length} bài</p>
+              <p className="text-xs font-medium text-slate-500">
+                {settingsOnlyOpen ? "Cài đặt mặc định" : `Áp dụng cho ${drawerPostIds.length} bài`}
+              </p>
               <FullSettingsPresetPanel getCurrentData={buildDrawerPresetData} onLoad={applyDrawerPresetData}
                 activePresetId={activeDrawerPresetId} onActivePresetChange={setActiveDrawerPresetId} />
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button onClick={applyAdsDrawer} disabled={drawerApplying}
-                className="flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm disabled:opacity-50">
-                {drawerApplying ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />} Áp dụng
-              </button>
-              <button onClick={() => setAdsDrawerOpen(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+              {settingsOnlyOpen ? (
+                <button onClick={handleApplyDefaults} disabled={applyingDefaults}
+                  className={["flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm disabled:opacity-50",
+                    appliedDefaults ? "bg-emerald-600 text-white" : "bg-violet-600 hover:bg-violet-700 text-white"].join(" ")}>
+                  {applyingDefaults ? <Loader2 size={12} className="animate-spin" /> : appliedDefaults ? <CheckCircle2 size={12} /> : <Zap size={12} />}
+                  {applyingDefaults ? "Đang áp dụng..." : appliedDefaults ? "Đã áp dụng" : "Áp dụng"}
+                </button>
+              ) : (
+                <button onClick={applyAdsDrawer} disabled={drawerApplying}
+                  className="flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm disabled:opacity-50">
+                  {drawerApplying ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />} Áp dụng
+                </button>
+              )}
+              <button onClick={() => { setAdsDrawerOpen(false); setSettingsOnlyOpen(false); }} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
                 <X size={14} />
               </button>
             </div>
           </div>
 
           <div className="p-4 pt-3 space-y-4 overflow-y-auto">
+            {settingsOnlyOpen && (
+              <div className={`${adsPanel} p-4 space-y-3`}>
+                <div className="flex items-center gap-2">
+                  <Megaphone size={14} className="text-violet-600 shrink-0" />
+                  <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Page mặc định</span>
+                </div>
+                <PageMultiSelect connections={connections} selected={selectedPageIds} onChange={setSelectedPageIds} />
+              </div>
+            )}
             <AdsConfigPanel
               adConfig={drawerAdConfig} templates={templates} adAccounts={adAccountsFull} accountRows={drawerAccountRows}
               onPatch={patchDrawerAdConfig} onPatchRow={patchDrawerRow} onDeleteRow={deleteDrawerRow} onAddRow={addDrawerRow}

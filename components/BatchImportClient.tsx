@@ -11,7 +11,7 @@ import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
   PlusCircle, Zap, ArrowRight, RefreshCw, CheckCircle2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
-  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X,
+  Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X, Filter,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger, randomStep } from "@/lib/adSettings";
@@ -298,6 +298,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [defaultCommentRandomCount, setDefaultCommentRandomCount] = useState("0");
   const [defaultStoryEnabled, setDefaultStoryEnabled] = useState(false);
   const [defaultStoryCount, setDefaultStoryCount] = useState("2");
+  const [applyingDefaults, setApplyingDefaults] = useState(false);
+  const [appliedDefaults, setAppliedDefaults] = useState(false);
   const adConfigRef = useRef(adConfig);
   useEffect(() => { adConfigRef.current = adConfig; }, [adConfig]);
 
@@ -311,6 +313,42 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     appConfigSyncTimer.current = setTimeout(() => {
       fetch("/api/app-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
     }, 500);
+  }
+
+  // "Áp dụng" in the pre-batch panel — every toggle/input here already
+  // auto-saves via the debounced syncAppConfig above, but that only ever
+  // sends the single field that just changed, so rapid edits can lose
+  // earlier ones to the debounce reset. This button flushes immediately
+  // with the FULL current state, giving an explicit "yes, saved now"
+  // confirmation matching every other settings panel in the app.
+  async function handleApplyDefaults() {
+    if (appConfigSyncTimer.current) clearTimeout(appConfigSyncTimer.current);
+    setApplyingDefaults(true);
+    try {
+      await fetch("/api/app-config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchTemplateId: adConfig.templateId, batchRunAds: String(adConfig.runAds),
+          batchAgeMinFrom: adConfig.ageMinFrom, batchAgeMinTo: adConfig.ageMinTo,
+          batchAgeMaxFrom: adConfig.ageMaxFrom, batchAgeMaxTo: adConfig.ageMaxTo,
+          batchGender: adConfig.gender,
+          batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
+          autoAdsStatus: adConfig.adStatus,
+          batchDefaultPageIds: JSON.stringify(defaultPageIds),
+          batchScheduleMode: defaultScheduleMode, batchStepMinutes: defaultStepMinutes,
+          batchPostsPerDay: defaultPostsPerDay, batchBaseTime: defaultBaseTime, batchEndTime: defaultEndTime,
+          commentEnabled: String(defaultCommentEnabled), commentUseCaption: String(defaultCommentUseCaption),
+          commentCaptionAttachImage: String(defaultCommentCaptionAttachImage),
+          commentCaptionImageUrls: JSON.stringify(defaultCommentCaptionImageUrls),
+          commentCustomEntries: JSON.stringify(defaultCommentCustomEntries),
+          commentSharedImageUrls: JSON.stringify(defaultCommentSharedImageUrls),
+          commentRandomCount: defaultCommentRandomCount,
+          storyEnabled: String(defaultStoryEnabled), storyCount: defaultStoryCount,
+        }),
+      });
+      setAppliedDefaults(true);
+      setTimeout(() => setAppliedDefaults(false), 2500);
+    } finally { setApplyingDefaults(false); }
   }
 
   // Load templates + config + TKQC
@@ -697,6 +735,15 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
                 </div>
               )}
             </div>
+
+            <button onClick={handleApplyDefaults} disabled={applyingDefaults}
+              className={["flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-all w-full",
+                appliedDefaults ? "bg-emerald-600 text-white" : "bg-violet-600 hover:bg-violet-700 text-white shadow-sm",
+              ].join(" ")}>
+              {applyingDefaults ? <><Loader2 size={14} className="animate-spin" /> Đang áp dụng...</>
+                : appliedDefaults ? <><CheckCircle2 size={14} /> Đã áp dụng</>
+                : <><Zap size={14} /> Áp dụng</>}
+            </button>
           </div>
         </div>
       </div>
@@ -825,6 +872,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [colVisible, setColVisible] = useState<Record<ColKey, boolean>>(defaultVisible);
   const [colPanelOpen, setColPanelOpen] = useState(false);
   const colPanelRef = useRef<HTMLDivElement>(null);
+  const [pageFilterIds, setPageFilterIds] = useState<Set<string>>(new Set());
+  const [tkqcFilterIds, setTkqcFilterIds] = useState<Set<string>>(new Set());
+  const [pageFilterOpen, setPageFilterOpen] = useState(false);
+  const [tkqcFilterOpen, setTkqcFilterOpen] = useState(false);
+  const pageFilterRef = useRef<HTMLDivElement>(null);
+  const tkqcFilterRef = useRef<HTMLDivElement>(null);
   const colWidthsRef = useRef(colWidths);
   useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
   const colVisibleRef = useRef(colVisible);
@@ -850,6 +903,24 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [colPanelOpen]);
+
+  useEffect(() => {
+    if (!pageFilterOpen) return;
+    const h = (e: MouseEvent) => {
+      if (pageFilterRef.current && !pageFilterRef.current.contains(e.target as Node)) setPageFilterOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [pageFilterOpen]);
+
+  useEffect(() => {
+    if (!tkqcFilterOpen) return;
+    const h = (e: MouseEvent) => {
+      if (tkqcFilterRef.current && !tkqcFilterRef.current.contains(e.target as Node)) setTkqcFilterOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [tkqcFilterOpen]);
 
   useEffect(() => {
     if (!randomFieldsOpen) return;
@@ -914,14 +985,32 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   const allIds = batch.posts.map(p => p.id);
 
+  const effectivePageIdFor = (id: string) => rowPageId[id] || "";
+  const effectiveAccountIdFor = (id: string) => rowAccountId[id] || "";
+  const distinctPageIds = Array.from(new Set(batch.posts.map(p => effectivePageIdFor(p.id)).filter(Boolean)));
+  const distinctAccountIds = Array.from(new Set(batch.posts.map(p => effectiveAccountIdFor(p.id)).filter(Boolean)));
+  const visiblePosts = batch.posts.filter(p => {
+    if (pageFilterIds.size > 0 && !pageFilterIds.has(effectivePageIdFor(p.id))) return false;
+    if (tkqcFilterIds.size > 0 && !tkqcFilterIds.has(effectiveAccountIdFor(p.id))) return false;
+    return true;
+  });
+
   // Auto-fill defaults (page/tuổi/giới tính/ngân sách/TKQC/giờ đăng) as soon as
   // a row exists — don't wait for caption/media to finish fetching, those fill
   // in separately once ready. Never clobbers rows the user already touched.
   useEffect(() => {
     const freshIds = allIds.filter(id => !(id in rowAdParams));
-    if (freshIds.length) applyDefaultsToRows(freshIds);
+    // A row can get its default TKQC picked before /api/auto-ads-accounts
+    // (or a preset's account rows) has finished loading — pickAccountAndBudget
+    // returns accountId:"" when there are zero rows to pick from, and without
+    // this it stays stuck showing "Tự động" forever even once real accounts
+    // load moments later. Re-run for any row still missing an account once
+    // localAccountRows actually has entries.
+    const staleIds = allIds.filter(id => id in rowAdParams && !rowAccountId[id]);
+    const idsToFill = [...freshIds, ...staleIds];
+    if (idsToFill.length) applyDefaultsToRows(idsToFill);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allIds.join(",")]);
+  }, [allIds.join(","), localAccountRows.length]);
 
   function patchAdConfig(patch: Partial<BatchAdConfig>) {
     // Handle batch-local side effects first
@@ -1423,6 +1512,76 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* Page filter */}
+          <div className="relative" ref={pageFilterRef}>
+            <button onClick={() => setPageFilterOpen(v => !v)} title="Lọc theo Page"
+              className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 transition-colors ${pageFilterIds.size > 0 ? "border-blue-400 text-blue-600 bg-blue-50" : "bg-white dark:bg-slate-800 text-slate-600 hover:border-blue-300"}`}>
+              <Filter size={13} />
+            </button>
+            {pageFilterOpen && (
+              <div className="absolute right-0 top-8 z-50 w-52 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5 max-h-72 overflow-y-auto">
+                <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Lọc theo Page</p>
+                  {pageFilterIds.size > 0 && (
+                    <button onClick={() => setPageFilterIds(new Set())} className="text-[10px] text-blue-600 hover:underline">Xoá lọc</button>
+                  )}
+                </div>
+                {distinctPageIds.length === 0 && <p className="px-2 py-1 text-xs text-slate-400">Không có page nào</p>}
+                {distinctPageIds.map(pid => {
+                  const name = connections.find(c => c.pageId === pid)?.pageName ?? pid;
+                  const checked = pageFilterIds.has(pid);
+                  return (
+                    <button key={pid} onClick={() => {
+                      const next = new Set(pageFilterIds);
+                      checked ? next.delete(pid) : next.add(pid);
+                      setPageFilterIds(next);
+                    }} className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-sm text-slate-700 dark:text-slate-300 transition-colors">
+                      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${checked ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+                        {checked && <Check size={10} strokeWidth={3} />}
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* TKQC filter */}
+          <div className="relative" ref={tkqcFilterRef}>
+            <button onClick={() => setTkqcFilterOpen(v => !v)} title="Lọc theo TKQC"
+              className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 transition-colors ${tkqcFilterIds.size > 0 ? "border-blue-400 text-blue-600 bg-blue-50" : "bg-white dark:bg-slate-800 text-slate-600 hover:border-blue-300"}`}>
+              <Megaphone size={13} />
+            </button>
+            {tkqcFilterOpen && (
+              <div className="absolute right-0 top-8 z-50 w-52 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5 max-h-72 overflow-y-auto">
+                <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Lọc theo TKQC</p>
+                  {tkqcFilterIds.size > 0 && (
+                    <button onClick={() => setTkqcFilterIds(new Set())} className="text-[10px] text-blue-600 hover:underline">Xoá lọc</button>
+                  )}
+                </div>
+                {distinctAccountIds.length === 0 && <p className="px-2 py-1 text-xs text-slate-400">Chưa có TKQC nào</p>}
+                {distinctAccountIds.map(aid => {
+                  const name = adAccounts.find(a => a.accountId === aid)?.name ?? aid;
+                  const checked = tkqcFilterIds.has(aid);
+                  return (
+                    <button key={aid} onClick={() => {
+                      const next = new Set(tkqcFilterIds);
+                      checked ? next.delete(aid) : next.add(aid);
+                      setTkqcFilterIds(next);
+                    }} className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-sm text-slate-700 dark:text-slate-300 transition-colors">
+                      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${checked ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+                        {checked && <Check size={10} strokeWidth={3} />}
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Column toggle */}
           <div className="relative" ref={colPanelRef}>
             <button onClick={() => setColPanelOpen(v => !v)} title="Cột"
@@ -1494,7 +1653,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             </tr>
           </thead>
           <tbody>
-            {batch.posts.map((post) => (
+            {visiblePosts.map((post) => (
               <PostRow
                 key={post.id}
                 post={post}
