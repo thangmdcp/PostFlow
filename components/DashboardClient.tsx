@@ -78,10 +78,11 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
 };
 
 // ── Column config ─────────────────────────────────────────────────────────────
-type ColKey = "campaign" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "actions";
+type ColKey = "campaign" | "campaignName" | "content" | "budget" | "age" | "gender" | "account" | "start" | "page" | "status" | "comment" | "actions";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
-  { key: "campaign",  label: "Tên chiến dịch",    defaultWidth: 210, minWidth: 100, defaultVisible: true },
+  { key: "campaign",     label: "Bài viết",        defaultWidth: 210, minWidth: 100, defaultVisible: true },
+  { key: "campaignName", label: "Tên chiến dịch",  defaultWidth: 150, minWidth: 90,  defaultVisible: true },
   { key: "content",   label: "Nội dung bài viết",  defaultWidth: 260, minWidth: 120, defaultVisible: true },
   { key: "budget",    label: "Ngân sách",           defaultWidth: 105, minWidth: 70,  defaultVisible: true },
   { key: "age",       label: "Độ tuổi",             defaultWidth: 85,  minWidth: 65,  defaultVisible: true },
@@ -837,6 +838,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                             {post.title || post.sourceUrl}
                           </a>
                         </div>
+                      </td>
+                    )}
+
+                    {col.key === "campaignName" && (
+                      <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{post.campaignName || "–"}</p>
                       </td>
                     )}
 

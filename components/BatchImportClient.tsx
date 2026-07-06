@@ -167,11 +167,12 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "title" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment";
+type ColKey = "status" | "title" | "campaignName" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
   { key: "title",       label: "Bài viết",      defaultWidth: 230, minWidth: 130, defaultVisible: true },
+  { key: "campaignName",label: "Tên chiến dịch",defaultWidth: 150, minWidth: 90,  defaultVisible: true },
   { key: "caption",     label: "Nội dung",      defaultWidth: 200, minWidth: 100, defaultVisible: true },
   { key: "linkAff",     label: "Link aff",      defaultWidth: 200, minWidth: 120, defaultVisible: true },
   { key: "scheduledAt", label: "Giờ đăng",     defaultWidth: 170, minWidth: 100, defaultVisible: true },
@@ -1816,6 +1817,10 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                 <ExternalLink size={10} className="shrink-0 text-slate-400" />
               </a>
             </div>
+      )}
+
+      {col.key === "campaignName" && cell("campaignName",
+        <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{post.campaignName || "–"}</p>
       )}
 
       {col.key === "caption" && cell("caption",

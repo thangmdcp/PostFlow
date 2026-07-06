@@ -73,9 +73,15 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
 // the first attempt) without going through scheduleAutoAds' waitUntil.
 export async function attemptAutoAds(params: AutoAdsRunParams, attemptIndex: number): Promise<void> {
   const attemptNumber = attemptIndex + 1;
+  // Record the attempt count BEFORE calling out to Facebook, not just on
+  // completion — if the serverless invocation dies mid-call, the row is
+  // left stuck on "creating" with the OLD attempt count, and
+  // processDueAdRetries would otherwise retry it forever since it never
+  // sees the count go up. Bumping it up-front means a stuck row hits
+  // MAX_ATTEMPTS and gets marked failed instead of looping.
   await prisma.post.update({
     where: { id: params.postId },
-    data: { adStatus: "creating" },
+    data: { adStatus: "creating", adAttempt: attemptNumber },
   }).catch(() => {});
 
   try {
@@ -128,6 +134,17 @@ export async function processDueAdRetries(): Promise<void> {
     if (!post.pageId || !post.fbPostId) continue;
     const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
     if (!fbConn) continue;
+
+    // A "creating" post stuck long enough to be picked up here already used
+    // up its recorded attempt (see the up-front bump in attemptAutoAds) —
+    // if that already hit the cap, stop instead of retrying indefinitely.
+    if ((post.adAttempt ?? 0) >= MAX_ATTEMPTS) {
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: "[ads] Vượt quá số lần thử lại cho phép" },
+      }).catch(() => {});
+      continue;
+    }
 
     await attemptAutoAds(
       {

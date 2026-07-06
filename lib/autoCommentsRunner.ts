@@ -2,10 +2,14 @@ import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { postComment } from "@/lib/facebook";
 
-// Same retry shape as lib/autoAdsRunner.ts, but comments don't need the long
-// FB-indexing wait video ads do — 30s, then +2m if still failing.
-const RETRY_DELAYS_MS = [30_000, 120_000];
-const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
+// Each comment on a post posts 2 minutes after the previous one (or after
+// publish, for the first) — comment 1 at +2m, comment 2 at +4m, etc. — see
+// the per-index stagger in scheduleCommentJobs. Retries after a failed
+// attempt reuse the same 2-minute spacing, capped at 3 total attempts so a
+// broken comment can't retry forever.
+const COMMENT_INTERVAL_MS = 120_000;
+const RETRY_DELAYS_MS = [COMMENT_INTERVAL_MS, COMMENT_INTERVAL_MS];
+const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1; // +1 for the first attempt
 
 export interface CommentJob {
   text: string;
@@ -28,31 +32,42 @@ export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Pr
 // it only persists each row's initial "pending" state (fast DB writes); the
 // actual wait + attempt happens in the background via waitUntil per row.
 export async function scheduleCommentJobs(postId: string, fbPostId: string, accessToken: string): Promise<void> {
-  const queued = await prisma.postComment.findMany({ where: { postId, status: null } });
+  const queued = await prisma.postComment.findMany({ where: { postId, status: null }, orderBy: { createdAt: "asc" } });
   if (queued.length === 0) return;
 
-  const nextAttemptAt = new Date(Date.now() + RETRY_DELAYS_MS[0]);
-  await prisma.postComment.updateMany({
-    where: { id: { in: queued.map((c) => c.id) } },
-    data: { status: "pending", nextAttemptAt, attempt: 0 },
-  });
+  // Comment N fires N * 2 minutes after publish (1st at +2m, 2nd at +4m, ...)
+  // — not all at once — hence the per-index delay instead of a shared one.
+  await Promise.all(queued.map((row, index) => {
+    const delay = (index + 1) * COMMENT_INTERVAL_MS;
+    return prisma.postComment.update({
+      where: { id: row.id },
+      data: { status: "pending", nextAttemptAt: new Date(Date.now() + delay), attempt: 0 },
+    });
+  }));
 
-  for (const row of queued) {
+  queued.forEach((row, index) => {
+    const delay = (index + 1) * COMMENT_INTERVAL_MS;
     waitUntil(
-      new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[0])).then(() =>
+      new Promise<void>((resolve) => setTimeout(resolve, delay)).then(() =>
         attemptComment(row.id, fbPostId, accessToken, 0)
       )
     );
-  }
+  });
 }
 
 // Exported so the cron route can also call it directly (for retries beyond
 // the first attempt) without going through scheduleCommentJobs' waitUntil.
 export async function attemptComment(commentRowId: string, fbPostId: string, accessToken: string, attemptIndex: number): Promise<void> {
   const attemptNumber = attemptIndex + 1;
+  // Record the attempt count BEFORE calling out to Facebook, not just on
+  // completion — if the serverless invocation dies mid-call (timeout, cold
+  // start crash), the row is left stuck on "creating" with the OLD attempt
+  // count, and processDueCommentRetries would otherwise retry it forever
+  // since it never sees the count go up. Bumping it up-front means a stuck
+  // row hits MAX_ATTEMPTS and gets marked failed instead of looping.
   const row = await prisma.postComment.update({
     where: { id: commentRowId },
-    data: { status: "creating" },
+    data: { status: "creating", attempt: attemptNumber },
   }).catch(() => null);
   if (!row) return;
 
@@ -114,6 +129,18 @@ export async function processDueCommentRetries(): Promise<void> {
       await prisma.postComment.update({
         where: { id: row.id },
         data: { status: "failed", nextAttemptAt: null, errorMsg: `[comment] Không tìm thấy kết nối FB cho page ${row.post.pageId}` },
+      }).catch(() => {});
+      continue;
+    }
+
+    // A "creating" row stuck long enough to be picked up here already used
+    // up its recorded attempt (see the up-front bump in attemptComment) — if
+    // that already hit the cap, stop instead of retrying an unbounded
+    // number of times.
+    if ((row.attempt ?? 0) >= MAX_ATTEMPTS) {
+      await prisma.postComment.update({
+        where: { id: row.id },
+        data: { status: "failed", nextAttemptAt: null, errorMsg: "[comment] Vượt quá số lần thử lại cho phép" },
       }).catch(() => {});
       continue;
     }
