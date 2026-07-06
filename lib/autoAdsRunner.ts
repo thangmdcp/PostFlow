@@ -234,8 +234,34 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   // post — use it exactly instead of re-rolling from the TKQC account row's
   // own range, which is what caused the ad's actual budget to end up
   // different from what the table displayed.
-  const dailyBudget = p.budgetMin
-    ? String(randomStep(Number(p.budgetMin), Number(p.budgetMax ?? p.budgetMin), Number(p.budgetStep ?? 1)))
+  //
+  // SAFETY NET: a stale client bundle or a client-side account/budget
+  // pairing bug can persist an explicit budget that was actually rolled for
+  // a DIFFERENT account (e.g. a VND account's 40000-55000 range attached to
+  // a USD account whose own range is 2-3). Combined with the currency
+  // minor-unit conversion in lib/facebook.ts, that turns a should-be
+  // $2-3/day budget into tens of thousands of USD/day — this happened for
+  // real and cost real money. Reject any explicit budget that's wildly
+  // outside the picked account's OWN currently configured range and fall
+  // back to rolling fresh from the account's real config instead, no matter
+  // what the client sent.
+  const explicitMin = p.budgetMin !== undefined && p.budgetMin !== "" ? Number(p.budgetMin) : null;
+  const explicitMax = p.budgetMax !== undefined && p.budgetMax !== "" ? Number(p.budgetMax) : explicitMin;
+  const SAFETY_MULTIPLIER = 5; // generous margin over the account's own configured max
+  const explicitInRange =
+    explicitMin !== null && explicitMax !== null &&
+    explicitMin > 0 && explicitMax > 0 &&
+    explicitMax <= pickedBudgetMax * SAFETY_MULTIPLIER;
+
+  if (explicitMin !== null && !explicitInRange) {
+    console.error(
+      `[auto-ads] SAFETY: rejected out-of-range explicit budget ${p.budgetMin}-${p.budgetMax} for account ${pickedAccountId} ` +
+      `(account's configured max is ${pickedBudgetMax}) — rolling from the account's own range instead`
+    );
+  }
+
+  const dailyBudget = explicitInRange
+    ? String(randomStep(explicitMin!, explicitMax!, Number(p.budgetStep ?? 1)))
     : String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
 
   const pfx = p.isBatchPost ? "batch" : "autoAds";
