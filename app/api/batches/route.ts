@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { fetchPostFields } from "@/lib/postProcessing";
+import { topUpPageStories } from "@/lib/autoStoryRunner";
 
 export async function POST(req: Request) {
   try {
@@ -46,12 +47,31 @@ export async function POST(req: Request) {
     // moment the response is sent on Vercel, leaving posts stuck "fetching".
     waitUntil(processBatch(batch.posts.map((p) => ({ id: p.id, sourceUrl: p.sourceUrl }))));
 
+    // Every time a new batch is fetched, top up each connected page's
+    // rolling Story quota from its own already-published archive — pages
+    // aren't assigned to specific posts yet at this point, so this runs
+    // globally rather than scoped to just this batch's (still page-less)
+    // posts. Pure DB reads/writes, safe to await inline.
+    await topUpPageStoriesForAllPages().catch((err) => console.error("[batches] story top-up failed:", err));
 
     return NextResponse.json({ batchId: batch.id, posts: batch.posts });
   } catch (err) {
     console.error("POST /api/batches error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
+}
+
+async function topUpPageStoriesForAllPages() {
+  const [storyEnabledCfg, storyCountCfg] = await Promise.all([
+    prisma.appConfig.findUnique({ where: { key: "storyEnabled" } }),
+    prisma.appConfig.findUnique({ where: { key: "storyCount" } }),
+  ]);
+  if (storyEnabledCfg?.value !== "true") return;
+  const storyCount = Number(storyCountCfg?.value ?? 0);
+  if (!storyCount) return;
+
+  const pages = await prisma.fbConnection.findMany({ select: { pageId: true } });
+  await Promise.all(pages.map((p) => topUpPageStories(p.pageId, storyCount)));
 }
 
 async function processOne(post: { id: string; sourceUrl: string }) {

@@ -1,36 +1,67 @@
 import { prisma } from "@/lib/prisma";
 import { publishStoryToPage } from "@/lib/facebook";
-import { vnDayRange } from "@/lib/vnDate";
 
 // Unlike ads (1st attempt via waitUntil ~1 min out) and comments (~2 min
-// out), the Story delay is ~15 minutes — well past the publish route's 90s
-// maxDuration, so there is NO in-process first attempt here at all. Every
-// attempt, including the first, is picked up by the cron sweep
+// out), the Story delay is at least 1 hour — well past the publish route's
+// 90s maxDuration, so there is NO in-process first attempt here at all.
+// Every attempt, including the first, is picked up by the cron sweep
 // (processDueStoryRetries) once storyNextAttemptAt has passed.
-const INITIAL_DELAY_MS = 15 * 60_000;
 const RETRY_DELAY_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 3;
+const ONE_HOUR_MS = 60 * 60_000;
+const ACTIVE_WINDOW_MS = 24 * 60 * 60_000; // FB stories expire 24h after posting
 
-// Call right after a post finishes publishing (status already "done").
-// Decides whether this post is among the first `storyCount` posts to
-// successfully publish TODAY on this page, and if so persists the pending
-// story job — purely a DB write, no Facebook call happens here.
-export async function maybeScheduleStory(postId: string, pageId: string, fbMediaId: string | null | undefined, storyEnabled?: boolean | null, storyCount?: number | null): Promise<void> {
-  if (!storyEnabled || !storyCount || storyCount <= 0 || !fbMediaId) return;
+// Maintains a rolling target of `storyCount` always-live stories per page.
+// Called both right after a post finishes publishing (organic — pass its
+// own id as preferPostId so fresh content is used first if a slot is open)
+// and at batch-fetch time for every connected page (pure backfill, no
+// preferPostId). "Active" counts stories posted within the last 24h plus
+// any still in-flight, so this never over-schedules regardless of which
+// trigger fires it or how many times.
+export async function topUpPageStories(pageId: string, storyCount: number, preferPostId?: string): Promise<void> {
+  if (!storyCount || storyCount <= 0) return;
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - ACTIVE_WINDOW_MS);
 
-  const { start, end } = vnDayRange();
-  // The post being checked has already been marked "done" by the caller, so
-  // this count already includes it — the count IS this post's 1-based rank
-  // for (page, day).
-  const doneTodayCount = await prisma.post.count({
-    where: { pageId, status: "done", updatedAt: { gte: start, lt: end } },
+  const activeCount = await prisma.post.count({
+    where: {
+      pageId,
+      OR: [
+        { storyStatus: "done", storyPostedAt: { gte: windowStart } },
+        { storyStatus: { in: ["pending", "creating"] } },
+      ],
+    },
   });
-  if (doneTodayCount > storyCount) return;
+  const needed = storyCount - activeCount;
+  if (needed <= 0) return;
 
-  await prisma.post.update({
-    where: { id: postId },
-    data: { storyStatus: "pending", storyNextAttemptAt: new Date(Date.now() + INITIAL_DELAY_MS), storyAttempt: 0 },
+  // Candidates: already-published posts on this page that have never
+  // carried a story job (storyStatus null). A post used once keeps a
+  // non-null storyStatus forever, so it's naturally excluded from re-pick,
+  // even after its story has expired.
+  let candidates = await prisma.post.findMany({
+    where: { pageId, status: "done", fbMediaId: { not: null }, storyStatus: null },
+    select: { id: true },
   });
+
+  const chosen: string[] = [];
+  if (preferPostId && candidates.some((c) => c.id === preferPostId)) {
+    chosen.push(preferPostId);
+    candidates = candidates.filter((c) => c.id !== preferPostId);
+  }
+  while (chosen.length < needed && candidates.length > 0) {
+    const idx = Math.floor(Math.random() * candidates.length);
+    chosen.push(candidates.splice(idx, 1)[0].id);
+  }
+  if (chosen.length === 0) return; // nothing left in the archive to backfill from
+
+  // Every slot in this pass — including the first — is spaced 1h apart.
+  await Promise.all(chosen.map((postId, i) =>
+    prisma.post.update({
+      where: { id: postId },
+      data: { storyStatus: "pending", storyNextAttemptAt: new Date(now.getTime() + (i + 1) * ONE_HOUR_MS), storyAttempt: 0 },
+    })
+  ));
 }
 
 export async function attemptStory(postId: string, attemptIndex: number): Promise<void> {
@@ -52,7 +83,7 @@ export async function attemptStory(postId: string, attemptIndex: number): Promis
     const result = await publishStoryToPage(post.pageId, fbConn.accessToken, post.fbMediaId, post.mediaType);
     await prisma.post.update({
       where: { id: postId },
-      data: { storyStatus: "done", storyPostId: result.postId, storyNextAttemptAt: null, errorMsg: null },
+      data: { storyStatus: "done", storyPostId: result.postId, storyNextAttemptAt: null, errorMsg: null, storyPostedAt: new Date() },
     });
     console.log(`[auto-story] post ${postId}: story ${result.postId} posted (attempt ${attemptNumber})`);
   } catch (err) {

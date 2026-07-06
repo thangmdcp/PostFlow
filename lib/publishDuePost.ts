@@ -5,7 +5,7 @@ import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
-import { maybeScheduleStory } from "@/lib/autoStoryRunner";
+import { topUpPageStories } from "@/lib/autoStoryRunner";
 
 export async function publishDuePost(post: Post): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
   // Atomic claim: the cron route's findMany + loop has a window where two
@@ -125,7 +125,9 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
       await scheduleCommentJobs(post.id, fbPostId, fbConn.accessToken);
     }
 
-    await maybeScheduleStory(post.id, post.pageId, result.mediaId, post.storyEnabled, post.storyCount);
+    if (post.storyEnabled && post.storyCount) {
+      await topUpPageStories(post.pageId, post.storyCount, post.id);
+    }
 
     return { id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) };
   } catch (err: unknown) {
