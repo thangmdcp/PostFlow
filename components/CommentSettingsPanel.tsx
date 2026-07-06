@@ -4,7 +4,7 @@ import { useState } from "react";
 import { MessageCircle, Pin, PinOff, X } from "lucide-react";
 import { adsPanel } from "@/lib/ui-classes";
 
-export interface CommentEntry { id: string; text: string; attachImage: boolean; imageUrls: string[]; pinned: boolean; }
+export interface CommentEntry { id: string; text: string; attachImage: boolean; imageUrls: string[]; pinned: boolean; appendAffLink?: boolean; }
 
 export interface CommentSettingsPanelProps {
   enabled: boolean; onEnabledChange: (v: boolean) => void;
@@ -114,6 +114,12 @@ export function CommentSettingsPanel({
                 {entry.attachImage && (
                   <ImageUrlListEditor urls={entry.imageUrls} onChange={urls => patchEntry(i, { imageUrls: urls })} />
                 )}
+                <label className="flex items-center gap-2 cursor-pointer" title="Tự động nối link aff của bài (sau nội dung, cách 1 khoảng trắng) khi đăng bình luận">
+                  <input type="checkbox" checked={entry.appendAffLink ?? false}
+                    onChange={e => patchEntry(i, { appendAffLink: e.target.checked })}
+                    className="rounded accent-violet-600" />
+                  <span className="text-xs text-slate-600 dark:text-slate-300">Kèm link aff</span>
+                </label>
               </div>
             ))}
           </div>

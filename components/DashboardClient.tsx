@@ -328,23 +328,30 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   function resolveDrawerCommentJobs(post: PostWithLinks): { text: string; imageUrl?: string }[] {
     if (!drawerCommentEnabled) return [];
     const jobs: { text: string; imageUrl?: string }[] = [];
+    // "Kèm link aff" appends the post's own aff link after a space, not
+    // inline with the typed text — matches the same link the post was
+    // actually published with.
+    const affLink = post.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
+    const withAff = (text: string, on?: boolean) => (on && affLink ? `${text} ${affLink}` : text);
+
     if (drawerCommentUseCaption) {
       const text = (post.finalCaption ?? post.rawCaption ?? "").trim();
       if (text) jobs.push({ text, imageUrl: resolveDrawerImage(drawerCommentCaptionAttachImage, drawerCommentCaptionImageUrls, drawerCommentSharedImageUrls) });
     }
     const active = drawerCommentEntries.filter((e) => e.text.trim());
     for (const e of active.filter((e) => e.pinned)) {
-      jobs.push({ text: e.text, imageUrl: resolveDrawerImage(e.attachImage, e.imageUrls, drawerCommentSharedImageUrls) });
+      jobs.push({ text: withAff(e.text, e.appendAffLink), imageUrl: resolveDrawerImage(e.attachImage, e.imageUrls, drawerCommentSharedImageUrls) });
     }
     const unpinned = active.filter((e) => !e.pinned);
     const total = Math.max(0, Number(drawerCommentRandomCount) || 0);
     if (unpinned.length && total > jobs.length) {
       const remaining = total - jobs.length;
-      const textPool = unpinned.map((e) => e.text);
+      const textPool = unpinned.map((e) => ({ text: e.text, appendAffLink: e.appendAffLink }));
       const imagePool = unpinned.flatMap((e) => (e.attachImage ? (e.imageUrls.length ? e.imageUrls : drawerCommentSharedImageUrls) : []));
       for (let i = 0; i < remaining; i++) {
+        const picked = textPool[Math.floor(Math.random() * textPool.length)];
         jobs.push({
-          text: textPool[Math.floor(Math.random() * textPool.length)],
+          text: withAff(picked.text, picked.appendAffLink),
           imageUrl: imagePool.length ? imagePool[Math.floor(Math.random() * imagePool.length)] : undefined,
         });
       }
@@ -388,7 +395,18 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             }),
           });
           const data = await res.json();
-          if (res.ok) { ok++; setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl } : x))); }
+          if (res.ok) {
+            ok++;
+            // The publish response doesn't echo back the ad config it just
+            // scheduled (the actual campaign is created async, minutes
+            // later) — but we already know exactly what was applied since
+            // we just built the request from it, so merge that in directly
+            // instead of leaving the table blank until a later poll.
+            setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? {
+              ...x, status: "done", fbPostUrl: data.fbPostUrl, pageId,
+              ...(drawerAdConfig.runAds ? { adAccountUsed: accountId, adBudget: String(budget), adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender } : {}),
+            } : x)));
+          }
           else fail++;
         } else if (p.status === "done") {
           let stepOk = true;
@@ -403,7 +421,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               }),
             });
             stepOk = res.ok;
-            if (res.ok) setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, adCampaignId: "created" } : x)));
+            if (res.ok) setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? {
+              ...x, adCampaignId: "created",
+              adAccountUsed: accountId, adBudget: String(budget), adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender,
+            } : x)));
           }
           if (comments.length) {
             await fetch(`/api/posts/${p.id}/comments`, {

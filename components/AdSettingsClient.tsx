@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  Save, CheckCircle, Loader2, Megaphone,
+  Zap, CheckCircle, Loader2, Megaphone,
 } from "lucide-react";
 import { loadAdSettings, saveAdSettings, type AdSettings } from "@/lib/adSettings";
 import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
@@ -13,6 +13,7 @@ import { AutoAdsAccountEditor } from "@/components/AutoAdsAccountEditor";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { adsPanel } from "@/lib/ui-classes";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
+import { useToast } from "@/components/ui/toast";
 
 interface CampaignTemplate { id: string; templateName: string; campaignId: string; settings?: { postType?: string } }
 interface AdAccount { id: string; accountId: string; name: string; }
@@ -48,6 +49,7 @@ function resolveBaseTime(saved: string): string {
 }
 
 export function AdSettingsClient() {
+  const { show, ToastComponent } = useToast();
   const [settings, setSettings] = useState<AdSettings | null>(null);
   const [saved, setSaved] = useState(false);
   // Which preset (if any) is currently loaded — "Lưu cài đặt" also writes
@@ -184,8 +186,17 @@ export function AdSettingsClient() {
     setTimeout(() => setSaved(false), 2500);
   }
 
-  // ── Save batch defaults ───────────────────────────────────────────────────
+  // ── Apply batch defaults ──────────────────────────────────────────────────
+  // "Áp dụng" always writes into the currently active preset — there's no
+  // more bare "save without a preset" mode, since a preset is what BatchImportClient/
+  // DashboardClient actually load their defaults from. Require one to be
+  // selected instead of silently no-op'ing the preset sync like the old
+  // "Lưu cài đặt" button did.
   async function handleSaveBatch() {
+    if (!activePresetId) {
+      show("Vui lòng chọn 1 preset có sẵn hoặc tạo preset mới trước khi áp dụng", "error");
+      return;
+    }
     setSavingBatch(true);
     try {
       await fetch("/api/app-config", {
@@ -208,14 +219,10 @@ export function AdSettingsClient() {
       });
       const updated = await saveAccountRows();
       setAccountRows(updated);
-      // If a preset is currently loaded, keep it in sync with what's on
-      // screen instead of leaving it stuck with whatever it had when loaded.
-      if (activePresetId) {
-        await fetch(`/api/ad-settings-presets/${activePresetId}`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: buildPresetData() }),
-        }).catch(() => {});
-      }
+      await fetch(`/api/ad-settings-presets/${activePresetId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: buildPresetData() }),
+      }).catch(() => {});
       setSavedBatch(true);
       setTimeout(() => setSavedBatch(false), 2500);
     } finally { setSavingBatch(false); }
@@ -340,6 +347,7 @@ export function AdSettingsClient() {
 
   return (
     <div className="space-y-4 max-w-[480px]">
+      {ToastComponent}
 
       {/* ── Preset cho toàn bộ cụm cài đặt bên dưới ── */}
       <div className="flex items-center justify-between rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 px-3 py-2">
@@ -450,9 +458,9 @@ export function AdSettingsClient() {
         className={["flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-all",
           savedBatch ? "bg-emerald-600 text-white" : "bg-violet-600 hover:bg-violet-700 text-white shadow-sm",
         ].join(" ")}>
-        {savingBatch ? <><Loader2 size={14} className="animate-spin" /> Đang lưu...</>
-          : savedBatch ? <><CheckCircle size={14} /> Đã lưu</>
-          : <><Save size={14} /> Lưu cài đặt</>}
+        {savingBatch ? <><Loader2 size={14} className="animate-spin" /> Đang áp dụng...</>
+          : savedBatch ? <><CheckCircle size={14} /> Đã áp dụng</>
+          : <><Zap size={14} /> Áp dụng</>}
       </button>
     </div>
   );

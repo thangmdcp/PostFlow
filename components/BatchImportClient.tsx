@@ -1132,6 +1132,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (!commentEnabled) return [];
     const p = batch.posts.find(x => x.id === id);
     const jobs: { text: string; imageUrl?: string }[] = [];
+    // The post's aff link — "Kèm link aff" appends this after a space, not
+    // inline with the typed text, so it always reads as its own token
+    // ("giá ở đây" + toggle → "giá ở đây https://..."), matching the same
+    // link the post itself was published with, not a fresh lookup.
+    const affLink = p?.extractedLinks?.find(l => l.myUrl)?.myUrl ?? "";
+    const withAff = (text: string, on?: boolean) => (on && affLink ? `${text} ${affLink}` : text);
 
     if (commentUseCaption) {
       const text = (p?.finalCaption ?? p?.rawCaption ?? "").trim();
@@ -1140,7 +1146,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
     const active = commentCustomEntries.filter(e => commentCustomEntryEnabled[e.id] !== false && e.text.trim());
     for (const e of active.filter(e => e.pinned)) {
-      jobs.push({ text: e.text, imageUrl: resolveImage(e.attachImage, e.imageUrls, commentSharedImageUrls) });
+      jobs.push({ text: withAff(e.text, e.appendAffLink), imageUrl: resolveImage(e.attachImage, e.imageUrls, commentSharedImageUrls) });
     }
 
     // The count is a TOTAL target, not an "extra" amount — caption + pinned
@@ -1151,12 +1157,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const total = Math.max(0, Number(commentRandomCount) || 0);
     if (unpinned.length && total > jobs.length) {
       const remaining = total - jobs.length;
-      const textPool = unpinned.map(e => e.text);
+      const textPool = unpinned.map(e => ({ text: e.text, appendAffLink: e.appendAffLink }));
       const imagePool = unpinned.flatMap(e => e.attachImage ? (e.imageUrls.length ? e.imageUrls : commentSharedImageUrls) : []);
       for (let i = 0; i < remaining; i++) {
-        const text = textPool[Math.floor(Math.random() * textPool.length)];
+        const picked = textPool[Math.floor(Math.random() * textPool.length)];
         const imageUrl = imagePool.length ? imagePool[Math.floor(Math.random() * imagePool.length)] : undefined;
-        jobs.push({ text, imageUrl });
+        jobs.push({ text: withAff(picked.text, picked.appendAffLink), imageUrl });
       }
     }
     return jobs;
