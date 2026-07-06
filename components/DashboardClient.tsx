@@ -257,6 +257,33 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           storyEnabled: String(drawerStoryEnabled), storyCount: drawerStoryCount,
         }),
       });
+      // Posts already scheduled ("pending", not yet published) read their
+      // ad/comment/story config off their OWN persisted Post columns at
+      // actual-publish time (see lib/publishDuePost.ts), not fresh from
+      // AppConfig — so just saving the new defaults above wouldn't actually
+      // change what these posts do when their scheduledAt arrives. Re-push
+      // the new config onto each of them now, keeping their existing
+      // pageId/scheduledAt untouched.
+      const pendingPosts = localPosts.filter((p) => p.status === "pending" && p.pageId && p.scheduledAt);
+      await Promise.all(pendingPosts.map((p) => {
+        const accountId = drawerAccountRows.length ? weightedPickAccount(drawerAccountRows) : adAccountsFull[0]?.accountId;
+        const row = drawerAccountRows.find((r) => r.accountId === accountId);
+        const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
+        const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
+        const budget = randomStep(Number(row?.budgetMin ?? drawerAdConfig.budgetMin), Number(row?.budgetMax ?? drawerAdConfig.budgetMax), Number(row?.budgetStep ?? drawerAdConfig.budgetStep));
+        const comments = resolveDrawerCommentJobs(p);
+        return fetch(`/api/posts/${p.id}/schedule`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pageId: p.pageId, scheduledAt: p.scheduledAt,
+            templateId: drawerAdConfig.runAds ? drawerAdConfig.templateId : undefined,
+            adStatus: drawerAdConfig.adStatus,
+            ...(drawerAdConfig.runAds ? { adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender, adBudget: String(budget) } : {}),
+            ...(comments.length ? { comments } : {}),
+            storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
+          }),
+        }).catch(() => {});
+      }));
       setAppliedDefaults(true);
       setTimeout(() => setAppliedDefaults(false), 2500);
     } finally { setApplyingDefaults(false); }
@@ -694,7 +721,6 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const checkedPosts = filtered.filter((p) => checkedIds.has(p.id));
   const checkedPending = checkedPosts.filter((p) => p.status === "pending");
   const checkedDone = checkedPosts.filter((p) => p.status === "done");
-  const checkedForAds = checkedPosts.filter((p) => p.status === "done" || p.status === "pending");
   const allChecked = filtered.length > 0 && filtered.every((p) => checkedIds.has(p.id));
   const hasSelection = checkedPosts.length > 0;
 
@@ -799,8 +825,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       </div>
 
 
-      {/* Filter tabs + action buttons — single row, horizontal-scroll fallback on narrow screens */}
-      <div className="shrink-0 bg-white dark:bg-slate-900 flex items-center gap-1.5 mb-4 py-2 overflow-x-auto flex-nowrap [&::-webkit-scrollbar]:hidden">
+      {/* Filter tabs + action buttons — single row. No overflow-x-auto here:
+          that combination forces overflow-y to also clip (a CSS quirk when
+          only one axis is scrollable), which cut off the Page/TKQC filter
+          dropdowns rendered inside this row. */}
+      <div className="shrink-0 bg-white dark:bg-slate-900 flex items-center gap-1.5 mb-4 py-2 flex-nowrap overflow-visible">
         {/* Tabs */}
         <div className="flex gap-1 shrink-0">
           {STATUS_FILTERS.map((s) => (
@@ -915,13 +944,6 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             {bulkRunning ? <Loader2 size={12} className="animate-spin" /> : null}
             Đăng ngay{checkedPending.length > 0 ? ` (${checkedPending.length})` : ""}
           </button>
-          {/* Tạo ads */}
-          <button onClick={() => openAdsDrawer(checkedForAds.map((p) => p.id))} disabled={checkedForAds.length === 0}
-            className={`${checkedForAds.length > 0 ? btnActive("bg-blue-600 hover:bg-blue-700") : btnDim} shrink-0`}>
-            <Megaphone size={12} />
-            Tạo ads{checkedForAds.length > 0 ? ` (${checkedForAds.length})` : ""}
-          </button>
-
           {/* Column visibility */}
           <div className="relative shrink-0" ref={colPanelRef}>
             <button onClick={() => setColPanelOpen((v) => !v)}

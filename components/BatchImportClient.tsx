@@ -847,10 +847,30 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
-  const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>({});
-  const [rowPageId, setRowPageId] = useState<Record<string, string>>({});
-  const [rowAccountId, setRowAccountId] = useState<Record<string, string>>({});
-  const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>({});
+  // These 4 are randomly rolled once per post (age/gender/budget/page/TKQC)
+  // and otherwise have no source of truth until the post actually
+  // publishes/schedules — persisted to sessionStorage per batch so
+  // navigating away and back (which remounts this component, wiping plain
+  // useState) restores the SAME picks instead of silently re-rolling
+  // different ones every time.
+  const draftKey = `pf_batch_draft_${batch.id}`;
+  const loadDraft = useCallback(<T,>(field: string, fallback: T): T => {
+    if (typeof window === "undefined") return fallback;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(draftKey) ?? "{}");
+      return saved[field] ?? fallback;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    } catch { return fallback; }
+  }, [draftKey]);
+  const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>(() => loadDraft("rowAdParams", {}));
+  const [rowPageId, setRowPageId] = useState<Record<string, string>>(() => loadDraft("rowPageId", {}));
+  const [rowAccountId, setRowAccountId] = useState<Record<string, string>>(() => loadDraft("rowAccountId", {}));
+  const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>(() => loadDraft("rowRunAds", {}));
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    sessionStorage.setItem(draftKey, JSON.stringify({ rowAdParams, rowPageId, rowAccountId, rowRunAds }));
+  }, [draftKey, rowAdParams, rowPageId, rowAccountId, rowRunAds]);
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
   const [commentDrawerPostId, setCommentDrawerPostId] = useState<string | null>(null);
@@ -985,8 +1005,19 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   const allIds = batch.posts.map(p => p.id);
 
-  const effectivePageIdFor = (id: string) => rowPageId[id] || "";
-  const effectiveAccountIdFor = (id: string) => rowAccountId[id] || "";
+  // Must match the exact same precedence PostRow uses to render the Page/TKQC
+  // cells (post.pageId/post.adAccountUsed — the REAL persisted choice once a
+  // post is scheduled/published — takes priority over the client-side draft
+  // pick) or the filter dropdown ends up showing/matching a totally
+  // different account/page than what the table itself displays.
+  const effectivePageIdFor = (id: string) => {
+    const post = batch.posts.find(p => p.id === id);
+    return post?.pageId || rowPageId[id] || "";
+  };
+  const effectiveAccountIdFor = (id: string) => {
+    const post = batch.posts.find(p => p.id === id);
+    return post?.adAccountUsed || rowAccountId[id] || "";
+  };
   const distinctPageIds = Array.from(new Set(batch.posts.map(p => effectivePageIdFor(p.id)).filter(Boolean)));
   const distinctAccountIds = Array.from(new Set(batch.posts.map(p => effectiveAccountIdFor(p.id)).filter(Boolean)));
   const visiblePosts = batch.posts.filter(p => {
