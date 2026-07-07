@@ -140,7 +140,13 @@ export async function publishStoryToPage(
   const storyRes = await fetch(`${FB_API}/${pageId}/${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ [idField]: fbMediaId, access_token: accessToken }),
+    // video_stories treats a pre-existing video_id as having already gone
+    // through the resumable upload's "start"/"transfer" phases, so it still
+    // requires upload_phase=finish to actually register it as a story —
+    // omitting it throws "The parameter upload_phase is required" even
+    // though a real upload never happens here. photo_stories has no such
+    // phase concept.
+    body: JSON.stringify({ [idField]: fbMediaId, ...(isVideo ? { upload_phase: "finish" } : {}), access_token: accessToken }),
   });
   const storyJson = await storyRes.json();
   if (storyJson.error) throw new Error(`[${endpoint}] ${storyJson.error.message}`);
