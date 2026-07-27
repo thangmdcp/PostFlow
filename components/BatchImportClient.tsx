@@ -2122,17 +2122,20 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   }
 
   if (adStatus === "failed") {
+    const isMetaRateLimit = /request limit reached|rate limit/i.test(errorMsg ?? "");
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
         title={errorMsg ?? undefined}>
-        <span className="truncate">Lỗi tạo ads (lần {adAttempt ?? 0})</span>
+        <span className="truncate">{isMetaRateLimit ? "Meta giới hạn request" : `Lỗi tạo ads (lần ${adAttempt ?? 0})`}</span>
       </div>
     );
   }
 
   if (adStatus === "pending" && adNextAttemptAt) {
     const isRetry = (adAttempt ?? 0) > 0;
-    const pendingLabel = isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, 3)}/3` : "Đợi Meta xử lý bài";
+    const isMetaRateLimit = /request limit reached|rate limit/i.test(errorMsg ?? "");
+    const maxAttempts = isMetaRateLimit ? 5 : 3;
+    const pendingLabel = isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, maxAttempts)}/${maxAttempts}` : "Đợi Meta xử lý bài";
     if (now === null) {
       return (
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">

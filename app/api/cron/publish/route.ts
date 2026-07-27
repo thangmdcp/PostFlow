@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { recoverFetchJobs } from "@/lib/fetchRecovery";
+import { recoverRateLimitedAds } from "@/lib/autoAdsRunner";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
 // wait (via scheduleAutoAds' waitUntil) for however many just published, and
@@ -29,6 +30,10 @@ export async function GET(req: Request) {
     console.error("[cron] fetch recovery failed", error);
     return 0;
   });
+  const recoveredRateLimitedAds = await recoverRateLimitedAds().catch((error) => {
+    console.error("[cron] rate-limited ads recovery failed", error);
+    return 0;
+  });
 
   const now = new Date();
   const posts = await prisma.post.findMany({
@@ -49,5 +54,5 @@ export async function GET(req: Request) {
     return { id: post.id, status: "queue_unavailable" };
   }));
 
-  return NextResponse.json({ processed: results.length, recoveredFetches, results });
+  return NextResponse.json({ processed: results.length, recoveredFetches, recoveredRateLimitedAds, results });
 }

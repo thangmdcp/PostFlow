@@ -16,6 +16,18 @@ import { enqueueAds } from "@/lib/cloudflareQueue";
 const RETRY_DELAYS_MS = [15_000, 30_000, 120_000]; // 15s, then +30s, then +2m
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 const DAY_MS = 86_400_000;
+const BATCH_AD_SPACING_MS = 20_000;
+const META_RATE_LIMIT_RETRY_MS = 5 * 60_000;
+
+function stableJitterMs(value: string, maxMs = 30_000): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  return hash % maxMs;
+}
+
+function isMetaRateLimited(message: string) {
+  return /(?:user|application) request limit reached|rate limit|error code.?17/i.test(message);
+}
 
 // A queue delay or a slow Facebook upload can make a prepared post arrive
 // after its originally selected Ads time. Keep the user's chosen clock time
@@ -59,7 +71,15 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
 
   const resolvedAdStartAt = params.adStartAt ? rollPreparedStartForward(params.adStartAt) : undefined;
   const prepareForStart = !!resolvedAdStartAt;
-  const nextAttemptAt = prepareForStart ? new Date() : new Date(Date.now() + RETRY_DELAYS_MS[0]);
+  // Meta applies a strict per-user Graph API limit. Publishing a batch can
+  // finish nearly simultaneously, so starting every ad 15 seconds later used
+  // to burst dozens of Graph calls at once. Spread only batch rows by their
+  // stable row order; normal one-off posts keep the quick 15-second start.
+  const queuePost = await prisma.post.findUnique({ where: { id: params.postId }, select: { batchId: true, order: true } });
+  const initialDelayMs = prepareForStart
+    ? 0
+    : RETRY_DELAYS_MS[0] + (queuePost?.batchId ? queuePost.order * BATCH_AD_SPACING_MS : 0);
+  const nextAttemptAt = new Date(Date.now() + initialDelayMs);
   await prisma.post.update({
     where: { id: params.postId },
     data: {
@@ -73,7 +93,7 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       ...(resolvedAdStartAt ? { adStartAt: resolvedAdStartAt } : {}),
     },
   }).catch(() => {});
-  if (!await enqueueAds(params.postId, prepareForStart ? 0 : Math.ceil(RETRY_DELAYS_MS[0] / 1000))) {
+  if (!await enqueueAds(params.postId, Math.ceil(initialDelayMs / 1000))) {
     throw new Error("Không thể đưa Ads vào Cloudflare Queue");
   }
 }
@@ -124,8 +144,15 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
     const isConfigurationError = err instanceof AdTemplateConfigurationError;
-    if (!isConfigurationError && attemptNumber < MAX_ATTEMPTS) {
-      const delay = RETRY_DELAYS_MS[attemptNumber];
+    const rateLimited = isMetaRateLimited(msg);
+    // A quota response needs a much longer, individually-jittered retry. It
+    // must not be treated like a normal creative delay, otherwise every row
+    // from the batch retries together and immediately exhausts Meta again.
+    const canRetryRateLimit = rateLimited && attemptNumber < MAX_ATTEMPTS + 2;
+    if (!isConfigurationError && (attemptNumber < MAX_ATTEMPTS || canRetryRateLimit)) {
+      const delay = rateLimited
+        ? META_RATE_LIMIT_RETRY_MS + stableJitterMs(params.postId)
+        : RETRY_DELAYS_MS[attemptNumber];
       const nextAttemptAt = new Date(Date.now() + delay);
       await prisma.post.update({
         where: { id: params.postId },
@@ -140,6 +167,44 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
       return { retry: false };
     }
   }
+}
+
+/**
+ * Older queue consumers marked a Meta rate-limit response as permanently
+ * failed after three quick attempts. Recover those rows once, with the same
+ * batch spacing used for new jobs, so users do not need to republish posts.
+ */
+export async function recoverRateLimitedAds(): Promise<number> {
+  const failed = await prisma.post.findMany({
+    where: {
+      status: "done",
+      adStatus: "failed",
+      errorMsg: { contains: "request limit reached", mode: "insensitive" },
+      adAttempt: { lt: MAX_ATTEMPTS + 2 },
+    },
+    select: { id: true, order: true },
+    take: 50,
+  });
+
+  let recovered = 0;
+  await Promise.all(failed.map(async (post) => {
+    const delay = META_RATE_LIMIT_RETRY_MS + post.order * BATCH_AD_SPACING_MS + stableJitterMs(post.id);
+    const nextAttemptAt = new Date(Date.now() + delay);
+    const claim = await prisma.post.updateMany({
+      where: { id: post.id, adStatus: "failed", errorMsg: { contains: "request limit reached", mode: "insensitive" } },
+      data: { adStatus: "pending", adNextAttemptAt: nextAttemptAt },
+    });
+    if (!claim.count) return;
+    if (await enqueueAds(post.id, Math.ceil(delay / 1000))) {
+      recovered++;
+      return;
+    }
+    await prisma.post.updateMany({
+      where: { id: post.id, adStatus: "pending" },
+      data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: "[ads] Không thể đưa lượt thử lại Meta vào Queue." },
+    });
+  }));
+  return recovered;
 }
 
 async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignId: string; adAccountId: string }> {
