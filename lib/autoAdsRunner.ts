@@ -1,8 +1,8 @@
-import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { cloneAdCampaign } from "@/lib/facebook";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
+import { enqueueAds } from "@/lib/cloudflareQueue";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -11,16 +11,21 @@ import { resolveUtmContent } from "@/lib/resolveUtmContent";
 // user via adStatus/adNextAttemptAt so the UI can show a countdown instead
 // of the process being invisible.
 //
-// Only the FIRST attempt is a real in-process wait (via waitUntil) — a
-// serverless invocation's lifetime is capped (tens of seconds to a few
-// minutes depending on plan), nowhere near enough to hold open a chain
-// summing to 1+2+5 = 8 minutes. Retries after a failed first attempt instead
-// just persist adNextAttemptAt and get picked up by the existing cron tick
-// (app/api/cron/publish, polled every ~5 min by UptimeRobot) — see
-// processDueAdRetries. This means a 2nd/3rd attempt may fire a few minutes
-// later than its nominal delay if it lands between cron ticks.
+// Cloudflare Queue owns the 1m/2m/5m delayed delivery and retry. Supabase
+// stores state for the UI and idempotency, not a cron-owned retry schedule.
 const RETRY_DELAYS_MS = [60_000, 120_000, 300_000]; // 1m, then +2m, then +5m
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
+const DAY_MS = 86_400_000;
+
+// A queue delay or a slow Facebook upload can make a prepared post arrive
+// after its originally selected Ads time. Keep the user's chosen clock time
+// and roll it to the next day instead of creating an Ad Set with a start
+// time that has already elapsed.
+function rollPreparedStartForward(start: Date, now = Date.now()): Date {
+  if (start.getTime() > now) return start;
+  const days = Math.floor((now - start.getTime()) / DAY_MS) + 1;
+  return new Date(start.getTime() + days * DAY_MS);
+}
 
 export interface AutoAdsRunParams {
   postId: string;
@@ -35,13 +40,9 @@ export interface AutoAdsRunParams {
   gender?: string;
   budgetMin?: string; budgetMax?: string; budgetStep?: string; // explicit per-row budget — the batch table already rolled and displayed this value, so it must be the one actually used, not re-rolled from the TKQC account's own range
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
+  adStartAt?: Date; // prepared campaigns are created before this time
 }
 
-// Call this right after a post publishes successfully. AWAIT it — it only
-// persists the initial "pending"/"skipped" state (fast, a single DB write),
-// so the HTTP response doesn't go out until the batch table has something
-// real to poll for. The actual 1-minute wait + attempt happens in the
-// background afterward via waitUntil, which this does NOT block on.
 export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
   if (!params.templateId || !params.fbPostId || !params.pageId) {
     // Structural skip (ads not enabled / bad state) — record immediately,
@@ -56,23 +57,46 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
     return;
   }
 
-  const nextAttemptAt = new Date(Date.now() + RETRY_DELAYS_MS[0]);
+  const resolvedAdStartAt = params.adStartAt ? rollPreparedStartForward(params.adStartAt) : undefined;
+  const prepareForStart = !!resolvedAdStartAt;
+  const nextAttemptAt = prepareForStart ? new Date() : new Date(Date.now() + RETRY_DELAYS_MS[0]);
   await prisma.post.update({
     where: { id: params.postId },
-    data: { adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: 0 },
+    data: {
+      adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: 0,
+      ...(params.templateId ? { adTemplateId: params.templateId } : {}),
+      ...(params.adAccountId ? { adAccountUsed: params.adAccountId } : {}),
+      ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
+      ...(params.ageMaxFrom ? { adAgeMax: Number(params.ageMaxFrom) } : {}),
+      ...(params.gender !== undefined ? { adGender: params.gender } : {}),
+      ...(params.budgetMin ? { adBudget: params.budgetMin } : {}),
+      ...(resolvedAdStartAt ? { adStartAt: resolvedAdStartAt } : {}),
+    },
   }).catch(() => {});
-
-  waitUntil(
-    new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[0])).then(() =>
-      attemptAutoAds(params, 0)
-    )
-  );
+  if (!await enqueueAds(params.postId, prepareForStart ? 0 : Math.ceil(RETRY_DELAYS_MS[0] / 1000))) {
+    throw new Error("Không thể đưa Ads vào Cloudflare Queue");
+  }
 }
 
-// Exported so the cron route can also call it directly (for retries beyond
-// the first attempt) without going through scheduleAutoAds' waitUntil.
-export async function attemptAutoAds(params: AutoAdsRunParams, attemptIndex: number): Promise<void> {
-  const attemptNumber = attemptIndex + 1;
+// Called only by the secure Queue consumer endpoint.
+export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
+  const post = await prisma.post.findUnique({ where: { id: postId } });
+  if (!post || post.adStatus === "done" || post.adStatus === "failed") return { retry: false };
+  if (!post.pageId || !post.fbPostId) return { retry: false };
+  const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
+  if (!fbConn) return { retry: false };
+  const attemptNumber = (post.adAttempt ?? 0) + 1;
+  const params: AutoAdsRunParams = {
+    postId: post.id, pageId: post.pageId, fbPostId: post.fbPostId, fbConnAccessToken: fbConn.accessToken,
+    templateId: post.adTemplateId, isBatchPost: !!post.adTemplateId,
+    adAccountId: post.adAccountUsed ?? undefined,
+    ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
+    ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
+    ...(post.adGender != null ? { gender: post.adGender } : {}),
+    ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
+    adStatus: (post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+    adStartAt: post.adStartAt ?? undefined,
+  };
   // Record the attempt count BEFORE calling out to Facebook, not just on
   // completion — if the serverless invocation dies mid-call, the row is
   // left stuck on "creating" with the OLD attempt count, and
@@ -91,73 +115,26 @@ export async function attemptAutoAds(params: AutoAdsRunParams, attemptIndex: num
       data: { adStatus: "done", adCampaignId: campaignId, adAccountUsed: adAccountId, adAttempt: attemptNumber, errorMsg: null, adNextAttemptAt: null },
     });
     console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created in account ${adAccountId} (attempt ${attemptNumber})`);
+    return { retry: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-ads failed";
     console.error(`[auto-ads] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
 
-    if (attemptIndex + 1 < MAX_ATTEMPTS) {
-      // Don't chain another waitUntil here — 2m/5m delays would exceed the
-      // invocation's remaining lifetime. Just record when the next attempt
-      // is due; the cron tick picks it up (see processDueAdRetries).
-      const delay = RETRY_DELAYS_MS[attemptIndex + 1];
+    if (attemptNumber < MAX_ATTEMPTS) {
+      const delay = RETRY_DELAYS_MS[attemptNumber];
       const nextAttemptAt = new Date(Date.now() + delay);
       await prisma.post.update({
         where: { id: params.postId },
         data: { adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: attemptNumber, errorMsg: `[ads] ${msg}` },
       }).catch(() => {});
+      return { retry: true, retryAfterSeconds: Math.ceil(delay / 1000) };
     } else {
       await prisma.post.update({
         where: { id: params.postId },
         data: { adStatus: "failed", adAttempt: attemptNumber, adNextAttemptAt: null, errorMsg: `[ads] ${msg}` },
       }).catch(() => {});
+      return { retry: false };
     }
-  }
-}
-
-// Called from the cron tick for posts whose adNextAttemptAt has passed
-// (2nd/3rd attempt) or whose "creating" status has been stuck for a while
-// (invocation died mid-attempt, e.g. a cold-start timeout) — treats stuck
-// "creating" as a retry so it doesn't get orphaned forever.
-export async function processDueAdRetries(): Promise<void> {
-  const now = new Date();
-  const stuckSince = new Date(now.getTime() - 3 * 60_000);
-  const due = await prisma.post.findMany({
-    where: {
-      OR: [
-        { adStatus: "pending", adNextAttemptAt: { lte: now } },
-        { adStatus: "creating", updatedAt: { lte: stuckSince } },
-      ],
-    },
-  });
-
-  for (const post of due) {
-    if (!post.pageId || !post.fbPostId) continue;
-    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
-    if (!fbConn) continue;
-
-    // A "creating" post stuck long enough to be picked up here already used
-    // up its recorded attempt (see the up-front bump in attemptAutoAds) —
-    // if that already hit the cap, stop instead of retrying indefinitely.
-    if ((post.adAttempt ?? 0) >= MAX_ATTEMPTS) {
-      await prisma.post.update({
-        where: { id: post.id },
-        data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: "[ads] Vượt quá số lần thử lại cho phép" },
-      }).catch(() => {});
-      continue;
-    }
-
-    await attemptAutoAds(
-      {
-        postId: post.id,
-        pageId: post.pageId,
-        fbPostId: post.fbPostId,
-        fbConnAccessToken: fbConn.accessToken,
-        templateId: post.adTemplateId,
-        isBatchPost: !!post.adTemplateId,
-        adStatus: (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
-      },
-      post.adAttempt ?? 0
-    );
   }
 }
 
@@ -305,7 +282,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     ageMin,
     ageMax,
     effGender,
-    p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED"
+    p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED",
+    p.adStartAt
   );
 
   await prisma.$executeRawUnsafe(

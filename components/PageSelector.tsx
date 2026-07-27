@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Bookmark, Pencil, Trash2, X, Check, Plus, Loader2, Users } from "lucide-react";
 import type { FbConnection } from "@prisma/client";
+import { useToast } from "@/components/ui/toast";
 
 interface PagePreset { id: string; name: string; pageIds: string[] }
 
@@ -69,6 +70,7 @@ interface PresetPanelProps {
   onLoad: (ids: string[]) => void;
 }
 export function PresetPanel({ connections, selected, onLoad }: PresetPanelProps) {
+  const { show, ToastComponent } = useToast();
   const [presets, setPresets] = useState<PagePreset[]>([]);
   const [saving, setSaving] = useState(false);
   const [newName, setNewName] = useState("");
@@ -90,14 +92,18 @@ export function PresetPanel({ connections, selected, onLoad }: PresetPanelProps)
   async function savePreset() {
     if (!newName.trim() || selected.length === 0) return;
     setSaving(true);
-    const res = await fetch("/api/page-presets", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newName.trim(), pageIds: selected }),
-    });
-    const data = await res.json();
-    setPresets((p) => [...p, data]);
-    setNewName("");
-    setSaving(false);
+    try {
+      const res = await fetch("/api/page-presets", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), pageIds: selected }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Không thể lưu preset");
+      setPresets((p) => [...p, data]);
+      setNewName("");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Không thể lưu preset", "error");
+    } finally { setSaving(false); }
   }
 
   async function renamePreset(id: string) {
@@ -120,6 +126,7 @@ export function PresetPanel({ connections, selected, onLoad }: PresetPanelProps)
 
   return (
     <div className="relative" ref={ref}>
+      {ToastComponent}
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:border-blue-400 transition-colors"

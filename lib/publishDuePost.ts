@@ -7,7 +7,10 @@ import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 
-export async function publishDuePost(post: Post): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
+export async function publishDuePost(
+  post: Post,
+  options: { publishToPage?: boolean } = {}
+): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
   // Atomic claim: the cron route's findMany + loop has a window where two
   // overlapping invocations (e.g. an external pinger firing twice close
   // together) can both fetch the same "pending" post before either flips
@@ -16,7 +19,7 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
   // makes this a single atomic row update: only the first caller's UPDATE
   // actually matches (status still "pending"); the second's affects 0 rows.
   const claim = await prisma.post.updateMany({
-    where: { id: post.id, status: "pending" },
+    where: { id: post.id, status: { in: ["pending", "queued"] } },
     data: { status: "publishing" },
   });
   if (claim.count === 0) {
@@ -37,9 +40,9 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
     for (const c of configs) cfg[c.key] = c.value;
 
     // Determine publishToPageFlag from active template
-    let publishToPageFlag = true;
+    let publishToPageFlag = options.publishToPage ?? true;
     const resolvedTemplateId = post.adTemplateId ?? cfg.autoAdsTemplateId;
-    if (resolvedTemplateId) {
+    if (options.publishToPage === undefined && resolvedTemplateId) {
       const tpl = await prisma.campaignTemplate.findFirst({ where: { campaignId: resolvedTemplateId } });
       if (tpl && (tpl.settings as Record<string, unknown>)?.postType === "dark") publishToPageFlag = false;
     }
@@ -86,18 +89,29 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
     const fbPostId = result.post_id ?? result.id ?? "";
     const fbPostUrl = (publishToPageFlag && fbPostId) ? `https://www.facebook.com/${fbPostId.replace("_", "/posts/")}` : "";
 
-    if (isAutoDownAsset(cloudinaryId)) {
-      await autodownCleanup([cloudinaryId]);
-      console.log(`[cleanup] post ${post.id}: deleted AutoDown asset ${cloudinaryId}`);
-    } else if (cloudinaryId) {
-      await deleteFile(cloudinaryId, mediaType ?? "image");
-      console.log(`[cleanup] post ${post.id}: deleted Cloudinary asset ${cloudinaryId}`);
-    }
-
+    // Facebook has accepted the post. Persist that fact BEFORE any optional
+    // cleanup or follow-up work: an outage while deleting temporary media
+    // must never turn a successfully published post back into "failed" and
+    // cause a Queue retry to create a duplicate Facebook post.
     await prisma.post.update({
       where: { id: post.id },
-      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null, fbMediaId: result.mediaId ?? null },
+      data: { status: "done", fbPostId, fbPostUrl, fbMediaId: result.mediaId ?? null, errorMsg: null },
     });
+
+    // Media cleanup is best-effort. Keep the asset ID until deletion succeeds
+    // so a temporary Cloudinary failure remains recoverable and visible.
+    try {
+      if (isAutoDownAsset(cloudinaryId)) {
+        await autodownCleanup([cloudinaryId]);
+        console.log(`[cleanup] post ${post.id}: requested AutoDown cleanup for ${cloudinaryId}`);
+      } else if (cloudinaryId) {
+        await deleteFile(cloudinaryId, mediaType ?? "image");
+        await prisma.post.update({ where: { id: post.id }, data: { cloudinaryId: null, stableMediaUrl: null } });
+        console.log(`[cleanup] post ${post.id}: deleted Cloudinary asset ${cloudinaryId}`);
+      }
+    } catch (cleanupError) {
+      console.error(`[cleanup] post ${post.id}: failed after Facebook publish; post remains done`, cleanupError);
+    }
 
     // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
     // see lib/autoAdsRunner.ts.
@@ -110,7 +124,11 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
         fbConnAccessToken: fbConn.accessToken,
         templateId: post.adTemplateId,
         isBatchPost: !!post.adTemplateId,
-        adStatus: (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+        adAccountId: post.adAccountUsed ?? undefined,
+        // Prepared ads need ACTIVE status so Facebook may begin delivery at
+        // their Ad Set's start_time. Normal posts keep the user setting.
+        adStatus: post.adStartAt ? "ACTIVE" : (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+        adStartAt: post.adStartAt ?? undefined,
         // Collapse the exact age/budget rolled at schedule time into a
         // single-value "range" (min=max) so it's used as-is instead of
         // being re-rolled from the TKQC account's own range.
@@ -118,15 +136,17 @@ export async function publishDuePost(post: Post): Promise<{ id: string; status: 
         ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
         ...(post.adGender != null ? { gender: post.adGender } : {}),
         ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
-      });
+      }).catch((adsError) => console.error(`[ads] post ${post.id}: scheduling failed after Facebook publish`, adsError));
     }
 
     if (fbPostId) {
-      await scheduleCommentJobs(post.id, fbPostId, fbConn.accessToken);
+      await scheduleCommentJobs(post.id)
+        .catch((commentError) => console.error(`[comment] post ${post.id}: scheduling failed after Facebook publish`, commentError));
     }
 
     if (post.storyEnabled && post.storyCount) {
-      await topUpPageStories(post.pageId, post.storyCount, post.id);
+      await topUpPageStories(post.pageId, post.storyCount, post.id)
+        .catch((storyError) => console.error(`[story] post ${post.id}: scheduling failed after Facebook publish`, storyError));
     }
 
     return { id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) };

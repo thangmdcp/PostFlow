@@ -203,7 +203,7 @@ export function AdSettingsClient() {
     }
     setSavingBatch(true);
     try {
-      await fetch("/api/app-config", {
+      const configResponse = await fetch("/api/app-config", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           batchTemplateId, batchAgeMinFrom, batchAgeMinTo, batchAgeMaxFrom, batchAgeMaxTo,
@@ -223,14 +223,21 @@ export function AdSettingsClient() {
           storyCount,
         }),
       });
+      if (!configResponse.ok) {
+        const body = await configResponse.json().catch(() => null);
+        throw new Error(body?.error || "Không thể lưu cấu hình chung");
+      }
       const updated = await saveAccountRows();
       setAccountRows(updated);
-      await fetch(`/api/ad-settings-presets/${activePresetId}`, {
+      const presetResponse = await fetch(`/api/ad-settings-presets/${activePresetId}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: buildPresetData() }),
-      }).catch(() => {});
+      });
+      if (!presetResponse.ok) throw new Error("Không thể cập nhật preset");
       setSavedBatch(true);
       setTimeout(() => setSavedBatch(false), 2500);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Lưu cấu hình thất bại", "error");
     } finally { setSavingBatch(false); }
   }
 
@@ -284,6 +291,7 @@ export function AdSettingsClient() {
           }),
         });
         const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Không thể lưu tài khoản quảng cáo");
         updated.push({ ...row, id: data.id, dirty: false, isNew: false });
       } else {
         updated.push(row);

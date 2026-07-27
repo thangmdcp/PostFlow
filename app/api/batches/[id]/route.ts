@@ -6,6 +6,22 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    // A deployment/runtime shutdown can interrupt an old in-process fetch
+    // after it has claimed the row. Surface it as retryable instead of
+    // rendering an infinite spinner. Normal source calls are capped below
+    // two minutes, so ten minutes leaves ample room for Queue delivery.
+    await prisma.post.updateMany({
+      where: {
+        batchId: params.id,
+        status: "fetching",
+        updatedAt: { lt: new Date(Date.now() - 10 * 60_000) },
+      },
+      data: {
+        status: "failed",
+        errorMsg: "Quá thời gian lấy nội dung. Hãy bấm Thử lại.",
+      },
+    });
+
     const batch = await prisma.batch.findUnique({
       where: { id: params.id },
       include: {

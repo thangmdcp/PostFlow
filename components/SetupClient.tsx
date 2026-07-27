@@ -123,7 +123,7 @@ const FIELDS = [
     placeholder: "key1\nkey2\nkey3\n(dùng gói free thì nhập nhiều key, mỗi dòng 1 key)",
     hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi). Có thể nhập NHIỀU key, MỖI DÒNG 1 KEY — hệ thống tự xoay vòng khi 1 key hết lượt. Áp dụng ngay, không cần restart.',
     secret: true,
-    required: true,
+    required: false,
     multiline: true,
     storage: "db" as const,
   },
@@ -136,6 +136,15 @@ const FIELDS = [
     secret: true,
     required: false,
     storage: "db" as const,
+  },
+  {
+    key: "AUTODOWN_BASE_URL",
+    label: "AUTODOWN_BASE_URL",
+    placeholder: "https://autodown.vibevic.com",
+    hint: "Địa chỉ service AutoDown. Thường giữ nguyên giá trị mặc định.",
+    secret: false,
+    required: false,
+    storage: "env" as const,
   },
 ];
 
@@ -159,7 +168,7 @@ export function SetupClient() {
         const vars: Record<string, string> = { ...(envRes.vars ?? {}) };
         for (const f of FIELDS) {
           if (f.storage === "db") {
-            const raw = (dbConfig?.[f.configKey] ?? "") as string;
+            const raw = (dbConfig?.[f.configKey] ?? vars[f.key] ?? "") as string;
             // Multiline values are stored with a literal "\n" escape (single-line
             // .env format for the historical env fields shares this convention);
             // unescape back to real newlines for the textarea.
@@ -172,6 +181,10 @@ export function SetupClient() {
   }, []);
 
   async function handleSave() {
+    if (!requiredFilled) {
+      show("Điền đủ Database và Cloudinary trước khi lưu.", "error");
+      return;
+    }
     setSaving(true);
     try {
       const envUpdates: Record<string, string> = {};
@@ -261,7 +274,7 @@ export function SetupClient() {
       {ToastComponent}
 
       <h1 className="text-xl font-bold mb-1">Cài đặt</h1>
-      <p className="text-sm text-muted-foreground mb-6">Điền các thông tin bắt buộc bên dưới → Lưu → Restart server</p>
+      <p className="text-sm text-muted-foreground mb-6">Điền Database và Cloudinary → Lưu → Restart. App sẽ tự bổ sung các bảng/cột mới khi khởi động.</p>
 
       {/* DB warning */}
       {loaded && !dbFilled && (

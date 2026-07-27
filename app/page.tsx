@@ -8,7 +8,7 @@ export default async function DashboardPage() {
   try {
     const [rawPosts, connections, adAccounts] = await Promise.all([
       prisma.post.findMany({
-        where: { status: { in: ["pending", "publishing", "done", "failed"] } },
+        where: { status: { in: ["pending", "queued", "publishing", "done", "failed"] } },
         orderBy: { createdAt: "desc" },
         include: { extractedLinks: true, comments: true },
         take: 100,

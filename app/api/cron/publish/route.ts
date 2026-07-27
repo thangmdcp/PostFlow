@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { processDueAdRetries } from "@/lib/autoAdsRunner";
-import { processDueCommentRetries } from "@/lib/autoCommentsRunner";
-import { processDueStoryRetries } from "@/lib/autoStoryRunner";
-import { publishDuePost } from "@/lib/publishDuePost";
+import { enqueuePublish } from "@/lib/cloudflareQueue";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
 // wait (via scheduleAutoAds' waitUntil) for however many just published, and
@@ -30,16 +27,19 @@ export async function GET(req: Request) {
     where: { status: "pending", scheduledAt: { lte: now } },
   });
 
-  const results: { id: string; status: string; error?: string }[] = [];
+  const results = await Promise.all(posts.map(async (post) => {
+    // Claim as queued before publishing to avoid a second cron tick enqueueing
+    // the same Post. The Queue worker performs the final atomic publish claim.
+    const claim = await prisma.post.updateMany({ where: { id: post.id, status: "pending" }, data: { status: "queued" } });
+    if (claim.count === 0) return { id: post.id, status: "skipped" };
 
-  for (const post of posts) {
-    results.push(await publishDuePost(post));
-  }
+    if (await enqueuePublish(post.id)) return { id: post.id, status: "queued" };
 
-  // Ads retries (2nd/3rd attempt) that came due since the last tick.
-  await processDueAdRetries().catch((err) => console.error("[cron] processDueAdRetries failed:", err));
-  await processDueCommentRetries().catch((err) => console.error("[cron] processDueCommentRetries failed:", err));
-  await processDueStoryRetries().catch((err) => console.error("[cron] processDueStoryRetries failed:", err));
+    // Keep the job pending and let the next cron tick retry enqueueing. This
+    // deliberately avoids bypassing Queue's concurrency with a direct FB call.
+    await prisma.post.update({ where: { id: post.id }, data: { status: "pending" } });
+    return { id: post.id, status: "queue_unavailable" };
+  }));
 
   return NextResponse.json({ processed: results.length, results });
 }

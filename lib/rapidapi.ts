@@ -68,6 +68,22 @@ class RapidApiQuotaError extends Error {
   }
 }
 
+// AutoDown is fast and can run concurrently. RapidAPI is the fallback only
+// and a single free/low-tier key is easily burst-limited, so serialize those
+// requests with a short gap instead of sacrificing the entire batch to 429s.
+let rapidApiTail: Promise<void> = Promise.resolve();
+async function throughRapidApiGate<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = rapidApiTail;
+  let release!: () => void;
+  rapidApiTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    setTimeout(release, 1_100);
+  }
+}
+
 // AutoDown is the preferred path for public FB/TikTok videos (no watermark,
 // already hosted on Cloudinary). It only supports that one case, so any
 // failure or non-video result falls straight through to RapidAPI unchanged.
@@ -90,7 +106,7 @@ async function fetchViaAutoDown(url: string): Promise<RapidApiPostData | null> {
 }
 
 async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
-  return withKeyRotation(async (key) => fetchFacebookPostWithKey(url, key));
+  return throughRapidApiGate(() => withKeyRotation(async (key) => fetchFacebookPostWithKey(url, key)));
 }
 
 async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
@@ -103,6 +119,7 @@ async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<Ra
         "x-rapidapi-key": apiKey,
         "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
       },
+      signal: AbortSignal.timeout(30_000),
     }
   );
 
@@ -146,7 +163,7 @@ async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<Ra
 }
 
 async function fetchGenericPost(url: string): Promise<RapidApiPostData> {
-  return withKeyRotation(async (key) => fetchGenericPostWithKey(url, key));
+  return throughRapidApiGate(() => withKeyRotation(async (key) => fetchGenericPostWithKey(url, key)));
 }
 
 async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
@@ -160,6 +177,7 @@ async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<Rap
         "x-rapidapi-host": process.env.RAPIDAPI_HOST!,
       },
       body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(30_000),
     }
   );
 

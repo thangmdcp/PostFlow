@@ -213,7 +213,8 @@ export async function cloneAdCampaign(
   ageMin?: number,
   ageMax?: number,
   gender?: string,
-  adStatus: "ACTIVE" | "PAUSED" = "PAUSED"
+  adStatus: "ACTIVE" | "PAUSED" = "PAUSED",
+  startTime?: Date
 ): Promise<{ campaignId: string; adSetId: string; adId: string }> {
   // 1. Get template campaign objective + adset targeting (like FB Ads tool),
   // and convert dailyBudget (in the account's display currency, e.g. "2.75"
@@ -294,6 +295,7 @@ export async function cloneAdCampaign(
     adSetBody.daily_budget = dailyBudget;
     adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
   }
+  if (startTime) adSetBody.start_time = startTime.toISOString();
 
   const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
     method: "POST",

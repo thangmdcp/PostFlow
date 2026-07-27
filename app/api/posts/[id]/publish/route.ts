@@ -150,18 +150,26 @@ export async function POST(
     const fbPostId = result.post_id ?? result.id ?? "";
     const fbPostUrl = (publishToPageFlag && fbPostId) ? `https://www.facebook.com/${fbPostId.replace("_", "/posts/")}` : "";
 
-    if (isAutoDownAsset(cloudinaryId)) {
-      await autodownCleanup([cloudinaryId]);
-      console.log(`[cleanup] post ${params.id}: deleted AutoDown asset ${cloudinaryId}`);
-    } else if (cloudinaryId) {
-      await deleteFile(cloudinaryId, mediaType ?? "image");
-      console.log(`[cleanup] post ${params.id}: deleted Cloudinary asset ${cloudinaryId}`);
-    }
-
+    // Save Facebook success before cleanup. Cleanup is optional and must not
+    // make a successfully published post look failed (or invite a duplicate
+    // publish when the user retries it).
     await prisma.post.update({
       where: { id: params.id },
-      data: { status: "done", fbPostId, fbPostUrl, cloudinaryId: null, stableMediaUrl: null, fbMediaId: result.mediaId ?? null },
+      data: { status: "done", fbPostId, fbPostUrl, fbMediaId: result.mediaId ?? null, errorMsg: null },
     });
+
+    try {
+      if (isAutoDownAsset(cloudinaryId)) {
+        await autodownCleanup([cloudinaryId]);
+        console.log(`[cleanup] post ${params.id}: requested AutoDown cleanup for ${cloudinaryId}`);
+      } else if (cloudinaryId) {
+        await deleteFile(cloudinaryId, mediaType ?? "image");
+        await prisma.post.update({ where: { id: params.id }, data: { cloudinaryId: null, stableMediaUrl: null } });
+        console.log(`[cleanup] post ${params.id}: deleted Cloudinary asset ${cloudinaryId}`);
+      }
+    } catch (cleanupError) {
+      console.error(`[cleanup] post ${params.id}: failed after Facebook publish; post remains done`, cleanupError);
+    }
 
     // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
     // see lib/autoAdsRunner.ts. Only the initial state write is awaited here
@@ -183,16 +191,21 @@ export async function POST(
         gender: body.gender,
         budgetMin: body.budgetMin, budgetMax: body.budgetMax, budgetStep: body.budgetStep,
         adStatus: body.adStatus,
-      });
+      }).catch((adsError) => console.error(`[ads] post ${params.id}: scheduling failed after Facebook publish`, adsError));
     }
 
     if (body.comments?.length) {
-      await persistCommentJobs(params.id, body.comments);
-      await scheduleCommentJobs(params.id, fbPostId, fbConn.accessToken);
+      try {
+        await persistCommentJobs(params.id, body.comments);
+        await scheduleCommentJobs(params.id);
+      } catch (commentError) {
+        console.error(`[comment] post ${params.id}: scheduling failed after Facebook publish`, commentError);
+      }
     }
 
     if (body.storyEnabled && body.storyCount) {
-      await topUpPageStories(pageId, body.storyCount, params.id);
+      await topUpPageStories(pageId, body.storyCount, params.id)
+        .catch((storyError) => console.error(`[story] post ${params.id}: scheduling failed after Facebook publish`, storyError));
     }
 
     return NextResponse.json({ ok: true, fbPostUrl, autoAds: adsWillRun ? { scheduled: true } : null });

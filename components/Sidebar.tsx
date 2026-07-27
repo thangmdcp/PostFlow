@@ -10,6 +10,7 @@ import {
   Zap,
   Settings,
   ChevronLeft,
+  LogOut,
 } from "lucide-react";
 
 const navLinks = [
@@ -43,6 +44,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     if (href === "/") return pathname === "/";
     if (href.startsWith("/settings")) return pathname.startsWith("/settings");
     return pathname === href || pathname.startsWith(href + "/");
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/login");
   }
 
   return (
@@ -86,6 +92,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <li key={href}>
               <Link
                 href={href}
+                prefetch
                 title={collapsed ? label : undefined}
                 className={cn(
                   "flex items-center rounded-xl px-2.5 py-2.5 text-[13.5px] font-medium transition-all duration-150",
@@ -107,6 +114,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           the button) so its Y position can be tuned independently of the
           button's own content height, to line up with the table's bottom border. */}
       <div className="mt-auto">
+        <button
+          onClick={logout}
+          className={cn("flex w-full items-center px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white", collapsed ? "justify-center" : "gap-2")}
+          title="Đăng xuất"
+        >
+          <LogOut size={15} />
+          {!collapsed && "Đăng xuất"}
+        </button>
         <div className="border-t border-slate-200/80 dark:border-slate-800" />
         <button
           onClick={onToggle}

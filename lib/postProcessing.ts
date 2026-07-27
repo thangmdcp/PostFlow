@@ -62,3 +62,19 @@ export async function fetchPostFields(sourceUrl: string): Promise<FetchedPostFie
     links,
   };
 }
+
+// RapidAPI may temporarily reject a burst of Facebook fallback requests with
+// 429. Retry only that transient failure with a small backoff; other errors
+// (private/deleted link, invalid media, etc.) should surface immediately.
+export async function fetchPostFieldsWithRetry(sourceUrl: string): Promise<FetchedPostFields> {
+  const delays = [5_000, 15_000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchPostFields(sourceUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("429") || attempt >= delays.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}

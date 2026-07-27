@@ -27,6 +27,9 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    if (post.extractedLinks.some((link) => !link.myUrl || post.finalCaption?.includes(link.competitorUrl))) {
+      return NextResponse.json({ error: "Bài chưa đổi xong link aff, không thể tạo Ads." }, { status: 400 });
+    }
 
     const fbConn = await prisma.fbConnection.findUnique({
       where: { pageId: post.pageId },

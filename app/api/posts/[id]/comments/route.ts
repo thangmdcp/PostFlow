@@ -19,11 +19,8 @@ export async function POST(
       return NextResponse.json({ error: "Bài chưa đăng lên Facebook" }, { status: 400 });
     }
 
-    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
-    if (!fbConn) return NextResponse.json({ error: "Không tìm thấy kết nối FB Page" }, { status: 400 });
-
     await persistCommentJobs(params.id, comments);
-    await scheduleCommentJobs(params.id, post.fbPostId, fbConn.accessToken);
+    await scheduleCommentJobs(params.id);
 
     return NextResponse.json({ ok: true });
   } catch (err) {

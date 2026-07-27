@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Bookmark, Pencil, Trash2, X, Check, Plus, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
 
 interface SettingsPreset { id: string; name: string; data: unknown }
 
@@ -18,6 +19,7 @@ interface FullSettingsPresetPanelProps {
 }
 
 export function FullSettingsPresetPanel({ getCurrentData, onLoad, activePresetId, onActivePresetChange }: FullSettingsPresetPanelProps) {
+  const { show, ToastComponent } = useToast();
   const [presets, setPresets] = useState<SettingsPreset[]>([]);
   const [saving, setSaving] = useState(false);
   const [newName, setNewName] = useState("");
@@ -39,15 +41,19 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad, activePresetId
   async function savePreset() {
     if (!newName.trim()) return;
     setSaving(true);
-    const res = await fetch("/api/ad-settings-presets", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newName.trim(), data: getCurrentData() }),
-    });
-    const data = await res.json();
-    setPresets((p) => [...p, data]);
-    setNewName("");
-    setSaving(false);
-    onActivePresetChange?.(data.id);
+    try {
+      const res = await fetch("/api/ad-settings-presets", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), data: getCurrentData() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Không thể lưu preset");
+      setPresets((p) => [...p, data]);
+      setNewName("");
+      onActivePresetChange?.(data.id);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Không thể lưu preset", "error");
+    } finally { setSaving(false); }
   }
 
   async function renamePreset(id: string) {
@@ -68,6 +74,7 @@ export function FullSettingsPresetPanel({ getCurrentData, onLoad, activePresetId
 
   return (
     <div className="relative" ref={ref}>
+      {ToastComponent}
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:border-blue-400 transition-colors"

@@ -45,6 +45,7 @@ model Post {
   campaignName   String?
   adStatus       String?
   adPublishStatus String?
+  adStartAt       DateTime?
   adNextAttemptAt DateTime?
   adAttempt      Int?            @default(0)
   commentText          String?

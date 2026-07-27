@@ -1,0 +1,32 @@
+{
+  "name": "postflow-queue",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-27",
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "queues": {
+    "producers": [
+      { "binding": "POSTFLOW_PUBLISH_QUEUE", "queue": "postflow-publish" },
+      { "binding": "POSTFLOW_FETCH_QUEUE", "queue": "postflow-fetch" }
+    ],
+    "consumers": [
+      {
+        "queue": "postflow-publish",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "max_concurrency": 3,
+        "dead_letter_queue": "postflow-publish-dlq"
+      },
+      {
+        "queue": "postflow-fetch",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "max_concurrency": 4,
+        "dead_letter_queue": "postflow-fetch-dlq"
+      }
+    ]
+  }
+}

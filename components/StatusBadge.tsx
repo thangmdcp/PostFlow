@@ -8,6 +8,7 @@ const STATUS_CONFIG: Record<
   fetching: { label: "Đang lấy", variant: "info" },
   ready: { label: "Sẵn sàng", variant: "secondary" },
   pending: { label: "Chờ đăng", variant: "warning" },
+  queued: { label: "Đang xếp hàng", variant: "info" },
   publishing: { label: "Đang đăng", variant: "info" },
   done: { label: "Đã đăng", variant: "success" },
   failed: { label: "Lỗi", variant: "destructive" },
@@ -18,7 +19,7 @@ export function StatusBadge({ status }: { status: string }) {
 
   return (
     <Badge variant={config.variant} className="gap-1">
-      {(status === "fetching" || status === "publishing") && (
+      {(status === "fetching" || status === "queued" || status === "publishing") && (
         <Loader2 size={10} className="animate-spin" />
       )}
       {config.label}

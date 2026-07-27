@@ -28,6 +28,7 @@ import { StoryStatusBadge } from "@/components/StoryStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { LinkBankPanel } from "@/components/LinkBankPanel";
 import { useColumnOrder } from "@/lib/useColumnOrder";
+import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -44,7 +45,12 @@ const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
 
 interface Props { connections: FbConnection[]; initialBatch: BatchData | null; }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const response = await fetch(url);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error ?? "Không thể tải dữ liệu batch");
+  return data;
+};
 
 // Own images take priority; the shared pool is a fallback only when the
 // item has none of its own (confirmed with user — not merged together).
@@ -135,6 +141,15 @@ function vn7NextMidnight(): string {
 function vn7ToDate(s: string): Date {
   // s is local +7 time — treat as "+07:00"
   return new Date(s + ":00+07:00");
+}
+
+// Prepared Ads keep the exact requested time of day. If a Page post is
+// planned after that day's launch, move only that post's Ads to the next
+// matching launch window instead of rejecting the entire batch.
+function nextPreparedAdsStart(adStart: Date, publishAt: Date): Date {
+  if (publishAt.getTime() < adStart.getTime()) return adStart;
+  const elapsedDays = Math.floor((publishAt.getTime() - adStart.getTime()) / 86_400_000) + 1;
+  return new Date(adStart.getTime() + elapsedDays * 86_400_000);
 }
 
 // A saved base time (from a preset or an old app-config value) that's already
@@ -556,9 +571,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
     {
-      refreshInterval: (data) => data?.posts?.some((p) =>
-        p.status === "fetching" || p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating"
-      ) ? 2000 : 0,
+      refreshInterval: (data) => data?.posts?.some((p) => p.status === "fetching")
+        ? 1000
+        : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating") ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
     }
   );
@@ -671,79 +686,20 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
             )}
           </div>
 
-          {/* Pre-batch settings panel */}
-          <div className="w-[420px] shrink-0 space-y-3">
+          {/* Create-batch stays focused on links; detailed setup comes after Fetch. */}
+          <div className="w-[300px] shrink-0 space-y-3">
             <div className="flex items-center justify-between rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 px-3 py-2">
               <p className="text-xs text-slate-500">
-                <span className="font-medium text-slate-600 dark:text-slate-300">Preset cấu hình</span> — áp dụng cho lịch đăng, template &amp; thông số ads bên dưới
+                <span className="font-medium text-slate-600 dark:text-slate-300">Preset cấu hình</span>
               </p>
               <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData}
                 activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
             </div>
-            <ScheduleModeSelector
-              connections={connections}
-              selectedPageIds={defaultPageIds} onPageIdsChange={setDefaultPageIds}
-              scheduleMode={defaultScheduleMode} onScheduleModeChange={setDefaultScheduleMode}
-              stepMinutes={defaultStepMinutes} onStepMinutesChange={setDefaultStepMinutes}
-              postsPerDay={defaultPostsPerDay} onPostsPerDayChange={setDefaultPostsPerDay}
-              baseTime={defaultBaseTime} onBaseTimeChange={setDefaultBaseTime}
-              endTime={defaultEndTime} onEndTimeChange={setDefaultEndTime}
-              onQuickNow={() => setDefaultBaseTime(vn7Now(0))}
-              onQuickMidnight={() => setDefaultBaseTime(vn7NextMidnight())}
-              hideInlinePreset
-            />
-            <AdsConfigPanel
-              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows} onPatch={patchAdConfig}
-              onPatchRow={patchAccountRow} onDeleteRow={deleteAccountRow} onAddRow={addAccountRow}
-            />
-            <CommentSettingsPanel
-              enabled={defaultCommentEnabled} onEnabledChange={v => patchDefaultComment({ enabled: v })}
-              useCaption={defaultCommentUseCaption} onUseCaptionChange={v => patchDefaultComment({ useCaption: v })}
-              captionAttachImage={defaultCommentCaptionAttachImage} onCaptionAttachImageChange={v => patchDefaultComment({ captionAttachImage: v })}
-              captionImageUrls={defaultCommentCaptionImageUrls} onCaptionImageUrlsChange={v => patchDefaultComment({ captionImageUrls: v })}
-              sharedImageUrls={defaultCommentSharedImageUrls} onSharedImageUrlsChange={v => patchDefaultComment({ sharedImageUrls: v })}
-              randomCount={defaultCommentRandomCount} onRandomCountChange={v => patchDefaultComment({ randomCount: v })}
-              entries={defaultCommentCustomEntries} onEntriesChange={v => patchDefaultComment({ customEntries: v })}
-            />
-            <div className={`${adsPanel} p-4 space-y-3`}>
-              <div className="flex items-center gap-2">
-                <Megaphone size={14} className="text-violet-600 shrink-0" />
-                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cài đặt Story</span>
-              </div>
-              <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tự động đăng story</span>
-                  <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-                    defaultStoryEnabled ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"].join(" ")}>
-                    {defaultStoryEnabled ? "Bật" : "Tắt"}
-                  </span>
-                </div>
-                <button type="button" onClick={() => patchDefaultStory({ enabled: !defaultStoryEnabled })}
-                  className={["relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer",
-                    defaultStoryEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}>
-                  <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                    defaultStoryEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} />
-                </button>
-              </div>
-              {defaultStoryEnabled && (
-                <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
-                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200" title="Đăng story (chỉ ảnh/video, không có chữ hay link) khoảng 15 phút sau khi N bài đầu tiên trong ngày lên sóng trên mỗi page">
-                    Số bài đầu tiên mỗi ngày (mỗi page)
-                  </span>
-                  <input type="number" min={0} value={defaultStoryCount} onChange={e => patchDefaultStory({ count: e.target.value })}
-                    className="w-16 rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-500 shrink-0" />
-                </div>
-              )}
+            <div className="rounded-2xl border bg-white p-4 text-xs leading-5 text-slate-600 shadow-sm dark:bg-slate-900 dark:text-slate-300">
+              <p className="font-semibold text-slate-800 dark:text-slate-100">Tạo batch trước, cài sau</p>
+              <p className="mt-1">Sau khi Fetch, tick bài rồi bấm <b>Cài đặt</b> để chỉnh Ads, bình luận và Story tại một nơi.</p>
+              <a href="/settings/ads" className="mt-3 inline-flex font-semibold text-blue-600 hover:underline">Mở cài đặt mặc định →</a>
             </div>
-
-            <button onClick={handleApplyDefaults} disabled={applyingDefaults}
-              className={["flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-all w-full",
-                appliedDefaults ? "bg-emerald-600 text-white" : "bg-violet-600 hover:bg-violet-700 text-white shadow-sm",
-              ].join(" ")}>
-              {applyingDefaults ? <><Loader2 size={14} className="animate-spin" /> Đang áp dụng...</>
-                : appliedDefaults ? <><CheckCircle2 size={14} /> Đã áp dụng</>
-                : <><Zap size={14} /> Áp dụng</>}
-            </button>
           </div>
         </div>
       </div>
@@ -765,7 +721,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       onPatchAdConfig={patchAdConfig}
       onPatchAccountRow={patchAccountRow} onDeleteAccountRow={deleteAccountRow} onAddAccountRow={addAccountRow}
       onApplyAccountRows={applyAccountRowsFromPreset}
-      onPatchComment={patchDefaultComment}
+      onPatchComment={patchDefaultComment} onPatchStory={patchDefaultStory}
       onNewBatch={() => setBatchId(null)} onToast={show} ToastComponent={ToastComponent}
       mutateBatch={mutateBatch}
     />
@@ -804,13 +760,14 @@ interface BatchViewProps {
     enabled?: boolean; useCaption?: boolean; captionAttachImage?: boolean; captionImageUrls?: string[];
     customEntries?: CommentEntry[]; sharedImageUrls?: string[]; randomCount?: string;
   }) => void;
+  onPatchStory: (patch: { enabled?: boolean; count?: string }) => void;
   onNewBatch: () => void;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
   ToastComponent: React.ReactNode;
   mutateBatch: KeyedMutator<BatchData>;
 }
 
-function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, defaultStoryEnabled, defaultStoryCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, defaultStoryEnabled, defaultStoryCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onPatchStory, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
@@ -844,6 +801,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const localAccountRows = accountRows;
   const [postTimes, setPostTimes] = useState<Record<string, string>>({});
   const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
+  const [prepareAdsOpen, setPrepareAdsOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [affiliateWarningOpen, setAffiliateWarningOpen] = useState(false);
+  const [adLaunchAt, setAdLaunchAt] = useState(() => vn7NextMidnight());
+  const [prepareSpacing, setPrepareSpacing] = useState("18");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
@@ -873,6 +835,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   }, [draftKey, rowAdParams, rowPageId, rowAccountId, rowRunAds]);
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<"ads" | "engagement">("ads");
   const [commentDrawerPostId, setCommentDrawerPostId] = useState<string | null>(null);
   const [randomFieldsOpen, setRandomFieldsOpen] = useState(false);
   const [randomFields, setRandomFields] = useState<Set<RandomField>>(new Set(["age", "gender", "budget", "page", "account", "cta"]));
@@ -971,37 +934,50 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   }
 
   function pickPage(): string {
-    if (selectedPageIds.length === 0) return connections[0]?.pageId ?? "";
-    return selectedPageIds[Math.floor(Math.random() * selectedPageIds.length)];
+    const pages = selectedPageIds.length ? selectedPageIds : connections.map((connection) => connection.pageId).slice(0, 1);
+    return allocateEvenly(pages, 1)[0] ?? "";
   }
 
-  // Populate page / age-gender-budget / TKQC account / run-ads / schedule time
+  function allocatePages(ids: string[]): Record<string, string> {
+    const pages = selectedPageIds.length ? selectedPageIds : connections.map((connection) => connection.pageId).slice(0, 1);
+    const allocation = allocateEvenly(pages, ids.length);
+    return Object.fromEntries(ids.map((id, index) => [id, allocation[index] ?? ""]));
+  }
+
+  function allocateAccounts(ids: string[], fallbackBudget: { budgetMin: string; budgetMax: string; budgetStep: string }): Record<string, { accountId: string; budget: number }> {
+    if (bulkAccountId) {
+      const row = localAccountRows.find((account) => account.accountId === bulkAccountId);
+      return Object.fromEntries(ids.map((id) => [id, {
+        accountId: bulkAccountId,
+        budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+      }]));
+    }
+    const allocation = allocateWeighted(localAccountRows.map((account) => ({ id: account.accountId, weight: account.weight })), ids.length);
+    return Object.fromEntries(ids.map((id, index) => {
+      const accountId = allocation[index] ?? "";
+      const row = localAccountRows.find((account) => account.accountId === accountId);
+      return [id, {
+        accountId,
+        budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+      }];
+    }));
+  }
+
+  // Populate page / age-gender-budget / TKQC account / run-ads
   // for the given post ids, using the current toolbar settings. This is what
   // both the initial auto-fill and the "Áp dụng" bulk-edit button call.
   const applyDefaultsToRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
-    const times = computeScheduleTimes(ids, scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime);
     const fallbackBudget = { budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep };
     // Account + budget are picked together — budget must come from whichever
     // account actually gets used, never a global range rolled beforehand.
-    const picks: Record<string, { accountId: string; budget: number }> = {};
-    ids.forEach(id => {
-      if (bulkAccountId) {
-        const row = localAccountRows.find(r => r.accountId === bulkAccountId);
-        picks[id] = {
-          accountId: bulkAccountId,
-          budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
-        };
-      } else {
-        picks[id] = pickAccountAndBudget(localAccountRows, fallbackBudget);
-      }
-    });
+    const picks = allocateAccounts(ids, fallbackBudget);
+    const pages = allocatePages(ids);
     setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = { ...genRowParams(adConfig), budget: picks[id].budget }; }); return n; });
-    setRowPageId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = pickPage(); }); return n; });
+    setRowPageId(prev => ({ ...prev, ...pages }));
     setRowAccountId(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = picks[id].accountId; }); return n; });
     setRowRunAds(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = adConfig.runAds; }); return n; });
-    setPostTimes(prev => ({ ...prev, ...times }));
-  }, [scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime, adConfig, localAccountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
+  }, [adConfig, localAccountRows, selectedPageIds, connections, bulkAccountId]); // eslint-disable-line
 
   const allIds = batch.posts.map(p => p.id);
 
@@ -1025,6 +1001,27 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     if (tkqcFilterIds.size > 0 && !tkqcFilterIds.has(effectiveAccountIdFor(p.id))) return false;
     return true;
   });
+  const prepareTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
+  const preparePreview = (() => {
+    // "Prepare Ads" deliberately starts publishing as soon as the user
+    // confirms the plan.  Ads are then created after each Page post exists,
+    // with Facebook's start_time set to adLaunchAt.  This gives a campaign
+    // created at 14:00 plenty of time to be ready for a 00:00 launch rather
+    // than unnecessarily waiting until the final hour.
+    const spacing = Math.max(0, Number(prepareSpacing) || 0);
+    const first = new Date();
+    const last = new Date(first.getTime() + Math.max(0, prepareTargets.length - 1) * spacing * 60_000);
+    return { first, last };
+  })();
+  const scheduleTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
+  const affiliateBlockedTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed") && (
+    post.extractedLinks.some((link) => !link.myUrl) || post.extractedLinks.some((link) => post.finalCaption?.includes(link.competitorUrl))
+  ));
+  const affiliateBlocked = affiliateBlockedTargets.length > 0;
+  const schedulePlan = computeScheduleTimes(
+    scheduleTargets.map((post) => post.id), scheduleMode, baseTime, stepMinutes, postsPerDay, manualApplyTime, endTime
+  );
+  const schedulePreviewTimes = Object.values(schedulePlan);
 
   // Auto-fill defaults (page/tuổi/giới tính/ngân sách/TKQC/giờ đăng) as soon as
   // a row exists — don't wait for caption/media to finish fetching, those fill
@@ -1104,25 +1101,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       });
     }
     if (randomFields.has("page")) {
-      setRowPageId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = pickPage(); }); return n; });
+      setRowPageId(prev => ({ ...prev, ...allocatePages(targets) }));
     }
     if (randomFields.has("account")) {
       // Re-picking the account also re-rolls its budget from the NEW
       // account's own range — keeping the old account's budget number
       // attached to a different account is exactly the mismatch bug this
       // whole account/budget pairing was built to avoid.
-      const newPicks: Record<string, { accountId: string; budget: number }> = {};
-      targets.forEach(id => {
-        if (bulkAccountId) {
-          const row = localAccountRows.find(r => r.accountId === bulkAccountId);
-          newPicks[id] = {
-            accountId: bulkAccountId,
-            budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
-          };
-        } else {
-          newPicks[id] = pickAccountAndBudget(localAccountRows, fallbackBudget);
-        }
-      });
+      const newPicks = allocateAccounts(targets, fallbackBudget);
       setRowAccountId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = newPicks[id].accountId; }); return n; });
       setRowAdParams(prev => { const n = { ...prev }; targets.forEach(id => { if (n[id]) n[id] = { ...n[id], budget: newPicks[id].budget }; }); return n; });
     }
@@ -1203,11 +1189,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   function buildExportRows(): { competitorUrl: string; subs: string[] }[] {
     const rows: { competitorUrl: string; subs: string[] }[] = [];
-    batch.posts.forEach((post, postIdx) => {
-      const postNumber = postIdx + 1;
+    let linkNumber = 1;
+    batch.posts.forEach((post) => {
       [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-        const subs = subIdConfig.map(cfg => formatSubId(cfg, postNumber));
+        // A Sub_id belongs to an exported affiliate LINK, not to a post.
+        // This makes bai1…bai5 for five links even when those links happen
+        // to be in the same post.
+        const subs = subIdConfig.map(cfg => formatSubId(cfg, linkNumber));
         rows.push({ competitorUrl: link.competitorUrl, subs });
+        linkNumber++;
       });
     });
     return rows;
@@ -1223,10 +1213,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     XLSX.writeFile(wb, "Batch Custom Links.xlsx");
     onToast(`Đã xuất ${rows.length} link`, "success");
-    // Preview where the counter left off — only auto/unpinned fields track a
-    // running number, pinned fields are meant to stay exactly as typed.
-    const lastPostNumber = batch.posts.length;
-    setSubIdConfig(prev => prev.map(cfg => cfg.auto ? { ...cfg, text: formatSubId(cfg, lastPostNumber) } : cfg));
+    // Move auto fields to the NEXT value, ready for the next export.
+    // Example: bai1 + 5 links exports bai1…bai5, then becomes bai6.
+    const nextLinkNumber = rows.length + 1;
+    setSubIdConfig(prev => prev.map(cfg => cfg.auto ? { ...cfg, text: formatSubId(cfg, nextLinkNumber) } : cfg));
   }
 
   async function handleImportFile(file: File) {
@@ -1235,41 +1225,75 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+      // Some affiliate exports are Excel "tables": the first technical row
+      // is Column1/Column2…, while the real Vietnamese headings are on row 2.
+      // Find the real heading row instead of assuming it is always row 1.
+      const sheetRows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
+      const headerKey = (value: unknown) => String(value ?? "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const headerRowIndex = sheetRows.findIndex((cells) => {
+        const keys = cells.map(headerKey);
+        return keys.includes("lien ket goc") && keys.includes("lien ket chuyen doi");
+      });
+      if (headerRowIndex < 0) { onToast("Không tìm thấy hàng tiêu đề 'Liên kết gốc / Liên kết chuyển đổi'", "error"); return; }
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { range: headerRowIndex, defval: "" });
       if (!rows.length) { onToast("File không có dữ liệu", "error"); return; }
 
       const header = Object.keys(rows[0]);
-      const findCol = (name: string) => header.find(h => h.trim().toLowerCase() === name.toLowerCase());
+      const findCol = (name: string) => header.find(h => headerKey(h) === headerKey(name));
       const colOrigin = findCol("Liên kết gốc");
       const colMyUrl  = findCol("Liên kết chuyển đổi");
       const colFail   = findCol("Lí do thất bại");
       if (!colOrigin || !colMyUrl) { onToast("File thiếu cột 'Liên kết gốc' hoặc 'Liên kết chuyển đổi'", "error"); return; }
 
-      // Pool of this batch's links, in the same order the export used, so duplicate
-      // competitorUrls resolve to the first not-yet-matched link. Same postNumber
-      // math as buildExportRows, so the campaign name matches what was exported.
+      // Pool follows the exact same per-LINK order as the export. A number of
+      // affiliate tools rewrite harmless URL formatting (trailing slash,
+      // escaped ampersand, host casing), so strict string comparison alone is
+      // not reliable enough for an exported file coming back in.
       const pool: { linkId: string; competitorUrl: string; campaignName: string }[] = [];
-      batch.posts.forEach((post, postIdx) => {
-        const postNumber = postIdx + 1;
-        const campaignName = subIdConfig.map(cfg => formatSubId(cfg, postNumber)).join("-");
+      let linkNumber = 1;
+      batch.posts.forEach((post) => {
         [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName });
+          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName: subIdConfig.map(cfg => formatSubId(cfg, linkNumber)).join("-") });
+          linkNumber++;
         });
       });
       const used = new Set<string>();
 
       const toApply: { linkId: string; myUrl: string; campaignName: string }[] = [];
       let skipped = 0;
+      const normalizeUrl = (value: string) => {
+        const cleaned = value.trim().replace(/\u200B/g, "").replace(/&amp;/gi, "&");
+        try {
+          const url = new URL(cleaned);
+          url.hostname = url.hostname.toLowerCase();
+          if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+          return url.toString().replace(/\/$/, "");
+        } catch { return cleaned.replace(/\/+$/, ""); }
+      };
+      const subColumns = header.filter((name) => /^sub[_\s-]?id\s*\d*$/i.test(name.trim()));
+      const usableRows: { origin: string; myUrl: string; campaignName: string }[] = [];
       for (const row of rows) {
         const origin = String(row[colOrigin] ?? "").trim();
         const myUrl = String(row[colMyUrl] ?? "").trim();
         const fail = colFail ? String(row[colFail] ?? "").trim() : "";
         if (!origin || !myUrl || fail) { skipped++; continue; }
-        const match = pool.find(p => p.competitorUrl === origin && !used.has(p.linkId));
-        if (!match) { skipped++; continue; }
-        used.add(match.linkId);
-        toApply.push({ linkId: match.linkId, myUrl, campaignName: match.campaignName });
+        const importedCampaignName = subColumns.map((column) => String(row[column] ?? "").trim()).filter(Boolean).join("-");
+        usableRows.push({ origin, myUrl, campaignName: importedCampaignName });
       }
+
+      const unmatchedRows: typeof usableRows = [];
+      for (const item of usableRows) {
+        const match = pool.find((candidate) => normalizeUrl(candidate.competitorUrl) === normalizeUrl(item.origin) && !used.has(candidate.linkId));
+        if (!match) { unmatchedRows.push(item); continue; }
+        used.add(match.linkId);
+        toApply.push({ linkId: match.linkId, myUrl: item.myUrl, campaignName: item.campaignName || match.campaignName });
+      }
+
+      // Never assign a converted URL merely by line order. If the original
+      // URL cannot be verified, leave it untouched and report it as a mismatch
+      // rather than risking a product being published with somebody else's
+      // affiliate link.
+      skipped += unmatchedRows.length;
 
       const results = await Promise.all(toApply.map(({ linkId, myUrl, campaignName }) =>
         fetch(`/api/links/${linkId}`, {
@@ -1338,23 +1362,25 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     return jobs;
   }
 
-  async function handleBulkSchedule() {
+  async function handleBulkSchedule(plannedTimes: Record<string, string> = postTimes, plannedPages?: Record<string, string>) {
     const targets = [...checkedIds].filter(id => {
       const p = batch.posts.find(x => x.id === id);
-      return p && (p.status === "ready" || p.status === "failed") && postTimes[id];
+      return p && (p.status === "ready" || p.status === "failed") && plannedTimes[id];
     });
     if (!targets.length) { onToast("Chọn bài và đặt giờ trước", "error"); return; }
     setBulkRunning(true);
     let ok = 0;
     for (const id of targets) {
-      const pageId = rowPageId[id] || pickPage();
+      const pageId = plannedPages?.[id] || rowPageId[id] || pickPage();
       const rp = rowAdParams[id];
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
       try {
         const res = await fetch(`/api/posts/${id}/schedule`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pageId, scheduledAt: vn7ToDate(postTimes[id]).toISOString(), templateId: adConfig.templateId || undefined,
+            pageId, scheduledAt: vn7ToDate(plannedTimes[id]).toISOString(),
+            templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
+            ...(runAdsForRow && rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
             ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
             adStatus: adConfig.adStatus,
             // The table already rolled and displayed this row's budget/age/
@@ -1379,22 +1405,89 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setCheckedIds(new Set());
   }
 
+  async function handleScheduleFromPopup() {
+    if (!scheduleTargets.length) { onToast("Chọn bài sẵn sàng trước", "error"); return; }
+    if (affiliateBlocked) { onToast(`${affiliateBlockedTargets.length} bài chưa đổi xong link aff`, "error"); return; }
+    if (!selectedPageIds.length) { onToast("Chọn ít nhất 1 Page", "error"); return; }
+    const pages = allocatePages(scheduleTargets.map((post) => post.id));
+    setPostTimes((current) => ({ ...current, ...schedulePlan }));
+    setRowPageId((current) => ({ ...current, ...pages }));
+    await handleBulkSchedule(schedulePlan, pages);
+    setScheduleOpen(false);
+  }
+
+  async function handlePrepareAds() {
+    const targets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
+    if (!targets.length) { onToast("Chọn bài sẵn sàng trước", "error"); return; }
+    if (affiliateBlocked) { onToast(`${affiliateBlockedTargets.length} bài chưa đổi xong link aff`, "error"); return; }
+    if (!adConfig.templateId) { onToast("Chọn mẫu Ads trước khi chuẩn bị", "error"); return; }
+
+    const adStart = vn7ToDate(adLaunchAt);
+    const spacing = Math.max(0, Number(prepareSpacing) || 0);
+    const firstPublishAt = new Date();
+    if (adStart.getTime() <= Date.now() + 60_000) {
+      onToast("Giờ bắt đầu Ads phải muộn hơn hiện tại ít nhất 1 phút.", "error");
+      return;
+    }
+
+    setBulkRunning(true);
+    const nextTimes: Record<string, string> = {};
+    // Submit the plan in parallel. Jobs whose time is now are claimed by the
+    // Publish Queue; the queue still enforces the safe concurrency of three.
+    const outcomes = await Promise.all(targets.map(async (post, index) => {
+      const pageId = rowPageId[post.id] || pickPage();
+      const rp = rowAdParams[post.id] ?? genRowParams(adConfig);
+      const plannedPublishAt = new Date(firstPublishAt.getTime() + index * spacing * 60_000);
+      const postAdStart = nextPreparedAdsStart(adStart, plannedPublishAt);
+      try {
+        const res = await fetch(`/api/posts/${post.id}/schedule`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pageId,
+            scheduledAt: plannedPublishAt.toISOString(),
+            templateId: adConfig.templateId,
+            adStatus: "ACTIVE",
+            adStartAt: postAdStart.toISOString(),
+            ...(rowAccountId[post.id] ? { adAccountId: rowAccountId[post.id] } : {}),
+            ...(adConfig.postType === "dark" && rp.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
+            adAgeMin: rp.ageMin, adAgeMax: rp.ageMax, adGender: rp.gender, adBudget: String(rp.budget),
+            ...(() => { const jobs = resolveCommentJobs(post.id); return jobs.length ? { comments: jobs } : {}; })(),
+            storyEnabled, storyCount: Number(storyCount) || 0,
+          }),
+        });
+        if (res.ok) {
+          nextTimes[post.id] = dateToVn7(plannedPublishAt);
+          return true;
+        }
+      } catch { /* keep remaining jobs schedulable */ }
+      return false;
+    }));
+    const ok = outcomes.filter(Boolean).length;
+    setPostTimes((current) => ({ ...current, ...nextTimes }));
+    setBulkRunning(false);
+    await mutateBatch();
+    setCheckedIds(new Set());
+    setPrepareAdsOpen(false);
+    onToast(`Đã chuẩn bị ${ok}/${targets.length} bài · Ads chạy từ ${fmtVn7(adLaunchAt)}`, ok ? "success" : "error");
+  }
+
   async function handleBulkPublish() {
     const targets = [...checkedIds].filter(id => {
       const p = batch.posts.find(x => x.id === id);
       return p && (p.status === "ready" || p.status === "failed");
     });
     if (!targets.length) { onToast("Chọn bài trước", "error"); return; }
+    if (affiliateBlocked) { onToast(`${affiliateBlockedTargets.length} bài chưa đổi xong link aff`, "error"); return; }
     setBulkRunning(true);
-    // Publish every checked post in parallel instead of one-by-one — each
-    // call is its own FB upload/API round trip, so doing them sequentially
-    // multiplies the wait by however many posts are selected.
+    // Store every row's settings and enqueue it in parallel. Cloudflare then
+    // publishes at the controlled Worker concurrency (currently 3), rather
+    // than starting 30 Facebook uploads at once in the browser.
     const outcomes = await Promise.all(targets.map(async (id) => {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id] ?? genRowParams(adConfig);
       const rowOvr = rowOverrides[id] ?? adConfig.overridePublish;
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
-      const res = await fetch(`/api/posts/${id}/publish`, {
+      const res = await fetch(`/api/posts/${id}/queue-publish`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pageId,
@@ -1416,18 +1509,12 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           storyEnabled, storyCount: Number(storyCount) || 0,
         }),
       }).catch(() => null);
-      if (!res?.ok) return { ok: false, adsScheduled: false };
-      const data = await res.json().catch(() => null);
-      return { ok: true, adsScheduled: !!data?.autoAds?.scheduled };
+      return { ok: !!res?.ok };
     }));
     const ok = outcomes.filter((o) => o.ok).length;
     setBulkRunning(false);
-    // The publish response only returns once the initial ad "pending" state
-    // (with its countdown target) is actually persisted, so this refetch
-    // reliably shows it right away instead of waiting for the next poll —
-    // which, before a post has any adStatus locally, wouldn't even start.
     await mutateBatch();
-    onToast(`Đã đăng ${ok}/${targets.length} bài`, "success");
+    onToast(`Đã xếp hàng ${ok}/${targets.length} bài — Queue sẽ đăng tối đa 3 bài cùng lúc`, "success");
     setCheckedIds(new Set());
   }
 
@@ -1526,15 +1613,20 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ))}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button onClick={handleBulkSchedule} disabled={bulkRunning || checkedIds.size === 0}
-            title="Lưu giờ đăng của các dòng đã chọn — hệ thống sẽ tự đăng đúng giờ đó"
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setScheduleOpen(true)} disabled={bulkRunning || checkedIds.size === 0}
+            title="Mở kế hoạch lịch đăng cho các dòng đã chọn"
             className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} {sidebarCollapsed && "Lên lịch"}
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} Lên lịch
           </button>
-          <button onClick={handleBulkPublish} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setPrepareAdsOpen(true)} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
+            title="Đăng Page theo nhịp từ trước, tạo Ads sẵn để bắt đầu đúng giờ bạn chọn"
+            className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 hover:bg-violet-100 text-violet-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
+            <Clock size={11} /> Chuẩn bị Ads
+          </button>
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : handleBulkPublish()} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
             title="Đăng ngay lập tức, bỏ qua giờ đã đặt — có chạy ads hay không tuỳ theo cột &quot;Chạy ads&quot; của từng dòng"
             className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
-            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} {sidebarCollapsed && "Đăng ngay"}
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Đăng ngay
           </button>
           <button onClick={handleBulkDelete} disabled={bulkRunning || checkedIds.size === 0} title="Xoá các dòng đã chọn"
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -1650,6 +1742,107 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         </div>
       </div>
 
+      {affiliateWarningOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div role="alertdialog" aria-modal="true" className="w-full max-w-md overflow-hidden rounded-3xl border border-amber-200 bg-white shadow-2xl dark:border-amber-900 dark:bg-slate-900">
+            <div className="flex items-start justify-between bg-gradient-to-br from-amber-400 to-orange-500 px-6 py-5 text-white">
+              <div>
+                <p className="text-sm font-bold">Chưa thể chạy bài</p>
+                <p className="mt-1 text-xs leading-5 text-amber-50">Hoàn tất link aff trước để tránh đăng nhầm link gốc.</p>
+              </div>
+              <button onClick={() => setAffiliateWarningOpen(false)} className="rounded-lg p-1 text-amber-50 hover:bg-white/15"><X size={18} /></button>
+            </div>
+            <div className="space-y-4 p-6">
+              <p className="text-sm leading-6 text-slate-700 dark:text-slate-200"><b>{affiliateBlockedTargets.length} bài đang chọn</b> còn thiếu link aff hoặc caption vẫn chứa link gốc.</p>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+                Hãy dùng <b>Xuất file</b> → tạo link aff → <b>Nhập file</b>, hoặc sửa trực tiếp cột <b>Link aff</b> trong bảng. Sau khi đủ link, các nút chạy bài sẽ tự hoạt động.
+              </div>
+              <div className="flex justify-end"><button onClick={() => setAffiliateWarningOpen(false)} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 hover:bg-amber-600">Đã hiểu</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scheduleOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-start justify-between bg-gradient-to-br from-blue-600 to-indigo-600 px-6 py-5 text-white">
+              <div>
+                <div className="mb-1 flex items-center gap-2 text-sm font-semibold"><Calendar size={17} /> Lên lịch đăng bài</div>
+                <p className="text-xs leading-5 text-blue-100">Chọn Page và nhịp đăng ở một chỗ. Page được chia đều ngẫu nhiên cho các bài đã chọn.</p>
+              </div>
+              <button onClick={() => setScheduleOpen(false)} className="rounded-lg p-1 text-blue-100 hover:bg-white/15 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_230px]">
+              <ScheduleModeSelector
+                connections={connections}
+                selectedPageIds={selectedPageIds} onPageIdsChange={setSelectedPageIds}
+                scheduleMode={scheduleMode} onScheduleModeChange={setScheduleMode}
+                stepMinutes={stepMinutes} onStepMinutesChange={setStepMinutes}
+                postsPerDay={postsPerDay} onPostsPerDayChange={setPostsPerDay}
+                baseTime={scheduleMode === "manual" ? manualApplyTime : baseTime}
+                onBaseTimeChange={scheduleMode === "manual" ? setManualApplyTime : setBaseTime}
+                endTime={endTime} onEndTimeChange={setEndTime}
+                onQuickNow={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7Now(0))}
+                onQuickMidnight={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7NextMidnight())}
+                hideInlinePreset
+              />
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-xs leading-5 text-blue-950 dark:border-blue-900/60 dark:bg-blue-950/25 dark:text-blue-100">
+                {scheduleTargets.length > 0 && schedulePreviewTimes.length > 0 ? <>
+                  <p className="font-semibold">{scheduleTargets.length} bài được chọn</p>
+                  <p className="mt-2">Bài đầu: <b>{fmtVn7(schedulePreviewTimes[0])}</b></p>
+                  <p>Bài cuối: <b>{fmtVn7(schedulePreviewTimes[schedulePreviewTimes.length - 1])}</b></p>
+                  <p className="mt-3 border-t border-blue-200/70 pt-3 text-blue-700 dark:border-blue-800 dark:text-blue-200">{selectedPageIds.length > 1 ? `${selectedPageIds.length} Page sẽ được chia đều.` : "Chọn thêm Page nếu muốn chia bài đều."}</p>
+                </> : <>
+                  <p className="font-semibold">Chưa có bài nào được chọn</p>
+                  <p className="mt-1">Đóng hộp này, tick các bài Sẵn sàng rồi mở lại.</p>
+                </>}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4 dark:border-slate-800">
+              <button onClick={() => setScheduleOpen(false)} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Huỷ</button>
+              <button onClick={handleScheduleFromPopup} disabled={bulkRunning || scheduleTargets.length === 0 || !selectedPageIds.length} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 hover:bg-blue-700 disabled:opacity-50">{bulkRunning && <Loader2 size={15} className="animate-spin" />} Xác nhận lên lịch</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {prepareAdsOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-start justify-between bg-gradient-to-br from-violet-600 to-indigo-600 px-6 py-5 text-white">
+              <div>
+                <div className="mb-1 flex items-center gap-2 text-sm font-semibold"><Clock size={17} /> Chuẩn bị Ads theo giờ chạy</div>
+                <p className="text-xs leading-5 text-violet-100">Bài Page sẽ đăng trước để tạo Ads sẵn; Ads được đặt bắt đầu đúng giờ mục tiêu.</p>
+              </div>
+              <button onClick={() => setPrepareAdsOpen(false)} className="rounded-lg p-1 text-violet-100 hover:bg-white/15 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="space-y-5 p-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-1.5"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Ads bắt đầu chạy</span>
+                  <input type="datetime-local" value={adLaunchAt} min={vn7Now(61)} onChange={(e) => setAdLaunchAt(e.target.value)} className="w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800" />
+                </label>
+                <label className="space-y-1.5"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Cách nhau mỗi bài</span>
+                  <div className="relative"><input type="number" min="0" max="180" value={prepareSpacing} onChange={(e) => setPrepareSpacing(e.target.value)} className="w-full rounded-xl border bg-white px-3 py-2 pr-14 text-sm outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800" /><span className="absolute right-3 top-2.5 text-xs text-slate-400">phút</span></div>
+                </label>
+              </div>
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4 text-xs leading-5 text-violet-900 dark:border-violet-900/60 dark:bg-violet-950/25 dark:text-violet-100">
+                {prepareTargets.length > 0 ? <>
+                  <p className="font-semibold">{prepareTargets.length} bài sẵn sàng · bắt đầu đăng Page ngay khi lập kế hoạch</p>
+                  <p className="mt-1">Đăng Page từ <b>{fmtVn7(dateToVn7(preparePreview.first))}</b> đến <b>{fmtVn7(dateToVn7(preparePreview.last))}</b>. Ads của bài kịp giờ chạy từ <b>{fmtVn7(adLaunchAt)}</b>; bài đăng muộn sẽ tự chuyển Ads sang đúng giờ đó của ngày kế tiếp.</p>
+                </> : <>
+                  <p className="font-semibold">Chưa có bài nào được chọn</p>
+                  <p className="mt-1">Đóng hộp này, tick các bài có trạng thái <b>Sẵn sàng</b>, rồi mở lại để xem kế hoạch.</p>
+                </>}
+              </div>
+              <div className="flex justify-end gap-2"><button onClick={() => setPrepareAdsOpen(false)} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Huỷ</button>
+                <button onClick={handlePrepareAds} disabled={bulkRunning || prepareTargets.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-600/25 hover:bg-violet-700 disabled:opacity-50">{bulkRunning && <Loader2 size={15} className="animate-spin" />} Lập kế hoạch</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 flex gap-4">
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {/* ── Table ── */}
@@ -1737,37 +1930,39 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               <Zap size={12} /> Áp dụng
             </button>
           </div>
+          <div className="mx-4 mt-3 flex rounded-xl border bg-slate-50 p-1 dark:bg-slate-800">
+            <button onClick={() => setDetailTab("ads")}
+              className={["flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", detailTab === "ads" ? "bg-white text-violet-700 shadow-sm dark:bg-slate-700 dark:text-violet-200" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"].join(" ")}>Ads</button>
+            <button onClick={() => setDetailTab("engagement")}
+              className={["flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", detailTab === "engagement" ? "bg-white text-violet-700 shadow-sm dark:bg-slate-700 dark:text-violet-200" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"].join(" ")}>Bình luận &amp; Story</button>
+          </div>
 
           <div className="p-4 pt-3 space-y-4 overflow-y-auto">
-            <ScheduleModeSelector
-              connections={connections}
-              selectedPageIds={selectedPageIds} onPageIdsChange={setSelectedPageIds}
-              scheduleMode={scheduleMode} onScheduleModeChange={setScheduleMode}
-              stepMinutes={stepMinutes} onStepMinutesChange={setStepMinutes}
-              postsPerDay={postsPerDay} onPostsPerDayChange={setPostsPerDay}
-              baseTime={scheduleMode === "manual" ? manualApplyTime : baseTime}
-              onBaseTimeChange={scheduleMode === "manual" ? setManualApplyTime : setBaseTime}
-              endTime={endTime} onEndTimeChange={setEndTime}
-              onQuickNow={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7Now(0))}
-              onQuickMidnight={() => (scheduleMode === "manual" ? setManualApplyTime : setBaseTime)(vn7NextMidnight())}
-              hideInlinePreset
-            />
-
-            <AdsConfigPanel
-              adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={localAccountRows} onPatch={patchAdConfig}
-              onPatchRow={onPatchAccountRow} onDeleteRow={onDeleteAccountRow} onAddRow={onAddAccountRow}
-            />
-
-            <CommentSettingsPanel
-              enabled={commentEnabled} onEnabledChange={v => onPatchComment({ enabled: v })}
-              useCaption={commentUseCaption} onUseCaptionChange={v => onPatchComment({ useCaption: v })}
-              captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={v => onPatchComment({ captionAttachImage: v })}
-              captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={v => onPatchComment({ captionImageUrls: v })}
-              sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={v => onPatchComment({ sharedImageUrls: v })}
-              randomCount={commentRandomCount} onRandomCountChange={v => onPatchComment({ randomCount: v })}
-              entries={commentCustomEntries} onEntriesChange={v => onPatchComment({ customEntries: v })}
-              entryEnabled={commentCustomEntryEnabled} onEntryEnabledChange={(id, v) => setCommentCustomEntryEnabled(prev => ({ ...prev, [id]: v }))}
-            />
+            {detailTab === "ads" ? (
+              <AdsConfigPanel
+                adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={localAccountRows} onPatch={patchAdConfig}
+                onPatchRow={onPatchAccountRow} onDeleteRow={onDeleteAccountRow} onAddRow={onAddAccountRow}
+              />
+            ) : <>
+              <CommentSettingsPanel
+                enabled={commentEnabled} onEnabledChange={v => onPatchComment({ enabled: v })}
+                useCaption={commentUseCaption} onUseCaptionChange={v => onPatchComment({ useCaption: v })}
+                captionAttachImage={commentCaptionAttachImage} onCaptionAttachImageChange={v => onPatchComment({ captionAttachImage: v })}
+                captionImageUrls={commentCaptionImageUrls} onCaptionImageUrlsChange={v => onPatchComment({ captionImageUrls: v })}
+                sharedImageUrls={commentSharedImageUrls} onSharedImageUrlsChange={v => onPatchComment({ sharedImageUrls: v })}
+                randomCount={commentRandomCount} onRandomCountChange={v => onPatchComment({ randomCount: v })}
+                entries={commentCustomEntries} onEntriesChange={v => onPatchComment({ customEntries: v })}
+                entryEnabled={commentCustomEntryEnabled} onEntryEnabledChange={(id, v) => setCommentCustomEntryEnabled(prev => ({ ...prev, [id]: v }))}
+              />
+              <div className={`${adsPanel} p-4 space-y-3`}>
+                <div className="flex items-center gap-2"><Clock size={14} className="text-violet-600" /><span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Story</span></div>
+                <div className="flex items-center justify-between rounded-xl border bg-white px-3 py-2.5 dark:bg-slate-800">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Tự động đăng Story</span>
+                  <button type="button" onClick={() => onPatchStory({ enabled: !storyEnabled })} className={["relative inline-flex h-5 w-9 rounded-full border-2 border-transparent", storyEnabled ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-600"].join(" ")}><span className={["h-4 w-4 rounded-full bg-white shadow-sm transition-transform", storyEnabled ? "translate-x-4" : "translate-x-0"].join(" ")} /></button>
+                </div>
+                {storyEnabled && <label className="flex items-center justify-between rounded-xl border bg-white px-3 py-2.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">Số bài đầu tiên mỗi ngày (mỗi Page)<input type="number" min={0} value={storyCount} onChange={(event) => onPatchStory({ count: event.target.value })} className="w-16 rounded-lg border bg-white px-2 py-1.5 text-center text-xs dark:bg-slate-800" /></label>}
+              </div>
+            </>}
           </div>
         </div>
       )}
@@ -2026,10 +2221,17 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       {col.key === "status" && cell("status",
         <div className="space-y-1">
           <StatusBadge status={status} />
+          {status === "fetching" && post.errorMsg && (
+            <span className="block text-[9px] leading-tight text-blue-500">{post.errorMsg}</span>
+          )}
           {status === "failed" && post.errorMsg && (
             <div className="flex items-center gap-1">
               <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
-              <button onClick={async () => { const r = await fetch(`/api/posts/${post.id}/retry`, { method: "POST" }); if (r.ok) setStatus("ready"); }}
+              <button onClick={async () => {
+                const r = await fetch(`/api/posts/${post.id}/retry`, { method: "POST" });
+                if (r.ok) setStatus("fetching");
+                else onToast("Không thể thử lấy lại bài viết", "error");
+              }}
                 className="shrink-0 text-[9px] text-slate-400 hover:text-blue-600 underline flex items-center gap-0.5">
                 <RefreshCw size={8} /> Thử lại
               </button>

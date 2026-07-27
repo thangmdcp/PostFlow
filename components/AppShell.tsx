@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -21,6 +23,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const mainML = collapsed ? "ml-16" : "ml-52";
+
+  // Authentication is intentionally a distraction-free page. Rendering it in
+  // the app shell would expose navigation before the user has signed in.
+  if (pathname === "/login") return <div className="w-full shrink-0">{children}</div>;
 
   return (
     <>

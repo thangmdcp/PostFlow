@@ -1,21 +1,23 @@
 import { prisma } from "@/lib/prisma";
 
-const BASE_URL = "https://autodown.vibevic.com";
+const BASE_URL = (process.env.AUTODOWN_BASE_URL ?? "https://autodown.vibevic.com").replace(/\/$/, "");
 
 // Key can be set via the web UI (stored in AppConfig, works on Vercel without
 // a redeploy) or fall back to the env var for local/manual setups.
-async function getApiKey(): Promise<string> {
+async function getApiKeys(): Promise<string[]> {
+  const keys: string[] = [];
   try {
     const row = await prisma.appConfig.findUnique({ where: { key: "autodownApiKey" } });
-    if (row?.value) return row.value;
+    if (row?.value) keys.push(row.value);
   } catch { /* DB not reachable — fall back to env */ }
-  return process.env.AUTODOWN_API_KEY ?? "";
+  if (process.env.AUTODOWN_API_KEY) keys.push(process.env.AUTODOWN_API_KEY);
+  return [...new Set(keys)];
 }
 
-async function headers() {
+function headers(apiKey: string) {
   return {
     "Content-Type": "application/json",
-    "X-API-Key": await getApiKey(),
+    "X-API-Key": apiKey,
   };
 }
 
@@ -46,15 +48,22 @@ export interface AutoDownDownloadResult {
 // to a download.
 export async function autodownExtract(url: string): Promise<AutoDownExtractResult | null> {
   try {
-    const res = await fetch(`${BASE_URL}/api/extract`, {
-      method: "POST",
-      headers: await headers(),
-      body: JSON.stringify({ url }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data?.success) return null;
-    return data as AutoDownExtractResult;
+    for (const apiKey of await getApiKeys()) {
+      const res = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ url }),
+        signal: AbortSignal.timeout(25_000),
+      });
+      // A stale key saved from the UI must not disable a valid deploy-time
+      // key. Try the next configured key only for authentication failures.
+      if (res.status === 401 || res.status === 403) continue;
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data?.success) return null;
+      return data as AutoDownExtractResult;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -64,16 +73,20 @@ export async function autodownExtract(url: string): Promise<AutoDownExtractResul
 // ~60s per the API guide.
 export async function autodownDownload(url: string): Promise<AutoDownDownloadResult | null> {
   try {
-    const res = await fetch(`${BASE_URL}/api/download`, {
-      method: "POST",
-      headers: await headers(),
-      body: JSON.stringify({ url }),
-      signal: AbortSignal.timeout(90_000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data?.success) return null;
-    return data as AutoDownDownloadResult;
+    for (const apiKey of await getApiKeys()) {
+      const res = await fetch(`${BASE_URL}/api/download`, {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ url }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (res.status === 401 || res.status === 403) continue;
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data?.success) return null;
+      return data as AutoDownDownloadResult;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -85,11 +98,15 @@ export async function autodownDownload(url: string): Promise<AutoDownDownloadRes
 export async function autodownCleanup(publicIds: string[]): Promise<void> {
   if (publicIds.length === 0) return;
   try {
-    await fetch(`${BASE_URL}/api/cleanup`, {
-      method: "POST",
-      headers: await headers(),
-      body: JSON.stringify({ public_ids: publicIds }),
-    });
+    for (const apiKey of await getApiKeys()) {
+      const res = await fetch(`${BASE_URL}/api/cleanup`, {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ public_ids: publicIds }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.status !== 401 && res.status !== 403) break;
+    }
   } catch { /* best-effort */ }
 }
 

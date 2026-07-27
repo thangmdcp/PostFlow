@@ -7,22 +7,70 @@ Service tải video Facebook / TikTok, upload lên Cloudinary, không lưu file 
 - **Base URL**: `https://autodown.vibevic.com`
 - **Header xác thực** (bắt buộc cho mọi request `/api/*`):
   ```
-  X-API-Key: fbdl-83f5757bc7a83f204d734115041e3ba8
+  X-API-Key: thangvd3195
   ```
 
-## 2. Phạm vi hỗ trợ
+## 2. Next.js — cách gọi an toàn
+
+Thêm vào `.env.local` của dự án Next.js (không dùng tiền tố `NEXT_PUBLIC_`):
+
+```env
+AUTODOWN_BASE_URL=https://autodown.vibevic.com
+AUTODOWN_API_KEY=thangvd3195
+```
+
+Tạo `lib/autodown.ts`:
+
+```ts
+export async function callAutoDown(path: string, body: unknown) {
+  const response = await fetch(`${process.env.AUTODOWN_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": process.env.AUTODOWN_API_KEY!,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "AutoDown request failed");
+  return data;
+}
+```
+
+Ví dụ Route Handler `app/api/video/extract/route.ts`:
+
+```ts
+import { NextRequest, NextResponse } from "next/server";
+import { callAutoDown } from "@/lib/autodown";
+
+export async function POST(request: NextRequest) {
+  const { url } = await request.json();
+  try {
+    return NextResponse.json(await callAutoDown("/api/extract", { url }));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Không thể lấy video" },
+      { status: 502 },
+    );
+  }
+}
+```
+
+## 3. Phạm vi hỗ trợ
 
 - Nền tảng: Facebook, TikTok — chỉ video/reel **công khai**.
 - Không hỗ trợ YouTube (YouTube chặn theo dải IP datacenter, không có cách vượt qua đáng tin cậy nếu không dùng cookie), không hỗ trợ Instagram, không hỗ trợ ảnh/album/carousel (các nền tảng này bắt buộc cookie đăng nhập mới lấy được, vi phạm nguyên tắc không-cookie của service).
 - Service **không lưu job/state** — mỗi request tự chứa toàn bộ thông tin, không có jobId.
 
-## 3. Endpoints
+## 4. Endpoints
 
 ### `POST /api/extract` — lấy metadata (không tải file, không đụng Cloudinary)
 
 ```bash
 curl -X POST https://autodown.vibevic.com/api/extract \
-  -H "X-API-Key: fbdl-83f5757bc7a83f204d734115041e3ba8" \
+  -H "X-API-Key: thangvd3195" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.facebook.com/reel/XXXXXXXXXX"}'
 ```
@@ -38,7 +86,7 @@ Cần cấu hình Cloudinary trên server AutoDown trước (mục "Cloudinary C
 
 ```bash
 curl -X POST https://autodown.vibevic.com/api/download \
-  -H "X-API-Key: fbdl-83f5757bc7a83f204d734115041e3ba8" \
+  -H "X-API-Key: thangvd3195" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.facebook.com/reel/XXXXXXXXXX"}'
 ```
@@ -59,7 +107,7 @@ Dùng thẳng `media[0].url` làm `file_url` khi gọi Facebook Graph API để 
 
 ```bash
 curl -X POST https://autodown.vibevic.com/api/cleanup \
-  -H "X-API-Key: fbdl-83f5757bc7a83f204d734115041e3ba8" \
+  -H "X-API-Key: thangvd3195" \
   -H "Content-Type: application/json" \
   -d '{"public_ids": ["temp/abc123/xxxx"]}'
 ```
@@ -69,7 +117,7 @@ Response:
 {"success": true, "deleted": {"temp/abc123/xxxx": "deleted"}}
 ```
 
-## 4. Luồng tích hợp khuyến nghị (đăng bài lên Facebook Page)
+## 5. Luồng tích hợp khuyến nghị (đăng bài lên Facebook Page)
 
 ### Đăng ngay
 
@@ -91,7 +139,7 @@ Response:
    - Lỗi khi đăng (đã có asset) → tự retry, hết lượt → `/api/cleanup`.
    - Lỗi khi tải (link gốc đã chết) → chưa có gì để dọn, đánh dấu lỗi cho user cập nhật lại link.
 
-## 5. Lưu ý quan trọng
+## 6. Lưu ý quan trọng
 
 - **Idempotency**: đảm bảo worker lên lịch không chạy trùng 2 lần cho cùng 1 bài (khoá bằng trạng thái `processing` trong DB trước khi gọi `/api/download`).
 - **Lưới an toàn chống rác Cloudinary**: nếu Web B crash giữa chừng (sau `/api/download`, trước khi kịp gọi `/api/cleanup`) thì asset có thể tồn đọng. Nên có thêm 1 cron riêng bên Web B dùng Cloudinary Admin API để xoá asset trong prefix `temp/` cũ hơn 2-3 ngày.

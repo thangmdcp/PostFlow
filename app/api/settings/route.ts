@@ -12,6 +12,9 @@ const KNOWN_ENV_KEYS = [
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
+  "RAPIDAPI_KEY",
+  "AUTODOWN_API_KEY",
+  "AUTODOWN_BASE_URL",
 ];
 
 function parseEnv(content: string): Record<string, string> {
@@ -65,6 +68,7 @@ export async function POST(req: Request) {
 
   try {
     const updates = (await req.json()) as Record<string, string>;
+    const allowedKeys = new Set(KNOWN_ENV_KEYS);
 
     // Read existing
     const content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf-8") : "";
@@ -72,6 +76,7 @@ export async function POST(req: Request) {
 
     // Merge — skip empty values (don't overwrite with empty)
     for (const [k, v] of Object.entries(updates)) {
+      if (!allowedKeys.has(k)) continue;
       if (v && v.trim()) {
         existing[k] = v.trim();
       }

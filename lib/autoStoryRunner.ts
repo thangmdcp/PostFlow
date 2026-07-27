@@ -1,11 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { publishStoryToPage } from "@/lib/facebook";
+import { enqueueStory } from "@/lib/cloudflareQueue";
 
-// Unlike ads (1st attempt via waitUntil ~1 min out) and comments (~2 min
-// out), the Story delay is at least 1 hour — well past the publish route's
-// 90s maxDuration, so there is NO in-process first attempt here at all.
-// Every attempt, including the first, is picked up by the cron sweep
-// (processDueStoryRetries) once storyNextAttemptAt has passed.
+// Story delivery is delayed and retried by Cloudflare Queue. Supabase keeps
+// status/history only; no Vercel timer or cron sweep owns this work.
 const RETRY_DELAY_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 3;
 const ONE_HOUR_MS = 60 * 60_000;
@@ -56,23 +54,27 @@ export async function topUpPageStories(pageId: string, storyCount: number, prefe
   if (chosen.length === 0) return; // nothing left in the archive to backfill from
 
   // Every slot in this pass — including the first — is spaced 1h apart.
-  await Promise.all(chosen.map((postId, i) =>
-    prisma.post.update({
+  await Promise.all(chosen.map(async (postId, i) => {
+    const delaySeconds = (i + 1) * 60 * 60;
+    await prisma.post.update({
       where: { id: postId },
       data: { storyStatus: "pending", storyNextAttemptAt: new Date(now.getTime() + (i + 1) * ONE_HOUR_MS), storyAttempt: 0 },
-    })
-  ));
+    });
+    if (!await enqueueStory(postId, delaySeconds)) throw new Error("Không thể đưa Story vào Cloudflare Queue");
+  }));
 }
 
-export async function attemptStory(postId: string, attemptIndex: number): Promise<void> {
-  const attemptNumber = attemptIndex + 1;
+export async function attemptStory(postId: string): Promise<{ retry: boolean }> {
+  const existing = await prisma.post.findUnique({ where: { id: postId } });
+  if (!existing || existing.storyStatus === "done" || existing.storyStatus === "failed") return { retry: false };
+  const attemptNumber = (existing.storyAttempt ?? 0) + 1;
   // Bump the attempt counter BEFORE calling Facebook — same crash-loop
   // safety pattern as attemptAutoAds/attemptComment.
   const post = await prisma.post.update({
     where: { id: postId },
     data: { storyStatus: "creating", storyAttempt: attemptNumber },
   }).catch(() => null);
-  if (!post) return;
+  if (!post) return { retry: true };
 
   try {
     if (!post.pageId) throw new Error("Bài chưa có pageId");
@@ -86,47 +88,23 @@ export async function attemptStory(postId: string, attemptIndex: number): Promis
       data: { storyStatus: "done", storyPostId: result.postId, storyNextAttemptAt: null, errorMsg: null, storyPostedAt: new Date() },
     });
     console.log(`[auto-story] post ${postId}: story ${result.postId} posted (attempt ${attemptNumber})`);
+    return { retry: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-story failed";
     console.error(`[auto-story] post ${postId} attempt ${attemptNumber} failed:`, msg);
 
-    if (attemptIndex + 1 < MAX_ATTEMPTS) {
+    if (attemptNumber < MAX_ATTEMPTS) {
       await prisma.post.update({
         where: { id: postId },
         data: { storyStatus: "pending", storyNextAttemptAt: new Date(Date.now() + RETRY_DELAY_MS), errorMsg: `[story] ${msg}` },
       }).catch(() => {});
+      return { retry: true };
     } else {
       await prisma.post.update({
         where: { id: postId },
         data: { storyStatus: "failed", storyNextAttemptAt: null, errorMsg: `[story] ${msg}` },
       }).catch(() => {});
+      return { retry: false };
     }
-  }
-}
-
-// Called from the cron tick — same shape as processDueAdRetries/
-// processDueCommentRetries: due "pending" rows, or "creating" rows stuck
-// long enough that the invocation which set them must have died.
-export async function processDueStoryRetries(): Promise<void> {
-  const now = new Date();
-  const stuckSince = new Date(now.getTime() - 3 * 60_000);
-  const due = await prisma.post.findMany({
-    where: {
-      OR: [
-        { storyStatus: "pending", storyNextAttemptAt: { lte: now } },
-        { storyStatus: "creating", updatedAt: { lte: stuckSince } },
-      ],
-    },
-  });
-
-  for (const post of due) {
-    if ((post.storyAttempt ?? 0) >= MAX_ATTEMPTS) {
-      await prisma.post.update({
-        where: { id: post.id },
-        data: { storyStatus: "failed", storyNextAttemptAt: null, errorMsg: "[story] Vượt quá số lần thử lại cho phép" },
-      }).catch(() => {});
-      continue;
-    }
-    await attemptStory(post.id, post.storyAttempt ?? 0);
   }
 }

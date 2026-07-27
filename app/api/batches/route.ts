@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
-import { fetchPostFields } from "@/lib/postProcessing";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
+import { processFetchPost } from "@/lib/fetchPostJob";
+import { enqueueFetch } from "@/lib/cloudflareQueue";
+
+async function processFetchBatch(ids: string[], concurrency = 4): Promise<void> {
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      await processFetchPost(id);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
+}
 
 export async function POST(req: Request) {
   try {
@@ -42,10 +54,15 @@ export async function POST(req: Request) {
       },
     });
 
-    // Background work — waitUntil keeps the serverless function alive until
-    // this finishes. A plain setImmediate/fire-and-forget gets killed the
-    // moment the response is sent on Vercel, leaving posts stuck "fetching".
-    waitUntil(processBatch(batch.posts.map((p) => ({ id: p.id, sourceUrl: p.sourceUrl }))));
+    // Do not leave fetches attached only to this serverless invocation. A
+    // request can be terminated after its response (especially outside
+    // Vercel), which used to leave every row permanently at "fetching".
+    // Queue is durable; the local waitUntil path is only a development /
+    // Queue-unavailable fallback.
+    const postIds = batch.posts.map((post) => post.id);
+    const queued = await Promise.all(postIds.map((id) => enqueueFetch(id)));
+    const fallbackIds = postIds.filter((_, index) => !queued[index]);
+    if (fallbackIds.length) waitUntil(processFetchBatch(fallbackIds));
 
     // Every time a new batch is fetched, top up each connected page's
     // rolling Story quota from its own already-published archive — pages
@@ -72,38 +89,4 @@ async function topUpPageStoriesForAllPages() {
 
   const pages = await prisma.fbConnection.findMany({ select: { pageId: true } });
   await Promise.all(pages.map((p) => topUpPageStories(p.pageId, storyCount)));
-}
-
-async function processOne(post: { id: string; sourceUrl: string }) {
-  try {
-    const fields = await fetchPostFields(post.sourceUrl);
-
-    await prisma.post.update({
-      where: { id: post.id },
-      data: {
-        title: fields.title,
-        rawCaption: fields.rawCaption,
-        stableMediaUrl: fields.stableMediaUrl,
-        thumbnailUrl: fields.thumbnailUrl,
-        mediaUrls: fields.mediaUrls,
-        mediaType: fields.mediaType,
-        cloudinaryId: fields.cloudinaryId,
-        status: "ready",
-        extractedLinks: {
-          create: fields.links.map((url, i) => ({ order: i + 1, competitorUrl: url })),
-        },
-      },
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    await prisma.post.update({
-      where: { id: post.id },
-      data: { status: "failed", errorMsg: msg },
-    });
-  }
-}
-
-async function processBatch(posts: { id: string; sourceUrl: string }[]) {
-  // Run all posts in parallel — no sequential wait, no Cloudinary upload
-  await Promise.all(posts.map((p) => processOne(p)));
 }

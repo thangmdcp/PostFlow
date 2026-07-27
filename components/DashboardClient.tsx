@@ -16,9 +16,9 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { randomInteger, randomStep } from "@/lib/adSettings";
-import { PageMultiSelect, pickRandomPage } from "@/components/PageSelector";
+import { PageMultiSelect } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
-import { AdsConfigPanel, weightedPickAccount, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
+import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
@@ -29,6 +29,7 @@ import { ScheduledTime } from "@/components/ScheduledTime";
 import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 import { adsPanel } from "@/lib/ui-classes";
+import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -70,12 +71,13 @@ interface Props {
   adAccounts: FbAdAccount[];
 }
 
-const STATUS_FILTERS = ["all", "pending", "done", "failed"] as const;
+const STATUS_FILTERS = ["all", "pending", "queued", "done", "failed"] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
 const FILTER_LABELS: Record<StatusFilter, string> = {
   all: "Tất cả",
   pending: "Chờ đăng",
+  queued: "Đang xếp hàng",
   done: "Đã đăng",
   failed: "Thất bại",
 };
@@ -265,8 +267,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       // the new config onto each of them now, keeping their existing
       // pageId/scheduledAt untouched.
       const pendingPosts = localPosts.filter((p) => p.status === "pending" && p.pageId && p.scheduledAt);
-      await Promise.all(pendingPosts.map((p) => {
-        const accountId = drawerAccountRows.length ? weightedPickAccount(drawerAccountRows) : adAccountsFull[0]?.accountId;
+      const pendingAccountIds = allocateWeighted(
+        drawerAccountRows.length ? drawerAccountRows.map((account) => ({ id: account.accountId, weight: account.weight })) : adAccountsFull.slice(0, 1).map((account) => ({ id: account.accountId })),
+        pendingPosts.length
+      );
+      await Promise.all(pendingPosts.map((p, index) => {
+        const accountId = pendingAccountIds[index] ?? "";
         const row = drawerAccountRows.find((r) => r.accountId === accountId);
         const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
         const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
@@ -278,7 +284,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             pageId: p.pageId, scheduledAt: p.scheduledAt,
             templateId: drawerAdConfig.runAds ? drawerAdConfig.templateId : undefined,
             adStatus: drawerAdConfig.adStatus,
-            ...(drawerAdConfig.runAds ? { adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender, adBudget: String(budget) } : {}),
+            ...(drawerAdConfig.runAds ? { adAccountId: accountId, adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender, adBudget: String(budget) } : {}),
             ...(comments.length ? { comments } : {}),
             storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
           }),
@@ -474,9 +480,16 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
     setDrawerApplying(true);
     let ok = 0, fail = 0;
-    for (const p of posts) {
+    const accountIds = allocateWeighted(
+      drawerAccountRows.length ? drawerAccountRows.map((account) => ({ id: account.accountId, weight: account.weight })) : adAccountsFull.slice(0, 1).map((account) => ({ id: account.accountId })),
+      posts.length
+    );
+    const pending = posts.filter((post) => post.status === "pending");
+    const pendingPages = allocateEvenly(selectedPageIds, pending.length);
+    const pendingPageByPostId = new Map(pending.map((post, index) => [post.id, pendingPages[index] ?? ""]));
+    for (const [index, p] of posts.entries()) {
       try {
-        const accountId = drawerAccountRows.length ? weightedPickAccount(drawerAccountRows) : adAccountsFull[0]?.accountId;
+        const accountId = accountIds[index] ?? "";
         const row = drawerAccountRows.find((r) => r.accountId === accountId);
         const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
         const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
@@ -484,8 +497,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         const comments = resolveDrawerCommentJobs(p);
 
         if (p.status === "pending") {
-          const pageId = pickRandomPage(selectedPageIds, connections);
-          const res = await fetch(`/api/posts/${p.id}/publish`, {
+          const pageId = pendingPageByPostId.get(p.id) ?? "";
+          const res = await fetch(`/api/posts/${p.id}/queue-publish`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               pageId,
@@ -500,16 +513,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
             }),
           });
-          const data = await res.json();
           if (res.ok) {
             ok++;
-            // The publish response doesn't echo back the ad config it just
-            // scheduled (the actual campaign is created async, minutes
-            // later) — but we already know exactly what was applied since
-            // we just built the request from it, so merge that in directly
-            // instead of leaving the table blank until a later poll.
             setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? {
-              ...x, status: "done", fbPostUrl: data.fbPostUrl, pageId,
+              ...x, status: "queued", pageId,
               ...(drawerAdConfig.runAds ? { adAccountUsed: accountId, adBudget: String(budget), adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender } : {}),
             } : x)));
           }
@@ -657,6 +664,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const counts = {
     all: dateFiltered.filter((p) => p.status !== "failed").length,
     pending: dateFiltered.filter((p) => p.status === "pending").length,
+    queued: dateFiltered.filter((p) => p.status === "queued").length,
     publishing: dateFiltered.filter((p) => p.status === "publishing").length,
     done: dateFiltered.filter((p) => p.status === "done").length,
     failed: dateFiltered.filter((p) => p.status === "failed").length,
@@ -686,13 +694,13 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     return true;
   });
 
-  // Auto-refresh when posts are in a transient state (fetching or publishing)
+  // Auto-refresh while the Queue or a publisher is processing posts.
   useEffect(() => {
-    if (counts.publishing > 0 || counts.fetching > 0) {
+    if (counts.queued > 0 || counts.publishing > 0 || counts.fetching > 0) {
       refreshTimerRef.current = setInterval(() => router.refresh(), 3000);
     }
     return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
-  }, [counts.publishing, counts.fetching, router]);
+  }, [counts.queued, counts.publishing, counts.fetching, router]);
 
   // Refresh when user comes back to this tab (e.g. after creating a batch)
   useEffect(() => {
@@ -770,17 +778,17 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   async function bulkPublish(postList = checkedPending): Promise<Map<string, string>> {
     const fbPostIdMap = new Map<string, string>();
     if (selectedPageIds.length === 0 || postList.length === 0) return fbPostIdMap;
-    for (const p of postList) {
-      const pageId = pickRandomPage(selectedPageIds, connections);
+    const pageIds = allocateEvenly(selectedPageIds, postList.length);
+    for (const [index, p] of postList.entries()) {
+      const pageId = pageIds[index] ?? "";
       try {
-        const res = await fetch(`/api/posts/${p.id}/publish`, {
+        const res = await fetch(`/api/posts/${p.id}/queue-publish`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pageId, storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0 }),
         });
-        const data = await res.json();
         if (res.ok) {
-          fbPostIdMap.set(p.id, data.fbPostId ?? "");
-          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "done", fbPostUrl: data.fbPostUrl, pageId } : x));
+          fbPostIdMap.set(p.id, "queued");
+          setLocalPosts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "queued", pageId } : x));
         }
       } catch {}
     }
@@ -798,7 +806,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     setBulkRunning(true);
     const map = await bulkPublish(checkedPending);
     setBulkRunning(false);
-    show(`Đã đăng ${map.size}/${checkedPending.length} bài`, map.size > 0 ? "success" : "error");
+    show(`Đã xếp hàng ${map.size}/${checkedPending.length} bài`, map.size > 0 ? "success" : "error");
     setCheckedIds(new Set());
   }
 

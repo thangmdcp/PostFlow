@@ -1,6 +1,6 @@
-import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { postComment } from "@/lib/facebook";
+import { enqueueComment } from "@/lib/cloudflareQueue";
 
 // Each comment on a post posts 2 minutes after the previous one (or after
 // publish, for the first) — comment 1 at +2m, comment 2 at +4m, etc. — see
@@ -37,10 +37,9 @@ export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Pr
   });
 }
 
-// Call this once fbPostId is known (right after a post publishes). AWAIT it —
-// it only persists each row's initial "pending" state (fast DB writes); the
-// actual wait + attempt happens in the background via waitUntil per row.
-export async function scheduleCommentJobs(postId: string, fbPostId: string, accessToken: string): Promise<void> {
+// Call this once fbPostId is known. Cloudflare Queue owns both the delayed
+// delivery and retry; Supabase only records durable state for the UI/audit.
+export async function scheduleCommentJobs(postId: string): Promise<void> {
   const queued = await prisma.postComment.findMany({ where: { postId, status: null }, orderBy: { createdAt: "asc" } });
   if (queued.length === 0) return;
 
@@ -54,106 +53,57 @@ export async function scheduleCommentJobs(postId: string, fbPostId: string, acce
     });
   }));
 
-  queued.forEach((row, index) => {
+  await Promise.all(queued.map(async (row, index) => {
     const delay = (index + 1) * COMMENT_INTERVAL_MS;
-    waitUntil(
-      new Promise<void>((resolve) => setTimeout(resolve, delay)).then(() =>
-        attemptComment(row.id, fbPostId, accessToken, 0)
-      )
-    );
-  });
+    if (!await enqueueComment(row.id, Math.ceil(delay / 1000))) {
+      throw new Error("Không thể đưa comment vào Cloudflare Queue");
+    }
+  }));
 }
 
-// Exported so the cron route can also call it directly (for retries beyond
-// the first attempt) without going through scheduleCommentJobs' waitUntil.
-export async function attemptComment(commentRowId: string, fbPostId: string, accessToken: string, attemptIndex: number): Promise<void> {
-  const attemptNumber = attemptIndex + 1;
+// Called only by the Queue consumer endpoint. A non-OK response makes the
+// Worker retry this same message after its configured delay.
+export async function attemptComment(commentRowId: string): Promise<{ retry: boolean }> {
   // Record the attempt count BEFORE calling out to Facebook, not just on
   // completion — if the serverless invocation dies mid-call (timeout, cold
   // start crash), the row is left stuck on "creating" with the OLD attempt
   // count, and processDueCommentRetries would otherwise retry it forever
   // since it never sees the count go up. Bumping it up-front means a stuck
   // row hits MAX_ATTEMPTS and gets marked failed instead of looping.
-  const row = await prisma.postComment.update({
-    where: { id: commentRowId },
-    data: { status: "creating", attempt: attemptNumber },
-  }).catch(() => null);
-  if (!row) return;
+  const existing = await prisma.postComment.findUnique({ where: { id: commentRowId }, include: { post: true } });
+  if (!existing || existing.status === "done" || existing.status === "failed") return { retry: false };
+  const attemptNumber = (existing.attempt ?? 0) + 1;
+  const row = await prisma.postComment.update({ where: { id: commentRowId }, data: { status: "creating", attempt: attemptNumber } }).catch(() => null);
+  if (!row) return { retry: true };
 
   try {
-    const result = await postComment(fbPostId, accessToken, row.text, row.imageUrl ?? undefined);
+    if (!existing.post.fbPostId || !existing.post.pageId) throw new Error("Bài chưa có fbPostId/pageId");
+    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: existing.post.pageId } });
+    if (!fbConn) throw new Error("Không tìm thấy kết nối Facebook Page");
+    const result = await postComment(existing.post.fbPostId, fbConn.accessToken, row.text, row.imageUrl ?? undefined);
     await prisma.postComment.update({
       where: { id: commentRowId },
       data: { status: "done", commentId: result.id, attempt: attemptNumber, nextAttemptAt: null, errorMsg: null },
     });
     console.log(`[auto-comment] post ${row.postId}: comment ${result.id} posted (attempt ${attemptNumber})`);
+    return { retry: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-comment failed";
     console.error(`[auto-comment] comment row ${commentRowId} attempt ${attemptNumber} failed:`, msg);
 
-    if (attemptIndex + 1 < MAX_ATTEMPTS) {
-      const delay = RETRY_DELAYS_MS[attemptIndex + 1];
-      const nextAttemptAt = new Date(Date.now() + delay);
+    if (attemptNumber < MAX_ATTEMPTS) {
+      const nextAttemptAt = new Date(Date.now() + COMMENT_INTERVAL_MS);
       await prisma.postComment.update({
         where: { id: commentRowId },
         data: { status: "pending", nextAttemptAt, attempt: attemptNumber, errorMsg: `[comment] ${msg}` },
       }).catch(() => {});
+      return { retry: true };
     } else {
       await prisma.postComment.update({
         where: { id: commentRowId },
         data: { status: "failed", attempt: attemptNumber, nextAttemptAt: null, errorMsg: `[comment] ${msg}` },
       }).catch(() => {});
+      return { retry: false };
     }
-  }
-}
-
-// Called from the cron tick for comment rows whose nextAttemptAt has passed,
-// or whose "creating" status has been stuck for a while (invocation died
-// mid-attempt) — mirrors processDueAdRetries.
-export async function processDueCommentRetries(): Promise<void> {
-  const now = new Date();
-  const stuckSince = new Date(now.getTime() - 3 * 60_000);
-  const due = await prisma.postComment.findMany({
-    where: {
-      OR: [
-        { status: "pending", nextAttemptAt: { lte: now } },
-        { status: "creating", updatedAt: { lte: stuckSince } },
-      ],
-    },
-    include: { post: true },
-  });
-
-  for (const row of due) {
-    // These would otherwise sit "pending" forever with no visible error —
-    // mark them failed instead so a missing page/connection is diagnosable.
-    if (!row.post.pageId || !row.post.fbPostId) {
-      await prisma.postComment.update({
-        where: { id: row.id },
-        data: { status: "failed", nextAttemptAt: null, errorMsg: "[comment] Bài chưa có pageId/fbPostId" },
-      }).catch(() => {});
-      continue;
-    }
-    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: row.post.pageId } });
-    if (!fbConn) {
-      await prisma.postComment.update({
-        where: { id: row.id },
-        data: { status: "failed", nextAttemptAt: null, errorMsg: `[comment] Không tìm thấy kết nối FB cho page ${row.post.pageId}` },
-      }).catch(() => {});
-      continue;
-    }
-
-    // A "creating" row stuck long enough to be picked up here already used
-    // up its recorded attempt (see the up-front bump in attemptComment) — if
-    // that already hit the cap, stop instead of retrying an unbounded
-    // number of times.
-    if ((row.attempt ?? 0) >= MAX_ATTEMPTS) {
-      await prisma.postComment.update({
-        where: { id: row.id },
-        data: { status: "failed", nextAttemptAt: null, errorMsg: "[comment] Vượt quá số lần thử lại cho phép" },
-      }).catch(() => {});
-      continue;
-    }
-
-    await attemptComment(row.id, row.post.fbPostId, fbConn.accessToken, row.attempt ?? 0);
   }
 }
