@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { attemptAutoAds } from "@/lib/autoAdsRunner";
 
 export async function POST(request: Request) {
-  // Queue consumers authenticate with their dedicated worker secret. The
-  // producer's enqueue secret is intentionally a different credential.
-  const workerSecret = process.env.CLOUDFLARE_QUEUE_WORKER_SECRET;
+  const workerSecret = process.env.CLOUDFLARE_QUEUE_SECRET;
   if (!workerSecret || request.headers.get("x-postflow-worker-secret") !== workerSecret) {
     return NextResponse.json({ error: "Unauthorized", configured: Boolean(workerSecret), received: Boolean(request.headers.get("x-postflow-worker-secret")) }, { status: 401 });
   }

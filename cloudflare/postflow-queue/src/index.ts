@@ -44,7 +44,10 @@ export default {
       const endpoint = message.body.type === "publish" ? "publish" : message.body.type;
       const response = await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/, "")}/api/queue/${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-postflow-worker-secret": env.POSTFLOW_WORKER_SECRET },
+        // POSTFLOW_QUEUE_SECRET is already proven to match Vercel's
+        // CLOUDFLARE_QUEUE_SECRET by the producer /enqueue handshake. Use it
+        // in both directions instead of an independently configured secret.
+        headers: { "Content-Type": "application/json", "x-postflow-worker-secret": env.POSTFLOW_QUEUE_SECRET },
         body: JSON.stringify(message.body),
       });
       if (response.ok) message.ack();

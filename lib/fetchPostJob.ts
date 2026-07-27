@@ -7,7 +7,11 @@ export async function processFetchPost(postId: string): Promise<void> {
   // local fallback may deliver a job when a network response is lost; only one
   // must be allowed to fetch and write this post.
   const claim = await prisma.post.updateMany({
-    where: { id: postId, status: "fetching", errorMsg: null },
+    where: {
+      id: postId,
+      status: "fetching",
+      OR: [{ errorMsg: null }, { errorMsg: "Đang khôi phục job…" }],
+    },
     data: { errorMsg: "Đang lấy nội dung và video…" },
   });
   if (claim.count === 0) return;
