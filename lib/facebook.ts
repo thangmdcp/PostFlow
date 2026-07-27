@@ -173,6 +173,30 @@ export async function postComment(objectId: string, accessToken: string, message
   return json;
 }
 
+export interface FacebookComment {
+  id: string;
+  message?: string;
+  from?: { id?: string };
+}
+
+/** Read enough top-level comments to detect comments previously left by this Page.
+ * This makes retries safe when Facebook accepted a comment but the response was
+ * lost before PostFlow could save its comment id. */
+export async function getFacebookComments(objectId: string, accessToken: string): Promise<FacebookComment[]> {
+  const comments: FacebookComment[] = [];
+  let url: string | null = `${FB_API}/${objectId}/comments?fields=id,message,from{id}&limit=100&access_token=${encodeURIComponent(accessToken)}`;
+  // A post with hundreds of comments should not turn one scheduled comment
+  // into an unbounded Graph crawl; 500 is ample for the Page-owned count.
+  for (let page = 0; url && page < 5; page++) {
+    const res: Response = await fetch(url);
+    const json: { error?: { message?: string }; data?: FacebookComment[]; paging?: { next?: string } } = await res.json();
+    if (json.error) throw new Error(`[get comments] ${json.error.message}`);
+    comments.push(...(json.data ?? []));
+    url = json.paging?.next ?? null;
+  }
+  return comments;
+}
+
 export async function exchangeForLongLivedToken(
   shortToken: string
 ): Promise<string> {

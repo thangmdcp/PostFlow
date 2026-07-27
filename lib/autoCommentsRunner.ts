@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { postComment } from "@/lib/facebook";
+import { getFacebookComments, postComment } from "@/lib/facebook";
 import { enqueueComment } from "@/lib/cloudflareQueue";
 
 // Each comment on a post posts 2 minutes after the previous one (or after
@@ -14,6 +14,10 @@ const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1; // +1 for the first attempt
 export interface CommentJob {
   text: string;
   imageUrl?: string;
+}
+
+function normalizeComment(value: string) {
+  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase("vi");
 }
 
 // Replace any queued (not-yet-started) comment rows for this post with a
@@ -80,6 +84,28 @@ export async function attemptComment(commentRowId: string): Promise<{ retry: boo
     if (!existing.post.fbPostId || !existing.post.pageId) throw new Error("Bài chưa có fbPostId/pageId");
     const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: existing.post.pageId } });
     if (!fbConn) throw new Error("Không tìm thấy kết nối Facebook Page");
+
+    // Facebook may have accepted the previous request while the worker timed
+    // out, so never blindly resend. Count Page-owned comments against the
+    // target, and also match this row's text to avoid a duplicate retry.
+    const [facebookComments, targetCount] = await Promise.all([
+      getFacebookComments(existing.post.fbPostId, fbConn.accessToken),
+      prisma.postComment.count({ where: { postId: existing.postId } }),
+    ]);
+    const pageComments = facebookComments.filter((comment) => comment.from?.id === existing.post.pageId);
+    const identicalCommentExists = pageComments.some((comment) => normalizeComment(comment.message ?? "") === normalizeComment(row.text));
+    if (identicalCommentExists || pageComments.length >= targetCount) {
+      const reason = identicalCommentExists
+        ? "[comment] Đã có bình luận cùng nội dung từ Page trên Facebook."
+        : `[comment] Page đã có ${pageComments.length}/${targetCount} bình luận, không đăng trùng.`;
+      await prisma.postComment.update({
+        where: { id: commentRowId },
+        data: { status: "skipped", attempt: attemptNumber, nextAttemptAt: null, errorMsg: reason },
+      });
+      console.log(`[auto-comment] post ${row.postId}: skipped duplicate/existing Page comment`);
+      return { retry: false };
+    }
+
     const result = await postComment(existing.post.fbPostId, fbConn.accessToken, row.text, row.imageUrl ?? undefined);
     await prisma.postComment.update({
       where: { id: commentRowId },

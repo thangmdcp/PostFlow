@@ -10,6 +10,7 @@ export function CommentAggregateStatus({ comments }: { comments: { status: strin
   const failed = comments.filter((c) => c.status === "failed").length;
   const active = comments.filter((c) => c.status === "pending" || c.status === "creating").length;
   const done = comments.filter((c) => c.status === "done").length;
+  const skipped = comments.filter((c) => c.status === "skipped").length;
 
   if (failed > 0) {
     return (
@@ -29,6 +30,13 @@ export function CommentAggregateStatus({ comments }: { comments: { status: strin
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 whitespace-nowrap">
         <CheckCircle2 size={9} className="shrink-0" /> Đã bình luận ({done})
+      </span>
+    );
+  }
+  if (skipped > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 whitespace-nowrap">
+        Đã có comment ({skipped})
       </span>
     );
   }
@@ -63,7 +71,7 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
     return () => document.removeEventListener("mousedown", handler);
   }, [detailOpen]);
 
-  if (!commentStatus || commentStatus === "skipped") return null;
+  if (!commentStatus) return null;
 
   // The planned/attempted text is written to the DB the moment the job is
   // created — it's already known before Facebook posting even starts, so an
@@ -111,6 +119,14 @@ export function CommentStatusBadge({ commentStatus, commentNextAttemptAt, commen
       <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700">
         <CheckCircle2 size={10} className="shrink-0" />
         <span className="line-clamp-1">{commentText}</span>
+      </div>
+    );
+  }
+
+  if (commentStatus === "skipped") {
+    return withDetail(
+      <div title={errorMsg ?? undefined} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-1 text-[10px] font-medium text-slate-500">
+        <CheckCircle2 size={10} className="shrink-0" /> Đã có comment
       </div>
     );
   }
