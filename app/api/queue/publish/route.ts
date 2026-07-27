@@ -5,7 +5,7 @@ import { publishDuePost } from "@/lib/publishDuePost";
 export const maxDuration = 90;
 
 function authorized(request: Request) {
-  const secret = process.env.CLOUDFLARE_QUEUE_WORKER_SECRET;
+  const secret = process.env.CLOUDFLARE_QUEUE_SECRET;
   return Boolean(secret && request.headers.get("authorization") === `Bearer ${secret}`);
 }
 
