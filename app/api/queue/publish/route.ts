@@ -6,7 +6,10 @@ export const maxDuration = 90;
 
 function authorized(request: Request) {
   const secret = process.env.CLOUDFLARE_QUEUE_SECRET;
-  return Boolean(secret && request.headers.get("authorization") === `Bearer ${secret}`);
+  return Boolean(secret && (
+    request.headers.get("authorization") === `Bearer ${secret}` ||
+    request.headers.get("x-postflow-worker-secret") === secret
+  ));
 }
 
 export async function POST(request: Request) {

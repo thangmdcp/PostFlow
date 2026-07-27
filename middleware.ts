@@ -21,7 +21,7 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   // These machine-to-machine routes validate their own bearer secrets inside
   // the route handler. They must bypass the browser-session gate here.
-  if (pathname.startsWith("/api/auth/") || pathname === "/login" || pathname.startsWith("/login/") || pathname === "/api/cron/publish" || pathname === "/api/queue/publish") return NextResponse.next();
+  if (pathname.startsWith("/api/auth/") || pathname === "/login" || pathname.startsWith("/login/") || pathname === "/api/cron/publish" || pathname.startsWith("/api/queue/")) return NextResponse.next();
   if (!process.env.POSTFLOW_ADMIN_PASSWORD || !process.env.POSTFLOW_ADMIN_EMAILS || !process.env.POSTFLOW_AUTH_SECRET && !process.env.NEXTAUTH_SECRET) {
     return new NextResponse("PostFlow is missing login configuration.", { status: 503 });
   }
