@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { attemptAutoAds } from "@/lib/autoAdsRunner";
 
+// A creative can need several short Meta-processing retries after publish.
+// Keep the worker invocation alive long enough to finish or clean up.
+export const maxDuration = 90;
+
 export async function POST(request: Request) {
   const workerSecret = process.env.CLOUDFLARE_QUEUE_SECRET;
   if (!workerSecret || request.headers.get("x-postflow-worker-secret") !== workerSecret) {

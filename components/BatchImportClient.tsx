@@ -2131,10 +2131,12 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   }
 
   if (adStatus === "pending" && adNextAttemptAt) {
+    const isRetry = (adAttempt ?? 0) > 0;
+    const pendingLabel = isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, 3)}/3` : "Đợi Meta xử lý bài";
     if (now === null) {
       return (
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
-          <Clock size={8} className="shrink-0" /> Chờ tạo ads
+          <Clock size={8} className="shrink-0" /> {pendingLabel}
         </div>
       );
     }
@@ -2142,7 +2144,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
     if (remainingMs <= 0) {
       return (
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">
-          <Loader2 size={8} className="animate-spin shrink-0" /> Sắp tạo ads
+          <Loader2 size={8} className="animate-spin shrink-0" /> {pendingLabel}
         </div>
       );
     }
@@ -2151,8 +2153,9 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
     const s = totalSec % 60;
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
-        title="Thời gian còn lại tới lần tạo ads tiếp theo">
+        title={errorMsg ? `${pendingLabel}: ${errorMsg}` : `${pendingLabel} — thời gian còn lại tới lần tạo ads tiếp theo`}>
         <Clock size={8} className="shrink-0" />
+        <span>{isRetry ? "Thử lại" : "Đợi Meta"}</span>
         <span className="tabular-nums">{m}:{String(s).padStart(2, "0")}</span>
       </div>
     );

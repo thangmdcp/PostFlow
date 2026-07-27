@@ -1,6 +1,15 @@
 const FB_API = "https://graph.facebook.com/v19.0";
 const FB_VIDEO_API = "https://graph-video.facebook.com/v19.0";
 
+// Lets the queue runner distinguish a broken template from a transient Meta
+// API failure. The former must be reported immediately instead of retried.
+export class AdTemplateConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdTemplateConfigurationError";
+  }
+}
+
 // Facebook's Marketing API takes daily_budget in the account currency's
 // smallest unit (cents for USD, etc.) — a "zero decimal" currency like VND
 // or JPY has no subunit, so its display value already IS the API value.
@@ -231,8 +240,11 @@ export async function cloneAdCampaign(
   const camp = await campRes.json();
   if (camp.error) throw new Error(`[get campaign] ${camp.error.message}`);
   const adSets = await adSetsRes.json();
+  if (adSets.error) throw new Error(`[get template adsets] ${adSets.error.message}`);
   const templateAdSet = adSets.data?.[0];
-  if (!templateAdSet) throw new Error("No ad sets in template campaign");
+  if (!templateAdSet) {
+    throw new AdTemplateConfigurationError("Template quảng cáo không có Ad Set khả dụng. Kiểm tra lại campaign mẫu trước khi đăng.");
+  }
 
   // Remove instagram_positions entirely — FB validation is strict about required combinations.
   // Omitting it lets FB use Advantage+ placements automatically.
@@ -272,43 +284,46 @@ export async function cloneAdCampaign(
     campBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
   }
 
-  const newCampRes = await fetch(`${FB_API}/act_${adAccountId}/campaigns`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(campBody),
-  });
-  const newCamp = await newCampRes.json();
-  if (newCamp.error) throw new Error(`[create campaign] ${JSON.stringify(newCamp.error)}`);
+  let createdCampaignId: string | undefined;
+  try {
+    const newCampRes = await fetch(`${FB_API}/act_${adAccountId}/campaigns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(campBody),
+    });
+    const newCamp = await newCampRes.json();
+    if (newCamp.error) throw new Error(`[create campaign] ${JSON.stringify(newCamp.error)}`);
+    createdCampaignId = newCamp.id;
 
-  // 3. Create adset — budget + bid_strategy only at adset level when not CBO
-  // (with CBO both live on the campaign instead, see above).
-  const adSetBody: Record<string, unknown> = {
-    name: campaignName || `${templateAdSet.name} [PostFlow]`,
-    campaign_id: newCamp.id,
-    targeting,
-    billing_event: templateAdSet.billing_event ?? "IMPRESSIONS",
-    optimization_goal: templateAdSet.optimization_goal ?? "LINK_CLICKS",
-    status: adStatus,
-    access_token: accessToken,
-  };
-  if (!useCBO) {
-    adSetBody.daily_budget = dailyBudget;
-    adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
-  }
-  if (startTime) adSetBody.start_time = startTime.toISOString();
+    // 3. Create adset — budget + bid_strategy only at adset level when not CBO
+    // (with CBO both live on the campaign instead, see above).
+    const adSetBody: Record<string, unknown> = {
+      name: campaignName || `${templateAdSet.name} [PostFlow]`,
+      campaign_id: createdCampaignId,
+      targeting,
+      billing_event: templateAdSet.billing_event ?? "IMPRESSIONS",
+      optimization_goal: templateAdSet.optimization_goal ?? "LINK_CLICKS",
+      status: adStatus,
+      access_token: accessToken,
+    };
+    if (!useCBO) {
+      adSetBody.daily_budget = dailyBudget;
+      adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+    }
+    if (startTime) adSetBody.start_time = startTime.toISOString();
 
-  const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(adSetBody),
-  });
-  const newAdSet = await newAdSetRes.json();
-  if (newAdSet.error) throw new Error(`[create adset] ${JSON.stringify(newAdSet.error)}`);
+    const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(adSetBody),
+    });
+    const newAdSet = await newAdSetRes.json();
+    if (newAdSet.error) throw new Error(`[create adset] ${JSON.stringify(newAdSet.error)}`);
 
-  // 5. Resolve correct page post story ID
+    // 5. Resolve correct page post story ID
   // fbPostId may be a bare video ID — look up actual page post ID from published_posts
-  let objectStoryId = fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
-  if (!fbPostId.includes("_")) {
+    let objectStoryId = fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
+    if (!fbPostId.includes("_")) {
     // Use page access token (not ad account token) to read published posts
     const lookupToken = pageAccessToken ?? accessToken;
     const postsRes = await fetch(
@@ -323,16 +338,16 @@ export async function cloneAdCampaign(
       });
       if (match) objectStoryId = match.id as string;
     }
-  }
-  console.log("[creative] using objectStoryId:", objectStoryId);
+    }
+    console.log("[creative] using objectStoryId:", objectStoryId);
 
   // A post just published (especially video) often isn't immediately eligible
   // for ads yet — FB needs a few seconds to finish processing it before it can
   // be referenced by an ad creative. Retry with backoff instead of failing on
   // the first attempt (OAuthException 2446187 "post cannot be advertised").
-  let creative: { id?: string; error?: unknown } = {};
-  const delaysMs = [3000, 5000, 8000, 10000];
-  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    let creative: { id?: string; error?: unknown } = {};
+    const delaysMs = [3000, 5000, 8000, 10000];
+    for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
     const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -348,11 +363,11 @@ export async function cloneAdCampaign(
     if (attempt < delaysMs.length) {
       await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
     }
-  }
-  if (creative.error) throw new Error(`[creative] ${JSON.stringify(creative.error)}`);
+    }
+    if (creative.error) throw new Error(`[creative] ${JSON.stringify(creative.error)}`);
 
   // 6. Create ad
-  const adRes = await fetch(`${FB_API}/act_${adAccountId}/ads`, {
+    const adRes = await fetch(`${FB_API}/act_${adAccountId}/ads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -362,9 +377,22 @@ export async function cloneAdCampaign(
       status: adStatus,
       access_token: accessToken,
     }),
-  });
-  const ad = await adRes.json();
-  if (ad.error) throw new Error(`[create ad] ${JSON.stringify(ad.error)}`);
+    });
+    const ad = await adRes.json();
+    if (ad.error) throw new Error(`[create ad] ${JSON.stringify(ad.error)}`);
 
-  return { campaignId: newCamp.id, adSetId: newAdSet.id, adId: ad.id };
+    return { campaignId: createdCampaignId!, adSetId: newAdSet.id, adId: ad.id };
+  } catch (error) {
+    // Do not leave a campaign with no completed ad when a later step fails.
+    // Deleting the campaign also removes its draft ad set/ad, if any.
+    if (createdCampaignId) {
+      try {
+        const cleanupRes = await fetch(`${FB_API}/${createdCampaignId}?access_token=${encodeURIComponent(accessToken)}`, { method: "DELETE" });
+        if (!cleanupRes.ok) console.error(`[cleanup campaign] ${createdCampaignId}: HTTP ${cleanupRes.status}`);
+      } catch (cleanupError) {
+        console.error(`[cleanup campaign] ${createdCampaignId} failed:`, cleanupError);
+      }
+    }
+    throw error;
+  }
 }

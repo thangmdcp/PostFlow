@@ -1,19 +1,19 @@
 import { prisma } from "@/lib/prisma";
-import { cloneAdCampaign } from "@/lib/facebook";
+import { AdTemplateConfigurationError, cloneAdCampaign } from "@/lib/facebook";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
 import { enqueueAds } from "@/lib/cloudflareQueue";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
-// racing it, ads are attempted on a schedule — 1 min after publish, then
-// +2 min, then +5 min if still failing — with the wait times visible to the
+// racing it, ads are attempted on a schedule — 15s after publish, then
+// +30s, then +2m if still failing — with the wait times visible to the
 // user via adStatus/adNextAttemptAt so the UI can show a countdown instead
 // of the process being invisible.
 //
-// Cloudflare Queue owns the 1m/2m/5m delayed delivery and retry. Supabase
+// Cloudflare Queue owns delayed delivery and retry. Supabase
 // stores state for the UI and idempotency, not a cron-owned retry schedule.
-const RETRY_DELAYS_MS = [60_000, 120_000, 300_000]; // 1m, then +2m, then +5m
+const RETRY_DELAYS_MS = [15_000, 30_000, 120_000]; // 15s, then +30s, then +2m
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 const DAY_MS = 86_400_000;
 
@@ -120,7 +120,11 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     const msg = err instanceof Error ? err.message : "auto-ads failed";
     console.error(`[auto-ads] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
 
-    if (attemptNumber < MAX_ATTEMPTS) {
+    // A template without an Ad Set cannot become valid by waiting. Retrying
+    // that error was both misleading in the UI and could leave users with
+    // repeated empty campaign drafts in Ads Manager.
+    const isConfigurationError = err instanceof AdTemplateConfigurationError;
+    if (!isConfigurationError && attemptNumber < MAX_ATTEMPTS) {
       const delay = RETRY_DELAYS_MS[attemptNumber];
       const nextAttemptAt = new Date(Date.now() + delay);
       await prisma.post.update({
