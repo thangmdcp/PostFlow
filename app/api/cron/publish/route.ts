@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
+import { recoverFetchJobs } from "@/lib/fetchRecovery";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
 // wait (via scheduleAutoAds' waitUntil) for however many just published, and
@@ -22,6 +23,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Queue recovery must not depend on a browser tab continuing to poll the
+  // batch page. The Worker invokes this authenticated cron every minute.
+  const recoveredFetches = await recoverFetchJobs().catch((error) => {
+    console.error("[cron] fetch recovery failed", error);
+    return 0;
+  });
+
   const now = new Date();
   const posts = await prisma.post.findMany({
     where: { status: "pending", scheduledAt: { lte: now } },
@@ -41,5 +49,5 @@ export async function GET(req: Request) {
     return { id: post.id, status: "queue_unavailable" };
   }));
 
-  return NextResponse.json({ processed: results.length, results });
+  return NextResponse.json({ processed: results.length, recoveredFetches, results });
 }
