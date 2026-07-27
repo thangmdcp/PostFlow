@@ -1229,21 +1229,47 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       // is Column1/Column2…, while the real Vietnamese headings are on row 2.
       // Find the real heading row instead of assuming it is always row 1.
       const sheetRows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
-      const headerKey = (value: unknown) => String(value ?? "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      // Affiliate networks do not agree on a single set of headings. Normalize
+      // accents, BOM/zero-width whitespace and punctuation first, then accept
+      // their common Vietnamese and English variants.
+      const headerKey = (value: unknown) => String(value ?? "")
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, " ")
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+      const originAliases = [
+        "lien ket goc", "link goc", "url goc", "original link", "original url",
+        "source link", "source url", "destination url",
+      ];
+      const convertedAliases = [
+        "lien ket chuyen doi", "link chuyen doi", "url chuyen doi", "link aff",
+        "link affiliate", "affiliate link", "affiliate url", "converted link",
+        "converted url", "tracking link", "short link",
+      ];
+      const matchesAlias = (value: unknown, aliases: string[]) => {
+        const key = headerKey(value);
+        return aliases.some((alias) => key === alias || key.includes(alias));
+      };
       const headerRowIndex = sheetRows.findIndex((cells) => {
-        const keys = cells.map(headerKey);
-        return keys.includes("lien ket goc") && keys.includes("lien ket chuyen doi");
+        return cells.some((cell) => matchesAlias(cell, originAliases))
+          && cells.some((cell) => matchesAlias(cell, convertedAliases));
       });
-      if (headerRowIndex < 0) { onToast("Không tìm thấy hàng tiêu đề 'Liên kết gốc / Liên kết chuyển đổi'", "error"); return; }
+      if (headerRowIndex < 0) {
+        onToast("Không nhận diện được cột link gốc và link chuyển đổi/aff", "error");
+        return;
+      }
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { range: headerRowIndex, defval: "" });
       if (!rows.length) { onToast("File không có dữ liệu", "error"); return; }
 
       const header = Object.keys(rows[0]);
-      const findCol = (name: string) => header.find(h => headerKey(h) === headerKey(name));
-      const colOrigin = findCol("Liên kết gốc");
-      const colMyUrl  = findCol("Liên kết chuyển đổi");
-      const colFail   = findCol("Lí do thất bại");
-      if (!colOrigin || !colMyUrl) { onToast("File thiếu cột 'Liên kết gốc' hoặc 'Liên kết chuyển đổi'", "error"); return; }
+      const findCol = (aliases: string[]) => header.find(h => matchesAlias(h, aliases));
+      const colOrigin = findCol(originAliases);
+      const colMyUrl  = findCol(convertedAliases);
+      const colFail   = findCol(["li do that bai", "ly do that bai", "failure reason", "error message"]);
+      if (!colOrigin || !colMyUrl) { onToast("File thiếu cột link gốc hoặc link chuyển đổi/aff", "error"); return; }
 
       // Pool follows the exact same per-LINK order as the export. A number of
       // affiliate tools rewrite harmless URL formatting (trailing slash,
