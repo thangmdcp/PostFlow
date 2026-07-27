@@ -2134,8 +2134,10 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   if (adStatus === "pending" && adNextAttemptAt) {
     const isRetry = (adAttempt ?? 0) > 0;
     const isMetaRateLimit = /request limit reached|rate limit/i.test(errorMsg ?? "");
-    const maxAttempts = isMetaRateLimit ? 5 : 3;
-    const pendingLabel = isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, maxAttempts)}/${maxAttempts}` : "Đợi Meta xử lý bài";
+    const maxAttempts = 3;
+    const pendingLabel = isMetaRateLimit
+      ? "Meta đang hồi quota"
+      : isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, maxAttempts)}/${maxAttempts}` : "Đợi Meta xử lý bài";
     if (now === null) {
       return (
         <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap">

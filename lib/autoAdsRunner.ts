@@ -29,6 +29,14 @@ function isMetaRateLimited(message: string) {
   return /(?:user|application) request limit reached|rate limit|error code.?17/i.test(message);
 }
 
+function metaRateLimitDelayMs(attempt: number, postId: string): number {
+  // Meta's per-user window commonly outlives a short 5-minute wait. Back off
+  // exponentially, then cap at one hour; quota responses remain pending
+  // rather than being misreported as a permanent ads failure.
+  const base = Math.min(META_RATE_LIMIT_RETRY_MS * 2 ** Math.max(0, attempt - 1), 60 * 60_000);
+  return base + stableJitterMs(postId);
+}
+
 // A queue delay or a slow Facebook upload can make a prepared post arrive
 // after its originally selected Ads time. Keep the user's chosen clock time
 // and roll it to the next day instead of creating an Ad Set with a start
@@ -148,10 +156,9 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A quota response needs a much longer, individually-jittered retry. It
     // must not be treated like a normal creative delay, otherwise every row
     // from the batch retries together and immediately exhausts Meta again.
-    const canRetryRateLimit = rateLimited && attemptNumber < MAX_ATTEMPTS + 2;
-    if (!isConfigurationError && (attemptNumber < MAX_ATTEMPTS || canRetryRateLimit)) {
+    if (!isConfigurationError && (attemptNumber < MAX_ATTEMPTS || rateLimited)) {
       const delay = rateLimited
-        ? META_RATE_LIMIT_RETRY_MS + stableJitterMs(params.postId)
+        ? metaRateLimitDelayMs(attemptNumber, params.postId)
         : RETRY_DELAYS_MS[attemptNumber];
       const nextAttemptAt = new Date(Date.now() + delay);
       await prisma.post.update({
@@ -180,7 +187,6 @@ export async function recoverRateLimitedAds(): Promise<number> {
       status: "done",
       adStatus: "failed",
       errorMsg: { contains: "request limit reached", mode: "insensitive" },
-      adAttempt: { lt: MAX_ATTEMPTS + 2 },
     },
     select: { id: true, order: true },
     take: 50,
@@ -188,7 +194,7 @@ export async function recoverRateLimitedAds(): Promise<number> {
 
   let recovered = 0;
   await Promise.all(failed.map(async (post) => {
-    const delay = META_RATE_LIMIT_RETRY_MS + post.order * BATCH_AD_SPACING_MS + stableJitterMs(post.id);
+    const delay = metaRateLimitDelayMs(5, post.id) + post.order * BATCH_AD_SPACING_MS;
     const nextAttemptAt = new Date(Date.now() + delay);
     const claim = await prisma.post.updateMany({
       where: { id: post.id, adStatus: "failed", errorMsg: { contains: "request limit reached", mode: "insensitive" } },
