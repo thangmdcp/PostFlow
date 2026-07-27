@@ -1237,6 +1237,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         .trim()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
+        // `đ` is not a combining accent, so NFD does not turn it into `d`.
+        // Preserve it explicitly before reducing headings to ASCII.
+        .replace(/[đĐ]/g, "d")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, " ")
         .trim();
