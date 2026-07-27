@@ -24,7 +24,7 @@
         "max_batch_size": 1,
         "max_batch_timeout": 1,
         "max_retries": 2,
-        "max_concurrency": 4,
+        "max_concurrency": 6,
         "dead_letter_queue": "postflow-fetch-dlq"
       }
     ]

@@ -16,14 +16,14 @@ export async function POST(
 
     await prisma.post.update({
       where: { id: params.id },
-      data: { status: "fetching", errorMsg: null },
+      data: { status: "queued", errorMsg: null },
     });
 
     // Use the exact same durable path as a newly-created batch. Falling back
     // keeps local installations usable before Cloudflare Queue is configured.
     if (!await enqueueFetch(post.id)) waitUntil(processFetchPost(post.id));
 
-    return NextResponse.json({ ok: true, status: "fetching" }, { status: 202 });
+    return NextResponse.json({ ok: true, status: "queued" }, { status: 202 });
   } catch (err) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

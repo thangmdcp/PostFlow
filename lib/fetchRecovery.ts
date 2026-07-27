@@ -14,11 +14,11 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
   const staleBefore = new Date(Date.now() - 90_000);
 
   await prisma.post.updateMany({
-    where: { ...scope, status: "fetching", errorMsg: null, updatedAt: { lt: staleBefore } },
+    where: { ...scope, status: "queued", errorMsg: null, updatedAt: { lt: staleBefore } },
     data: { status: "failed", errorMsg: UNCLAIMED_ERROR },
   });
   await prisma.post.updateMany({
-    where: { ...scope, status: "fetching", errorMsg: RECOVERING_MESSAGE, updatedAt: { lt: staleBefore } },
+    where: { ...scope, status: "queued", errorMsg: RECOVERING_MESSAGE, updatedAt: { lt: staleBefore } },
     data: { status: "failed", errorMsg: "Worker vẫn chưa nhận job sau khi tự khôi phục. Hãy thử lại." },
   });
 
@@ -32,7 +32,7 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
   const ids = recoverable.map((post) => post.id);
   const claim = await prisma.post.updateMany({
     where: { id: { in: ids }, status: "failed", errorMsg: UNCLAIMED_ERROR },
-    data: { status: "fetching", errorMsg: RECOVERING_MESSAGE },
+    data: { status: "queued", errorMsg: RECOVERING_MESSAGE },
   });
   if (claim.count === 0) return 0;
 
@@ -40,7 +40,7 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
   const failedIds = ids.filter((_, index) => !queued[index]);
   if (failedIds.length) {
     await prisma.post.updateMany({
-      where: { id: { in: failedIds }, status: "fetching", errorMsg: RECOVERING_MESSAGE },
+      where: { id: { in: failedIds }, status: "queued", errorMsg: RECOVERING_MESSAGE },
       data: { status: "failed", errorMsg: "Không thể đưa job vào Queue. Hãy thử lại." },
     });
   }

@@ -9,10 +9,13 @@ export async function processFetchPost(postId: string): Promise<void> {
   const claim = await prisma.post.updateMany({
     where: {
       id: postId,
-      status: "fetching",
-      OR: [{ errorMsg: null }, { errorMsg: "Đang khôi phục job…" }],
+      OR: [
+        { status: "queued" },
+        { status: "fetching", errorMsg: null },
+        { status: "fetching", errorMsg: "Đang khôi phục job…" },
+      ],
     },
-    data: { errorMsg: "Đang lấy nội dung và video…" },
+    data: { status: "fetching", errorMsg: "Đang lấy nội dung và video…" },
   });
   if (claim.count === 0) return;
 

@@ -571,7 +571,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
     {
-      refreshInterval: (data) => data?.posts?.some((p) => p.status === "fetching")
+      refreshInterval: (data) => data?.posts?.some((p) => p.status === "queued" || p.status === "fetching")
         ? 1000
         : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating") ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
@@ -2261,7 +2261,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
               <button onClick={async () => {
                 const r = await fetch(`/api/posts/${post.id}/retry`, { method: "POST" });
-                if (r.ok) setStatus("fetching");
+                if (r.ok) setStatus("queued");
                 else onToast("Không thể thử lấy lại bài viết", "error");
               }}
                 className="shrink-0 text-[9px] text-slate-400 hover:text-blue-600 underline flex items-center gap-0.5">
@@ -2274,7 +2274,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "title" && cell("title",
-        status === "fetching"
+        (status === "fetching" || status === "queued")
           ? <div className="flex items-center gap-2">
               <div className="h-9 w-9 rounded border bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0">
                 <Loader2 size={14} className="animate-spin text-slate-300" />
@@ -2306,7 +2306,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "caption" && cell("caption",
-        status === "fetching"
+        (status === "fetching" || status === "queued")
           ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><div className="space-y-1 flex-1"><Skeleton className="h-2 w-full rounded" /><Skeleton className="h-2 w-3/4 rounded" /></div></div>
           : displayCaption ? (
             <div>
@@ -2323,7 +2323,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "linkAff" && cell("linkAff",
-        status === "fetching"
+        (status === "fetching" || status === "queued")
           ? <div className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin text-slate-300 shrink-0" /><Skeleton className="h-6 flex-1 rounded" /></div>
           : links.length === 0
             ? <span className="text-slate-300 text-xs">Không có link</span>

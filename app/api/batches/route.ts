@@ -46,7 +46,9 @@ export async function POST(req: Request) {
     const batch = await prisma.batch.create({
       data: {
         posts: {
-          create: validUrls.map((url, i) => ({ sourceUrl: url, status: "fetching", order: i })),
+          // `queued` means the job is durably waiting in Cloudflare Queue;
+          // switch to `fetching` only when a consumer actually claims it.
+          create: validUrls.map((url, i) => ({ sourceUrl: url, status: "queued", order: i })),
         },
       },
       include: {
