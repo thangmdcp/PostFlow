@@ -6,19 +6,20 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    // A deployment/runtime shutdown can interrupt an old in-process fetch
-    // after it has claimed the row. Surface it as retryable instead of
-    // rendering an infinite spinner. Normal source calls are capped below
-    // two minutes, so ten minutes leaves ample room for Queue delivery.
+    // A Queue message should claim the row within seconds. If it has not
+    // claimed the row after 90 seconds, it was rejected/lost before work
+    // began (for example a bad Worker credential). Only rows with no progress
+    // message are touched, so an active source download remains undisturbed.
     await prisma.post.updateMany({
       where: {
         batchId: params.id,
         status: "fetching",
-        updatedAt: { lt: new Date(Date.now() - 10 * 60_000) },
+        errorMsg: null,
+        updatedAt: { lt: new Date(Date.now() - 90_000) },
       },
       data: {
         status: "failed",
-        errorMsg: "Quá thời gian lấy nội dung. Hãy bấm Thử lại.",
+        errorMsg: "Worker chưa nhận job trong 90 giây. Hãy bấm Thử lại.",
       },
     });
 
