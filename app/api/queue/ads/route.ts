@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 import { attemptAutoAds } from "@/lib/autoAdsRunner";
 
 export async function POST(request: Request) {
-  // Use the established Queue shared secret. It is already required for the
-  // app -> Worker enqueue path, so it is available in every production
-  // deployment (unlike the legacy worker-secret aliases).
-  const workerSecret = process.env.CLOUDFLARE_QUEUE_SECRET;
+  // Queue consumers authenticate with their dedicated worker secret. The
+  // producer's enqueue secret is intentionally a different credential.
+  const workerSecret = process.env.CLOUDFLARE_QUEUE_WORKER_SECRET;
   if (!workerSecret || request.headers.get("x-postflow-worker-secret") !== workerSecret) {
     return NextResponse.json({ error: "Unauthorized", configured: Boolean(workerSecret), received: Boolean(request.headers.get("x-postflow-worker-secret")) }, { status: 401 });
   }
