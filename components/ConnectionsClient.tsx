@@ -4,8 +4,14 @@ import { useState } from "react";
 import type { FbConnection, FbAdAccount } from "@prisma/client";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, CheckCircle2 } from "lucide-react";
+import { META_GRAPH_API } from "@/lib/meta";
 
-interface FbPage { id: string; name: string; access_token?: string; }
+interface FbPage {
+  id: string;
+  name: string;
+  access_token?: string;
+  instagram_business_account?: { id: string; username?: string; profile_picture_url?: string };
+}
 interface FbAdAccountRaw { id: string; name: string; account_id: string; }
 
 interface Props {
@@ -39,11 +45,17 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
     setPages([]); setAdAccounts([]); setSelectedPages(new Set()); setSelectedAds(new Set());
     try {
       const [pRes, aRes] = await Promise.all([
-        fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${token.trim()}&fields=id,name,access_token`),
-        fetch(`https://graph.facebook.com/v19.0/me/adaccounts?access_token=${token.trim()}&fields=id,name,account_id`),
+        fetch(`${META_GRAPH_API}/me/accounts?access_token=${token.trim()}&fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}`),
+        fetch(`${META_GRAPH_API}/me/adaccounts?access_token=${token.trim()}&fields=id,name,account_id`),
       ]);
-      const pData = await pRes.json();
+      let pData = await pRes.json();
       const aData = await aRes.json();
+      // A Facebook-only token may not have instagram_basic yet. Keep the
+      // existing Page connection flow usable and simply show IG as missing.
+      if (pData.error) {
+        const fallback = await fetch(`${META_GRAPH_API}/me/accounts?access_token=${token.trim()}&fields=id,name,access_token`);
+        pData = await fallback.json();
+      }
       if (pData.error) throw new Error(pData.error.message);
       setPages(pData.data || []);
       setAdAccounts(aData.data || []);
@@ -78,7 +90,12 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
         const res = await fetch("/api/connections", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pageId: page.id, pageName: page.name, accessToken: page.access_token ?? token.trim() }),
+          body: JSON.stringify({
+            pageId: page.id, pageName: page.name, accessToken: page.access_token ?? token.trim(),
+            instagramUserId: page.instagram_business_account?.id,
+            instagramUsername: page.instagram_business_account?.username,
+            instagramProfilePicture: page.instagram_business_account?.profile_picture_url,
+          }),
         });
         const data = await res.json();
         if (!res.ok) { show(`Lỗi ${page.name}: ${data.error}`, "error"); continue; }
@@ -153,6 +170,7 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
       {/* Token */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Access Token</label>
+        <p className="text-xs text-muted-foreground">Token cần các quyền: pages_show_list, pages_read_engagement, pages_manage_posts, instagram_basic, instagram_content_publish.</p>
         <div className="flex gap-2">
           <input
             type="password"
@@ -187,6 +205,9 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
                     <div className="min-w-0">
                       <p className="text-xs font-medium truncate">{p.name}</p>
                       <p className="text-[10px] text-muted-foreground font-mono truncate">{p.id}</p>
+                      <p className={`text-[10px] ${p.instagram_business_account ? "text-pink-600" : "text-amber-600"}`}>
+                        {p.instagram_business_account ? `IG @${p.instagram_business_account.username ?? p.instagram_business_account.id}` : "Chưa liên kết Instagram"}
+                      </p>
                     </div>
                   </label>
                 ))}
@@ -254,6 +275,9 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
                       <div className="min-w-0">
                         <p className="text-xs font-medium truncate">{c.pageName}</p>
                         <p className="text-[10px] text-muted-foreground font-mono truncate">{c.pageId}</p>
+                        <p className={`text-[10px] truncate ${c.instagramUserId ? "text-pink-600" : "text-amber-600"}`}>
+                          {c.instagramUserId ? `Instagram @${c.instagramUsername ?? c.instagramUserId}` : "Chưa kết nối Instagram"}
+                        </p>
                       </div>
                     </div>
                   </label>

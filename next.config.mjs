@@ -1,6 +1,9 @@
 
 
 const nextConfig = {
+  env: {
+    META_GRAPH_API_VERSION: process.env.META_GRAPH_API_VERSION ?? "v25.0",
+  },
   experimental: {
     instrumentationHook: true,
     // Auto tree-shakes barrel imports (import { X, Y } from "lucide-react")

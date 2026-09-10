@@ -1,158 +1,226 @@
 import type { Post } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { publishToPage } from "@/lib/facebook";
+import { publishToInstagram, InstagramPublishError } from "@/lib/instagram";
+import { prepareInstagramMedia, cleanupInstagramMedia } from "@/lib/instagramMedia";
 import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 
+export interface PublishDuePostResult {
+  id: string;
+  status: string;
+  error?: string;
+  retryable?: boolean;
+  adsScheduled?: string;
+}
+
 export async function publishDuePost(
-  post: Post,
+  inputPost: Post,
   options: { publishToPage?: boolean } = {}
-): Promise<{ id: string; status: string; error?: string; adsScheduled?: string }> {
-  // Atomic claim: the cron route's findMany + loop has a window where two
-  // overlapping invocations (e.g. an external pinger firing twice close
-  // together) can both fetch the same "pending" post before either flips
-  // its status away — without this guard both would publish it, doubling
-  // the FB post, ads, comments, and story scheduling. The WHERE clause
-  // makes this a single atomic row update: only the first caller's UPDATE
-  // actually matches (status still "pending"); the second's affects 0 rows.
+): Promise<PublishDuePostResult> {
   const claim = await prisma.post.updateMany({
-    where: { id: post.id, status: { in: ["pending", "queued"] } },
+    where: { id: inputPost.id, status: { in: ["pending", "queued", "partial", "failed"] } },
     data: { status: "publishing" },
   });
-  if (claim.count === 0) {
-    return { id: post.id, status: "skipped" };
-  }
+  if (claim.count === 0) return { id: inputPost.id, status: "skipped" };
+
+  let post = await prisma.post.findUniqueOrThrow({ where: { id: inputPost.id } });
+  let fbError: Error | null = null;
+  let igError: Error | null = null;
+  let retryable = false;
+  let fbPublishedNow = false;
+  let fbPostId = post.fbPostId ?? "";
+  let mediaUrl = post.stableMediaUrl ?? undefined;
+  let cloudinaryId = post.cloudinaryId;
+  let mediaType = post.mediaType ?? undefined;
 
   try {
     if (!post.pageId || !post.finalCaption) throw new Error("Missing pageId or finalCaption");
+    if (!post.publishToFacebook && !post.publishToInstagram) throw new Error("Phải chọn ít nhất một nền tảng");
+    const pageId = post.pageId;
+    const finalCaption = post.finalCaption;
 
-    const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
-    if (!fbConn) throw new Error(`No FB connection for page ${post.pageId}`);
-
-    // Load all relevant AppConfig keys
-    const configs = await prisma.appConfig.findMany({
-      where: { key: { in: ["autoAdsTemplateId"] } },
-    });
-    const cfg: Record<string, string> = {};
-    for (const c of configs) cfg[c.key] = c.value;
-
-    // Determine publishToPageFlag from active template
-    let publishToPageFlag = options.publishToPage ?? true;
-    const resolvedTemplateId = post.adTemplateId ?? cfg.autoAdsTemplateId;
-    if (options.publishToPage === undefined && resolvedTemplateId) {
-      const tpl = await prisma.campaignTemplate.findFirst({ where: { campaignId: resolvedTemplateId } });
-      if (tpl && (tpl.settings as Record<string, unknown>)?.postType === "dark") publishToPageFlag = false;
+    const connection = await prisma.fbConnection.findUnique({ where: { pageId } });
+    if (!connection) throw new Error(`No FB connection for page ${pageId}`);
+    if (post.publishToInstagram && !connection.instagramUserId) {
+      igError = new Error("Page chưa kết nối Instagram Professional. Hãy nhập lại token trong Cài đặt > Kết nối.");
+      await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "failed", igErrorMsg: igError.message } });
     }
 
-    let mediaUrl = post.stableMediaUrl ?? undefined;
-    let cloudinaryId = post.cloudinaryId;
-    let mediaType = post.mediaType ?? undefined;
-
-    if (mediaUrl && !cloudinaryId && mediaType === "video") {
-      const uploaded = await uploadFromUrl(mediaUrl);
-      mediaUrl = uploaded.secureUrl;
-      cloudinaryId = uploaded.publicId;
-      mediaType = uploaded.resourceType;
-      await prisma.post.update({ where: { id: post.id }, data: { stableMediaUrl: mediaUrl, cloudinaryId, mediaType } });
-    }
-
-    // Safety net: AutoDown-sourced videos live on AutoDown's own temp Cloudinary
-    // storage. If the post sat scheduled long enough for that asset to be swept,
-    // re-fetch a fresh one from the original link before publishing.
     if (mediaUrl && isAutoDownAsset(cloudinaryId)) {
       const stillThere = await fetch(mediaUrl, { method: "HEAD" }).then((r) => r.ok).catch(() => false);
       if (!stillThere) {
         const fresh = await autodownDownload(post.sourceUrl);
-        const freshVideo = fresh?.media?.find((m) => m.type === "video");
+        const freshVideo = fresh?.media?.find((item) => item.type === "video");
         if (!freshVideo) throw new Error("Media gốc đã hết hạn và không tải lại được — link gốc có thể đã bị xoá.");
         mediaUrl = freshVideo.url;
         cloudinaryId = freshVideo.public_id;
-        await prisma.post.update({ where: { id: post.id }, data: { stableMediaUrl: mediaUrl, cloudinaryId } });
+        post = await prisma.post.update({ where: { id: post.id }, data: { stableMediaUrl: mediaUrl, cloudinaryId } });
       }
     }
 
-    // Dark-post ads have no separate headline field in the FB creative (the
-    // ad just reuses this post's own message via object_story_id) — so the
-    // CTA phrase chosen at schedule time gets prepended onto the message.
-    const captionToPost = (!publishToPageFlag && post.ctaHeadline)
-      ? `${post.ctaHeadline}\n\n${post.finalCaption}`
-      : post.finalCaption;
-
-    const result = await publishToPage(
-      post.pageId, fbConn.accessToken, captionToPost,
-      mediaUrl, mediaType, post.mediaUrls ?? null, publishToPageFlag
-    );
-
-    const fbPostId = result.post_id ?? result.id ?? "";
-    const fbPostUrl = (publishToPageFlag && fbPostId) ? `https://www.facebook.com/${fbPostId.replace("_", "/posts/")}` : "";
-
-    // Facebook has accepted the post. Persist that fact BEFORE any optional
-    // cleanup or follow-up work: an outage while deleting temporary media
-    // must never turn a successfully published post back into "failed" and
-    // cause a Queue retry to create a duplicate Facebook post.
-    await prisma.post.update({
-      where: { id: post.id },
-      data: { status: "done", fbPostId, fbPostUrl, fbMediaId: result.mediaId ?? null, errorMsg: null },
-    });
-
-    // Media cleanup is best-effort. Keep the asset ID until deletion succeeds
-    // so a temporary Cloudinary failure remains recoverable and visible.
-    try {
-      if (isAutoDownAsset(cloudinaryId)) {
-        await autodownCleanup([cloudinaryId]);
-        console.log(`[cleanup] post ${post.id}: requested AutoDown cleanup for ${cloudinaryId}`);
-      } else if (cloudinaryId) {
-        await deleteFile(cloudinaryId, mediaType ?? "image");
-        await prisma.post.update({ where: { id: post.id }, data: { cloudinaryId: null, stableMediaUrl: null } });
-        console.log(`[cleanup] post ${post.id}: deleted Cloudinary asset ${cloudinaryId}`);
+    let preparedInstagram: Awaited<ReturnType<typeof prepareInstagramMedia>> = [];
+    if (post.publishToInstagram && !post.igPostId && !igError) {
+      try {
+        await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "publishing", igErrorMsg: null } });
+        preparedInstagram = await prepareInstagramMedia(post);
+      } catch (error) {
+        igError = error instanceof Error ? error : new Error(String(error));
+        retryable = true;
+        await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "failed", igErrorMsg: igError.message } });
       }
-    } catch (cleanupError) {
-      console.error(`[cleanup] post ${post.id}: failed after Facebook publish; post remains done`, cleanupError);
     }
 
-    // Ads are attempted on a schedule (1m, then +2m, +5m if still failing) —
-    // see lib/autoAdsRunner.ts.
-    const adsWillRun = !!post.adTemplateId && !!fbPostId;
-    if (adsWillRun) {
-      await scheduleAutoAds({
-        postId: post.id,
-        pageId: post.pageId,
-        fbPostId,
-        fbConnAccessToken: fbConn.accessToken,
-        templateId: post.adTemplateId,
-        isBatchPost: !!post.adTemplateId,
-        adAccountId: post.adAccountUsed ?? undefined,
-        // Prepared ads need ACTIVE status so Facebook may begin delivery at
-        // their Ad Set's start_time. Normal posts keep the user setting.
-        adStatus: post.adStartAt ? "ACTIVE" : (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
-        adStartAt: post.adStartAt ?? undefined,
-        // Collapse the exact age/budget rolled at schedule time into a
-        // single-value "range" (min=max) so it's used as-is instead of
-        // being re-rolled from the TKQC account's own range.
-        ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
-        ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
-        ...(post.adGender != null ? { gender: post.adGender } : {}),
-        ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
-      }).catch((adsError) => console.error(`[ads] post ${post.id}: scheduling failed after Facebook publish`, adsError));
+    if (post.publishToFacebook && !post.fbPostId) {
+      try {
+        await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "publishing", fbErrorMsg: null } });
+        const configs = await prisma.appConfig.findMany({ where: { key: { in: ["autoAdsTemplateId"] } } });
+        const cfg = Object.fromEntries(configs.map((item) => [item.key, item.value]));
+        let publishToPageFlag = options.publishToPage ?? true;
+        const resolvedTemplateId = post.adTemplateId ?? cfg.autoAdsTemplateId;
+        if (options.publishToPage === undefined && resolvedTemplateId) {
+          const tpl = await prisma.campaignTemplate.findFirst({ where: { campaignId: resolvedTemplateId } });
+          if ((tpl?.settings as Record<string, unknown> | null)?.postType === "dark") publishToPageFlag = false;
+        }
+        if (mediaUrl && !cloudinaryId && mediaType === "video" && !preparedInstagram.length) {
+          const uploaded = await uploadFromUrl(mediaUrl);
+          mediaUrl = uploaded.secureUrl;
+          cloudinaryId = uploaded.publicId;
+          mediaType = uploaded.resourceType;
+          await prisma.post.update({ where: { id: post.id }, data: { stableMediaUrl: mediaUrl, cloudinaryId, mediaType } });
+        }
+        const caption = !publishToPageFlag && post.ctaHeadline ? `${post.ctaHeadline}\n\n${finalCaption}` : finalCaption;
+        const fbMediaUrl = preparedInstagram[0]?.url ?? mediaUrl;
+        const fbMediaUrls = preparedInstagram.length > 1 ? JSON.stringify(preparedInstagram.map((item) => item.url)) : post.mediaUrls;
+        const result = await publishToPage(pageId, connection.accessToken, caption, fbMediaUrl, mediaType, fbMediaUrls, publishToPageFlag);
+        fbPostId = result.post_id ?? result.id ?? "";
+        const fbPostUrl = publishToPageFlag && fbPostId ? `https://www.facebook.com/${fbPostId.replace("_", "/posts/")}` : "";
+        fbPublishedNow = true;
+        await prisma.post.update({ where: { id: post.id }, data: {
+          fbPostId, fbPostUrl, fbMediaId: result.mediaId ?? null, fbPublishStatus: "done", fbErrorMsg: null,
+        } });
+      } catch (error) {
+        fbError = error instanceof Error ? error : new Error(String(error));
+        retryable = true;
+        await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "failed", fbErrorMsg: fbError.message } });
+      }
+    } else if (post.publishToFacebook && post.fbPostId && post.fbPublishStatus !== "done") {
+      await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "done", fbErrorMsg: null } });
     }
 
-    if (fbPostId) {
-      await scheduleCommentJobs(post.id)
-        .catch((commentError) => console.error(`[comment] post ${post.id}: scheduling failed after Facebook publish`, commentError));
+    if (post.publishToInstagram && !post.igPostId && !igError && connection.instagramUserId) {
+      try {
+        if (!preparedInstagram.length) preparedInstagram = await prepareInstagramMedia(post);
+        const result = await publishToInstagram({
+          instagramUserId: connection.instagramUserId,
+          accessToken: connection.accessToken,
+          caption: finalCaption,
+          mediaType: mediaType === "video" ? "video" : mediaType === "carousel" ? "carousel" : "image",
+          mediaUrls: preparedInstagram.map((item) => item.url),
+          existingContainerId: post.igContainerId,
+          onContainerCreated: async (containerId) => {
+            await prisma.post.update({ where: { id: post.id }, data: { igContainerId: containerId } });
+          },
+          onMediaPublished: async (mediaId) => {
+            await prisma.post.update({ where: { id: post.id }, data: { igPostId: mediaId, igPublishStatus: "done", igErrorMsg: null } });
+          },
+        });
+        await prisma.post.update({ where: { id: post.id }, data: {
+          igContainerId: result.containerId, igPostId: result.mediaId, igPostUrl: result.permalink,
+          igPublishStatus: "done", igErrorMsg: null,
+        } });
+      } catch (error) {
+        igError = error instanceof Error ? error : new Error(String(error));
+        retryable ||= error instanceof InstagramPublishError ? error.retryable : true;
+        await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "failed", igErrorMsg: igError.message } });
+      }
+    } else if (post.publishToInstagram && post.igPostId && post.igPublishStatus !== "done") {
+      await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "done", igErrorMsg: null } });
     }
 
-    if (post.storyEnabled && post.storyCount) {
-      await topUpPageStories(post.pageId, post.storyCount, post.id)
-        .catch((storyError) => console.error(`[story] post ${post.id}: scheduling failed after Facebook publish`, storyError));
+    const fresh = await prisma.post.findUniqueOrThrow({ where: { id: post.id } });
+    const fbDone = !fresh.publishToFacebook || fresh.fbPublishStatus === "done" || Boolean(fresh.fbPostId);
+    const igDone = !fresh.publishToInstagram || fresh.igPublishStatus === "done" || Boolean(fresh.igPostId);
+    const successCount = Number(fresh.publishToFacebook && fbDone) + Number(fresh.publishToInstagram && igDone);
+    const requestedCount = Number(fresh.publishToFacebook) + Number(fresh.publishToInstagram);
+    const status = successCount === requestedCount ? "done" : successCount > 0 ? "partial" : "failed";
+    const errorMsg = [fbError?.message, igError?.message].filter(Boolean).join(" | ") || null;
+    await prisma.post.update({ where: { id: post.id }, data: { status, errorMsg } });
+
+    const instagramOnlyAds = fresh.publishToInstagram && !fresh.publishToFacebook;
+    const adSourceReady = instagramOnlyAds ? Boolean(fresh.igPostId) : Boolean(fresh.fbPostId);
+    let adsScheduledNow = false;
+    if (post.adTemplateId && adSourceReady && !fresh.adStatus) {
+      let destinationUrl = fresh.adDestinationUrl ?? undefined;
+      if (instagramOnlyAds && !destinationUrl) {
+        const firstAffiliate = await prisma.extractedLink.findFirst({
+          where: { postId: post.id, myUrl: { not: null } },
+          orderBy: { order: "asc" },
+        });
+        destinationUrl = firstAffiliate?.myUrl ?? undefined;
+        if (destinationUrl) {
+          await prisma.post.update({ where: { id: post.id }, data: { adDestinationUrl: destinationUrl } });
+        }
+      }
+      try {
+        await scheduleAutoAds({
+          postId: post.id,
+          pageId,
+          adPlatform: instagramOnlyAds ? "instagram" : "facebook",
+          fbPostId: instagramOnlyAds ? undefined : fbPostId,
+          igPostId: instagramOnlyAds ? fresh.igPostId ?? undefined : undefined,
+          instagramUserId: instagramOnlyAds ? connection.instagramUserId ?? undefined : undefined,
+          destinationUrl: instagramOnlyAds ? destinationUrl : undefined,
+          fbConnAccessToken: connection.accessToken,
+          templateId: post.adTemplateId,
+          isBatchPost: true,
+          adAccountId: post.adAccountUsed ?? undefined,
+          adStatus: post.adStartAt ? "ACTIVE" : (post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+          adStartAt: post.adStartAt ?? undefined,
+          ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
+          ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
+          ...(post.adGender != null ? { gender: post.adGender } : {}),
+          ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
+        });
+        adsScheduledNow = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[ads] post ${post.id}: scheduling failed`, error);
+        await prisma.post.update({
+          where: { id: post.id },
+          data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: `[ads] ${message}` },
+        }).catch(() => {});
+      }
     }
 
-    return { id: post.id, status: "done", ...(adsWillRun ? { adsScheduled: "true" } : {}) };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    await prisma.post.update({ where: { id: post.id }, data: { status: "failed", errorMsg: msg } });
-    return { id: post.id, status: "failed", error: msg };
+    if (fbPublishedNow && fbPostId) {
+      await scheduleCommentJobs(post.id).catch((error) => console.error(`[comment] post ${post.id}: scheduling failed`, error));
+      if (post.storyEnabled && post.storyCount) {
+        await topUpPageStories(pageId, post.storyCount, post.id).catch((error) => console.error(`[story] post ${post.id}: scheduling failed`, error));
+      }
+    }
+
+    if (status === "done") {
+      try {
+        const latest = await prisma.post.findUniqueOrThrow({ where: { id: post.id } });
+        await cleanupInstagramMedia(post.id, latest.igMediaManifest);
+        if (isAutoDownAsset(cloudinaryId)) await autodownCleanup([cloudinaryId]);
+        else if (cloudinaryId) {
+          await deleteFile(cloudinaryId, mediaType ?? "image");
+          await prisma.post.update({ where: { id: post.id }, data: { cloudinaryId: null, stableMediaUrl: null } });
+        }
+      } catch (error) {
+        console.error(`[cleanup] post ${post.id}: failed after publish`, error);
+      }
+    }
+
+    return { id: post.id, status, ...(errorMsg ? { error: errorMsg } : {}), retryable, ...(adsScheduledNow ? { adsScheduled: "true" } : {}) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.post.update({ where: { id: inputPost.id }, data: { status: "failed", errorMsg: message } }).catch(() => {});
+    return { id: inputPost.id, status: "failed", error: message, retryable: true };
   }
 }

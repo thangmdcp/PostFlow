@@ -11,6 +11,7 @@ const STATUS_CONFIG: Record<
   queued: { label: "Đang xếp hàng", variant: "info" },
   publishing: { label: "Đang đăng", variant: "info" },
   done: { label: "Đã đăng", variant: "success" },
+  partial: { label: "Đăng một phần", variant: "warning" },
   failed: { label: "Lỗi", variant: "destructive" },
 };
 

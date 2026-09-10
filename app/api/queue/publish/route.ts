@@ -28,13 +28,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Job is already being processed" }, { status: 409 });
     }
     await prisma.post.update({ where: { id: post.id }, data: { status: "queued" } });
-  } else if (post.status === "failed" || post.status === "pending") {
+  } else if (post.status === "failed" || post.status === "partial" || post.status === "pending") {
     await prisma.post.update({ where: { id: post.id }, data: { status: "queued" } });
   }
 
   post = await prisma.post.findUniqueOrThrow({ where: { id: postId } });
   const result = await publishDuePost(post, { publishToPage });
-  if (result.status === "failed") {
+  if (result.retryable && result.status !== "done") {
     // Returning a non-2xx response makes the Queue retry the same message.
     return NextResponse.json(result, { status: 502 });
   }

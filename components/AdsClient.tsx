@@ -5,6 +5,7 @@ import type { FbAdAccount, CampaignTemplate } from "@prisma/client";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Search, Save, Globe, EyeOff } from "lucide-react";
 import { CustomSelect } from "@/components/ui/CustomSelect";
+import { META_GRAPH_API } from "@/lib/meta";
 
 // ─── Translation maps ───────────────────────────────────────────────────────
 const OBJECTIVE: Record<string, string> = {
@@ -395,7 +396,7 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
     setSearching(true); setFoundCampaign(null);
     try {
       const campFields = "id,name,status,effective_status,objective,daily_budget,lifetime_budget,budget_remaining,spend_cap,bid_strategy,buying_type,start_time,stop_time,special_ad_categories,configured_status";
-      const res = await fetch(`https://graph.facebook.com/v19.0/${account.accountId}/campaigns?fields=${campFields}&limit=200&access_token=${account.accessToken}`);
+      const res = await fetch(`${META_GRAPH_API}/${account.accountId}/campaigns?fields=${campFields}&limit=200&access_token=${account.accessToken}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
       const found: Campaign | undefined = (data.data as Campaign[]).find(c => c.name.toLowerCase().includes(campName.trim().toLowerCase()));
@@ -408,13 +409,13 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
         "promoted_object", "start_time", "end_time",
         "targeting{age_min,age_max,genders,geo_locations,locales,publisher_platforms,facebook_positions,instagram_positions,device_platforms,flexible_spec,exclusions,custom_audiences,excluded_custom_audiences}",
       ].join(",");
-      const aRes = await fetch(`https://graph.facebook.com/v19.0/${found.id}/adsets?fields=${adsetFields}&limit=50&access_token=${account.accessToken}`);
+      const aRes = await fetch(`${META_GRAPH_API}/${found.id}/adsets?fields=${adsetFields}&limit=50&access_token=${account.accessToken}`);
       const aData = await aRes.json();
       const adsets: Adset[] = aData.data || [];
 
       // Fetch ads for each adset in parallel
       await Promise.all(adsets.map(async (adset) => {
-        const adRes = await fetch(`https://graph.facebook.com/v19.0/${adset.id}/ads?fields=id,name,status,effective_status,creative{id,name,body,title,object_type,call_to_action_type,link_url,image_url,thumbnail_url,video_id}&limit=20&access_token=${account!.accessToken}`);
+        const adRes = await fetch(`${META_GRAPH_API}/${adset.id}/ads?fields=id,name,status,effective_status,creative{id,name,body,title,object_type,call_to_action_type,link_url,image_url,thumbnail_url,video_id}&limit=20&access_token=${account!.accessToken}`);
         const adData = await adRes.json();
         adset.ads = adData.data || [];
       }));

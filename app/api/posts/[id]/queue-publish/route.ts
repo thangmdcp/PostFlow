@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
+import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
 
 type QueuePublishBody = {
   pageId: string;
@@ -17,6 +18,7 @@ type QueuePublishBody = {
   comments?: { text: string; imageUrl?: string }[];
   storyEnabled?: boolean;
   storyCount?: number;
+  publishTargets?: PublishTarget[];
 };
 
 // The browser only records the user's choices and asks the trusted Vercel
@@ -32,7 +34,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       include: { extractedLinks: true },
     });
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
-    if (!["ready", "failed", "pending"].includes(post.status)) {
+    if (!["ready", "failed", "partial", "pending"].includes(post.status)) {
       return NextResponse.json({ error: "Bài đang được xử lý hoặc đã đăng" }, { status: 409 });
     }
     if (!post.finalCaption) return NextResponse.json({ error: "Chưa có caption. Hãy lưu link aff trước." }, { status: 400 });
@@ -44,14 +46,40 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     const connection = await prisma.fbConnection.findUnique({ where: { pageId: body.pageId } });
     if (!connection) return NextResponse.json({ error: "Không tìm thấy kết nối Facebook Page" }, { status: 400 });
+    const publishTargets = parsePublishTargets(body.publishTargets, post);
+    const targetError = validatePublishTargets(
+      post,
+      connection,
+      publishTargets,
+      Boolean(body.templateId),
+      post.extractedLinks.some((link) => Boolean(link.myUrl))
+    );
+    if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
+    const publishToFacebook = publishTargets.includes("facebook");
+    const publishToInstagram = publishTargets.includes("instagram");
 
     const claim = await prisma.post.updateMany({
-      where: { id: post.id, status: { in: ["ready", "failed", "pending"] } },
+      where: { id: post.id, status: { in: ["ready", "failed", "partial", "pending"] } },
       data: {
         pageId: body.pageId,
         status: "queued",
         errorMsg: null,
-        ...(body.templateId ? { adTemplateId: body.templateId } : {}),
+        publishToFacebook,
+        publishToInstagram,
+        adPlatform: publishToInstagram && !publishToFacebook ? "instagram" : "facebook",
+        adDestinationUrl: body.templateId
+          ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null
+          : null,
+        adCampaignId: null,
+        adSetId: null,
+        adCreativeId: null,
+        adId: null,
+        adStatus: null,
+        adNextAttemptAt: null,
+        adAttempt: 0,
+        ...(publishToFacebook && !post.fbPostId ? { fbPublishStatus: "pending", fbErrorMsg: null } : {}),
+        ...(publishToInstagram && !post.igPostId ? { igPublishStatus: "pending", igErrorMsg: null } : {}),
+        adTemplateId: body.templateId ?? null,
         ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}),
         ...(body.adStatus ? { adPublishStatus: body.adStatus } : {}),
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),

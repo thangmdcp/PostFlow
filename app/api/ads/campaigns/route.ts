@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { META_GRAPH_API } from "@/lib/meta";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -15,7 +16,7 @@ export async function GET(req: Request) {
   }
 
   const res = await fetch(
-    `https://graph.facebook.com/v19.0/${adAccountId}/campaigns?fields=id,name,status&limit=50&access_token=${adAccount.accessToken}`
+    `${META_GRAPH_API}/${adAccountId}/campaigns?fields=id,name,status&limit=50&access_token=${adAccount.accessToken}`
   );
   const data = await res.json();
   if (data.error) {

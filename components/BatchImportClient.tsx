@@ -29,6 +29,9 @@ import { ScheduledTime } from "@/components/ScheduledTime";
 import { LinkBankPanel } from "@/components/LinkBankPanel";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
+import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
+import type { PublishTarget } from "@/lib/publishTargets";
+import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -183,7 +186,7 @@ function fmtVn7(s: string): string {
 }
 
 // ── Column config ──────────────────────────────────────────────────────────────
-type ColKey = "status" | "title" | "campaignName" | "caption" | "linkAff" | "scheduledAt" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment" | "story";
+type ColKey = "status" | "title" | "campaignName" | "caption" | "linkAff" | "scheduledAt" | "platform" | "darkOverride" | "ctaHeadline" | "runAds" | "age" | "gender" | "budget" | "page" | "account" | "comment" | "story";
 
 const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[] = [
   { key: "status",      label: "Trạng thái",   defaultWidth: 100, minWidth: 75,  defaultVisible: true },
@@ -193,6 +196,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
   { key: "linkAff",     label: "Link aff",      defaultWidth: 200, minWidth: 120, defaultVisible: true },
   { key: "scheduledAt", label: "Giờ đăng",     defaultWidth: 170, minWidth: 100, defaultVisible: true },
   { key: "page",        label: "Page",          defaultWidth: 140, minWidth: 90,  defaultVisible: true },
+  { key: "platform",    label: "Nền tảng",      defaultWidth: 90,  minWidth: 80,  defaultVisible: true },
   { key: "age",         label: "Tuổi",          defaultWidth: 120, minWidth: 90,  defaultVisible: true },
   { key: "gender",      label: "Giới tính",     defaultWidth: 100, minWidth: 80,  defaultVisible: true },
   { key: "budget",      label: "Ngân sách",     defaultWidth: 110, minWidth: 90,  defaultVisible: true },
@@ -828,11 +832,26 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [rowPageId, setRowPageId] = useState<Record<string, string>>(() => loadDraft("rowPageId", {}));
   const [rowAccountId, setRowAccountId] = useState<Record<string, string>>(() => loadDraft("rowAccountId", {}));
   const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>(() => loadDraft("rowRunAds", {}));
+  const [defaultPublishTargets, setDefaultPublishTargets] = useState<PublishTarget[]>(["facebook"]);
+  const [rowPublishTargets, setRowPublishTargets] = useState<Record<string, PublishTarget[]>>(() => loadDraft("rowPublishTargets", {}));
+
+  const publishTargetsFor = useCallback((postId: string): PublishTarget[] => {
+    const saved = rowPublishTargets[postId];
+    if (saved?.length) return saved;
+    const post = batch.posts.find((item) => item.id === postId);
+    if (post && (post.status === "pending" || post.status === "queued" || post.status === "publishing" || post.status === "done" || post.status === "partial")) {
+      const persisted: PublishTarget[] = [];
+      if (post.publishToFacebook) persisted.push("facebook");
+      if (post.publishToInstagram) persisted.push("instagram");
+      if (persisted.length) return persisted;
+    }
+    return defaultPublishTargets;
+  }, [rowPublishTargets, batch.posts, defaultPublishTargets]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    sessionStorage.setItem(draftKey, JSON.stringify({ rowAdParams, rowPageId, rowAccountId, rowRunAds }));
-  }, [draftKey, rowAdParams, rowPageId, rowAccountId, rowRunAds]);
+    sessionStorage.setItem(draftKey, JSON.stringify({ rowAdParams, rowPageId, rowAccountId, rowRunAds, rowPublishTargets }));
+  }, [draftKey, rowAdParams, rowPageId, rowAccountId, rowRunAds, rowPublishTargets]);
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
   const [detailTab, setDetailTab] = useState<"ads" | "engagement">("ads");
@@ -1408,6 +1427,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             pageId, scheduledAt: vn7ToDate(plannedTimes[id]).toISOString(),
+            publishTargets: publishTargetsFor(id),
             templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
             ...(runAdsForRow && rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
             ...(adConfig.postType === "dark" && rp?.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
@@ -1474,6 +1494,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           body: JSON.stringify({
             pageId,
             scheduledAt: plannedPublishAt.toISOString(),
+            publishTargets: publishTargetsFor(post.id),
             templateId: adConfig.templateId,
             adStatus: "ACTIVE",
             adStartAt: postAdStart.toISOString(),
@@ -1520,6 +1541,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pageId,
+          publishTargets: publishTargetsFor(id),
           templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
           ...(adConfig.postType === "dark" && rowOvr ? { publishToPage: true } : {}),
           ...(adConfig.postType === "dark" && rp.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
@@ -1642,6 +1664,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ))}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <PublishTargetsSelector value={defaultPublishTargets} onChange={(targets) => {
+            setDefaultPublishTargets(targets);
+            if (checkedIds.size) setRowPublishTargets((current) => {
+              const next = { ...current };
+              checkedIds.forEach((id) => { next[id] = targets; });
+              return next;
+            });
+          }} compact />
           <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setScheduleOpen(true)} disabled={bulkRunning || checkedIds.size === 0}
             title="Mở kế hoạch lịch đăng cho các dòng đã chọn"
             className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -1937,6 +1967,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 commentEnabled={commentEnabled}
                 commentJobsPreview={commentEnabled ? resolveCommentJobs(post.id) : []}
                 onOpenCommentDrawer={setCommentDrawerPostId}
+                publishTargets={publishTargetsFor(post.id)}
+                onPublishTargetsChange={(targets) => setRowPublishTargets((current) => ({ ...current, [post.id]: targets }))}
               />
             ))}
           </tbody>
@@ -2069,17 +2101,20 @@ interface PostRowProps {
   commentEnabled: boolean;
   commentJobsPreview: { text: string; imageUrl?: string }[];
   onOpenCommentDrawer: (postId: string) => void;
+  publishTargets: PublishTarget[];
+  onPublishTargetsChange: (targets: PublishTarget[]) => void;
 }
 
 // Ticks its own 1s interval — isolated so a live countdown doesn't force the
 // whole table to re-render every second, just this one badge.
-function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampaignId, adAccountUsed }: {
+function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampaignId, adAccountUsed, adPlatform }: {
   adStatus: string | null | undefined;
   adNextAttemptAt: Date | string | null | undefined;
   adAttempt: number | null | undefined;
   errorMsg: string | null | undefined;
   adCampaignId?: string | null;
   adAccountUsed?: string | null;
+  adPlatform?: string | null;
 }) {
   // Start null (not Date.now()) so SSR and the client's first render agree —
   // computing "now" during render would make server and client disagree by
@@ -2096,11 +2131,12 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   }, [adStatus, adNextAttemptAt]);
 
   if (!adStatus || adStatus === "skipped") return null;
+  const adsLabel = adPlatform === "instagram" ? "ads Instagram" : "ads";
 
   if (adStatus === "creating") {
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 whitespace-nowrap">
-        <Loader2 size={8} className="animate-spin shrink-0" /> Đang tạo ads
+        <Loader2 size={8} className="animate-spin shrink-0" /> Đang tạo {adsLabel}
       </div>
     );
   }
@@ -2111,7 +2147,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
       : null;
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600 whitespace-nowrap">
-        <CheckCircle2 size={8} className="shrink-0" /> Đã tạo ads
+        <CheckCircle2 size={8} className="shrink-0" /> {adPlatform === "instagram" ? "Ads Instagram" : "Đã tạo ads"}
         {adsManagerUrl && (
           <a href={adsManagerUrl} target="_blank" rel="noopener noreferrer" className="underline hover:text-emerald-700">
             Xem
@@ -2126,7 +2162,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
         title={errorMsg ?? undefined}>
-        <span className="truncate">{isMetaRateLimit ? "Meta giới hạn request" : `Lỗi tạo ads (lần ${adAttempt ?? 0})`}</span>
+        <span className="truncate">{isMetaRateLimit ? "Meta giới hạn request" : `Lỗi ${adsLabel} (lần ${adAttempt ?? 0})`}</span>
       </div>
     );
   }
@@ -2169,7 +2205,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   return null;
 }
 
-function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, visibleCols, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview, onOpenCommentDrawer }: PostRowProps) {
+function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked, onToggleCheck, rowOverride, rowAdParams, runAds, rowPageId, rowAccountId, adAccounts, colVisible, colWidths, visibleCols, onCtaHeadlineChange, justImportedLinkIds, commentEnabled, commentJobsPreview, onOpenCommentDrawer, publishTargets, onPublishTargetsChange }: PostRowProps) {
   const [links, setLinks] = useState<ExtractedLink[]>(post.extractedLinks);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -2258,10 +2294,11 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       {col.key === "status" && cell("status",
         <div className="space-y-1">
           <StatusBadge status={status} />
+          <PlatformPublishStatus post={post} />
           {status === "fetching" && post.errorMsg && (
             <span className="block text-[9px] leading-tight text-blue-500">{post.errorMsg}</span>
           )}
-          {status === "failed" && post.errorMsg && (
+          {(status === "failed" || status === "partial") && post.errorMsg && (
             <div className="flex items-center gap-1">
               <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
               <button onClick={async () => {
@@ -2274,7 +2311,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
               </button>
             </div>
           )}
-          <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} />
+          <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} adPlatform={post.adPlatform} />
         </div>
       )}
 
@@ -2354,6 +2391,12 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
                   <ExternalLink size={12} />
                 </a>
               )}
+              {post.igPostUrl && (
+                <a href={post.igPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài Instagram"
+                  className="inline-flex items-center text-pink-600 hover:text-pink-700 shrink-0 text-[10px] font-semibold">
+                  IG <ExternalLink size={11} />
+                </a>
+              )}
             </div>
           ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>;
         })()
@@ -2363,6 +2406,10 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         pageName
           ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{pageName}</span>
           : <span className="text-slate-300 text-xs">–</span>
+      )}
+
+      {col.key === "platform" && cell("platform",
+        <PublishTargetsSelector value={publishTargets} onChange={onPublishTargetsChange} compact disabled={!editable} />
       )}
 
       {col.key === "age" && cell("age",

@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS "Post" (
   "status" TEXT NOT NULL DEFAULT 'fetching',
   "fbPostId" TEXT,
   "fbPostUrl" TEXT,
+  "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE,
+  "publishToInstagram" BOOLEAN NOT NULL DEFAULT FALSE,
+  "fbPublishStatus" TEXT,
+  "fbErrorMsg" TEXT,
+  "igPublishStatus" TEXT,
+  "igContainerId" TEXT,
+  "igPostId" TEXT,
+  "igPostUrl" TEXT,
+  "igErrorMsg" TEXT,
+  "igMediaManifest" JSONB,
+  "adPlatform" TEXT DEFAULT 'facebook',
+  "adDestinationUrl" TEXT,
+  "adSetId" TEXT,
+  "adCreativeId" TEXT,
+  "adId" TEXT,
   "errorMsg" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -46,6 +61,9 @@ CREATE TABLE IF NOT EXISTS "FbConnection" (
   "pageId" TEXT UNIQUE NOT NULL,
   "pageName" TEXT NOT NULL,
   "accessToken" TEXT NOT NULL,
+  "instagramUserId" TEXT,
+  "instagramUsername" TEXT,
+  "instagramProfilePicture" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -58,6 +76,26 @@ CREATE TABLE IF NOT EXISTS "FbAdAccount" (
 );
 
 ALTER TABLE "FbConnection" DROP COLUMN IF EXISTS "adAccountId";
+ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUserId" TEXT;
+ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUsername" TEXT;
+ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramProfilePicture" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToInstagram" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbPublishStatus" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbErrorMsg" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igPublishStatus" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igContainerId" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igPostId" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igPostUrl" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igErrorMsg" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "igMediaManifest" JSONB;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adPlatform" TEXT DEFAULT 'facebook';
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adDestinationUrl" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adSetId" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adCreativeId" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adId" TEXT;
+UPDATE "Post" SET "fbPublishStatus"='done' WHERE "fbPostId" IS NOT NULL AND "fbPublishStatus" IS NULL;
+UPDATE "Post" SET "adPlatform"='facebook' WHERE "adPlatform" IS NULL;
 
 CREATE TABLE IF NOT EXISTS "CampaignTemplate" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -87,6 +125,15 @@ const FIELDS = [
     hint: "Supabase → Settings → Database → Connection string → URI",
     secret: true,
     required: true,
+    storage: "env" as const,
+  },
+  {
+    key: "META_GRAPH_API_VERSION",
+    label: "META_GRAPH_API_VERSION",
+    placeholder: "vXX.X",
+    hint: "Phiên bản Graph API đang được hỗ trợ trong Meta App Dashboard. Cả server và giao diện sẽ dùng chung giá trị này.",
+    secret: false,
+    required: false,
     storage: "env" as const,
   },
   {

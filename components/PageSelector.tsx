@@ -53,7 +53,12 @@ export function PageMultiSelect({ connections, selected, onChange }: PageMultiSe
                 onChange={() => toggle(c.pageId)}
                 className="rounded accent-blue-600"
               />
-              <span className="text-sm truncate">{c.pageName}</span>
+              <span className="min-w-0">
+                <span className="text-sm truncate block">{c.pageName}</span>
+                <span className={`text-[10px] ${c.instagramUserId ? "text-pink-600" : "text-slate-400"}`}>
+                  {c.instagramUserId ? `IG @${c.instagramUsername ?? c.instagramUserId}` : "Không có Instagram"}
+                </span>
+              </span>
             </label>
           ))}
           {connections.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">Chưa có kết nối FB</p>}

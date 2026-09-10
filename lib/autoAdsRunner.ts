@@ -50,7 +50,11 @@ function rollPreparedStartForward(start: Date, now = Date.now()): Date {
 export interface AutoAdsRunParams {
   postId: string;
   pageId: string;
-  fbPostId: string;
+  adPlatform: "facebook" | "instagram";
+  fbPostId?: string;
+  igPostId?: string;
+  instagramUserId?: string;
+  destinationUrl?: string;
   fbConnAccessToken: string;
   templateId: string | null;
   isBatchPost: boolean;
@@ -64,14 +68,17 @@ export interface AutoAdsRunParams {
 }
 
 export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
-  if (!params.templateId || !params.fbPostId || !params.pageId) {
+  const missingSource = params.adPlatform === "instagram"
+    ? !params.igPostId || !params.instagramUserId || !params.destinationUrl
+    : !params.fbPostId;
+  if (!params.templateId || missingSource || !params.pageId) {
     // Structural skip (ads not enabled / bad state) — record immediately,
     // nothing to wait for.
     await prisma.post.update({
       where: { id: params.postId },
       data: {
         adStatus: "skipped",
-        errorMsg: `[ads] Bỏ qua tạo ads: ${!params.templateId ? "không có template" : !params.fbPostId ? "không có fbPostId" : "thiếu pageId"}.`,
+        errorMsg: `[ads] Bỏ qua tạo ads: ${!params.templateId ? "không có template" : missingSource ? "thiếu nguồn bài hoặc URL đích" : "thiếu pageId"}.`,
       },
     }).catch(() => {});
     return;
@@ -92,6 +99,8 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
     where: { id: params.postId },
     data: {
       adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: 0,
+      adPlatform: params.adPlatform,
+      ...(params.destinationUrl ? { adDestinationUrl: params.destinationUrl } : {}),
       ...(params.templateId ? { adTemplateId: params.templateId } : {}),
       ...(params.adAccountId ? { adAccountUsed: params.adAccountId } : {}),
       ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
@@ -110,12 +119,29 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
 export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post || post.adStatus === "done" || post.adStatus === "failed") return { retry: false };
-  if (!post.pageId || !post.fbPostId) return { retry: false };
+  const failStructural = async (message: string) => {
+    await prisma.post.update({
+      where: { id: postId },
+      data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: `[ads] ${message}` },
+    }).catch(() => {});
+    return { retry: false };
+  };
+  if (!post.pageId) return failStructural("Bài chưa có Page để tạo quảng cáo");
   const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
-  if (!fbConn) return { retry: false };
+  if (!fbConn) return failStructural("Không tìm thấy kết nối Page");
+  const adPlatform = post.adPlatform === "instagram" ? "instagram" : "facebook";
+  if (adPlatform === "facebook" && !post.fbPostId) return failStructural("Bài Facebook chưa đăng thành công");
+  if (adPlatform === "instagram" && !post.igPostId) return failStructural("Bài Instagram chưa đăng thành công");
+  if (adPlatform === "instagram" && !fbConn.instagramUserId) return failStructural("Page chưa kết nối Instagram Professional");
+  if (adPlatform === "instagram" && !post.adDestinationUrl) return failStructural("Bài chưa có link affiliate làm URL quảng cáo");
   const attemptNumber = (post.adAttempt ?? 0) + 1;
   const params: AutoAdsRunParams = {
-    postId: post.id, pageId: post.pageId, fbPostId: post.fbPostId, fbConnAccessToken: fbConn.accessToken,
+    postId: post.id, pageId: post.pageId, adPlatform,
+    fbPostId: post.fbPostId ?? undefined,
+    igPostId: post.igPostId ?? undefined,
+    instagramUserId: fbConn.instagramUserId ?? undefined,
+    destinationUrl: post.adDestinationUrl ?? undefined,
+    fbConnAccessToken: fbConn.accessToken,
     templateId: post.adTemplateId, isBatchPost: !!post.adTemplateId,
     adAccountId: post.adAccountUsed ?? undefined,
     ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
@@ -152,11 +178,12 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
     const isConfigurationError = err instanceof AdTemplateConfigurationError;
+    const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = isMetaRateLimited(msg);
     // A quota response needs a much longer, individually-jittered retry. It
     // must not be treated like a normal creative delay, otherwise every row
     // from the batch retries together and immediately exhausts Meta again.
-    if (!isConfigurationError && (attemptNumber < MAX_ATTEMPTS || rateLimited)) {
+    if (!isConfigurationError && !isPermanentInstagramError && (attemptNumber < MAX_ATTEMPTS || rateLimited)) {
       const delay = rateLimited
         ? metaRateLimitDelayMs(attemptNumber, params.postId)
         : RETRY_DELAYS_MS[attemptNumber];
@@ -345,10 +372,33 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   const finalTemplateId = p.templateId ?? pickedTemplateId;
   if (!finalTemplateId) throw new Error("Không xác định được template quảng cáo");
 
+  // Persist the exact account and randomized parameters before the first
+  // external create call. If Meta fails halfway through, the next queue
+  // attempt resumes the saved campaign/ad set with the same configuration.
+  await prisma.post.update({
+    where: { id: p.postId },
+    data: {
+      adAccountUsed: pickedAccountId,
+      adBudget: dailyBudget,
+      adAgeMin: ageMin,
+      adAgeMax: ageMax,
+      adGender: effGender,
+      adPlatform: p.adPlatform,
+      ...(p.destinationUrl ? { adDestinationUrl: p.destinationUrl } : {}),
+    },
+  });
+
   const result = await cloneAdCampaign(
     finalTemplateId,
     p.pageId,
-    p.fbPostId,
+    p.adPlatform === "instagram"
+      ? {
+          platform: "instagram",
+          igPostId: p.igPostId!,
+          instagramUserId: p.instagramUserId!,
+          destinationUrl: p.destinationUrl!,
+        }
+      : { platform: "facebook", fbPostId: p.fbPostId! },
     rawAdAccountId,
     adsAccessToken,
     dailyBudget,
@@ -358,7 +408,24 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     ageMax,
     effGender,
     p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED",
-    p.adStartAt
+    p.adStartAt,
+    {
+      campaignId: postFull?.adCampaignId,
+      adSetId: postFull?.adSetId,
+      creativeId: postFull?.adCreativeId,
+      adId: postFull?.adId,
+    },
+    async (progress) => {
+      await prisma.post.update({
+        where: { id: p.postId },
+        data: {
+          ...(progress.campaignId ? { adCampaignId: progress.campaignId } : {}),
+          ...(progress.adSetId ? { adSetId: progress.adSetId } : {}),
+          ...(progress.creativeId ? { adCreativeId: progress.creativeId } : {}),
+          ...(progress.adId ? { adId: progress.adId } : {}),
+        },
+      });
+    }
   );
 
   await prisma.$executeRawUnsafe(

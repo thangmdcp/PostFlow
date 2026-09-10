@@ -1,5 +1,5 @@
-const FB_API = "https://graph.facebook.com/v19.0";
-const FB_VIDEO_API = "https://graph-video.facebook.com/v19.0";
+import { META_GRAPH_API as FB_API, META_GRAPH_VIDEO_API as FB_VIDEO_API } from "@/lib/meta";
+import { buildInstagramExistingPostCreative, restrictTargetingToInstagram } from "@/lib/instagramAds";
 
 // Lets the queue runner distinguish a broken template from a transient Meta
 // API failure. The former must be reported immediately instead of retried.
@@ -234,10 +234,28 @@ export async function getAdAccounts(
   return json.data ?? [];
 }
 
+export type AdPostSource =
+  | { platform: "facebook"; fbPostId: string }
+  | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string };
+
+export interface AdCreationState {
+  campaignId?: string | null;
+  adSetId?: string | null;
+  creativeId?: string | null;
+  adId?: string | null;
+}
+
+export interface AdCreationProgress {
+  campaignId?: string;
+  adSetId?: string;
+  creativeId?: string;
+  adId?: string;
+}
+
 export async function cloneAdCampaign(
   templateCampaignId: string,
   pageId: string,
-  fbPostId: string,
+  source: AdPostSource,
   adAccountId: string,
   accessToken: string,
   dailyBudget = "100000",
@@ -247,8 +265,10 @@ export async function cloneAdCampaign(
   ageMax?: number,
   gender?: string,
   adStatus: "ACTIVE" | "PAUSED" = "PAUSED",
-  startTime?: Date
-): Promise<{ campaignId: string; adSetId: string; adId: string }> {
+  startTime?: Date,
+  existing: AdCreationState = {},
+  onProgress?: (progress: AdCreationProgress) => Promise<void>
+): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
   // 1. Get template campaign objective + adset targeting (like FB Ads tool),
   // and convert dailyBudget (in the account's display currency, e.g. "2.75"
   // USD) into the minor-unit integer the Marketing API actually expects
@@ -270,10 +290,31 @@ export async function cloneAdCampaign(
     throw new AdTemplateConfigurationError("Template quảng cáo không có Ad Set khả dụng. Kiểm tra lại campaign mẫu trước khi đăng.");
   }
 
-  // Remove instagram_positions entirely — FB validation is strict about required combinations.
-  // Omitting it lets FB use Advantage+ placements automatically.
-  const targeting = { ...(templateAdSet.targeting ?? {}) };
-  delete (targeting as Record<string, unknown>).instagram_positions;
+  let targeting = { ...(templateAdSet.targeting ?? {}) };
+  if (source.platform === "instagram") {
+    // Keep template instagram_positions when present, but hard-limit delivery
+    // to Instagram and remove placement families belonging to other surfaces.
+    targeting = restrictTargetingToInstagram(targeting);
+    const instagramAccountsRes = await fetch(
+      `${FB_API}/act_${adAccountId}/instagram_accounts?fields=id&access_token=${encodeURIComponent(accessToken)}`
+    );
+    const instagramAccounts = await instagramAccountsRes.json();
+    if (instagramAccounts.error) {
+      throw new Error(`[instagram ad access] ${JSON.stringify(instagramAccounts.error)}`);
+    }
+    const canAdvertiseIdentity = (instagramAccounts.data ?? []).some(
+      (account: { id?: string }) => account.id === source.instagramUserId
+    );
+    if (!canAdvertiseIdentity) {
+      throw new AdTemplateConfigurationError(
+        "Tài khoản quảng cáo chưa được cấp quyền dùng tài khoản Instagram đã chọn. Hãy thêm Instagram vào Business Portfolio/Ad Account."
+      );
+    }
+  } else {
+    // Preserve the legacy Facebook flow: omitting instagram_positions lets
+    // Meta use the template/Advantage+ placement combination it already used.
+    delete (targeting as Record<string, unknown>).instagram_positions;
+  }
 
   // Apply user-specified age/gender overrides
   if (ageMin !== undefined) targeting.age_min = ageMin;
@@ -308,22 +349,28 @@ export async function cloneAdCampaign(
     campBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
   }
 
-  let createdCampaignId: string | undefined;
+  let campaignId = existing.campaignId ?? undefined;
+  let adSetId = existing.adSetId ?? undefined;
+  let creativeId = existing.creativeId ?? undefined;
+  let adId = existing.adId ?? undefined;
   try {
-    const newCampRes = await fetch(`${FB_API}/act_${adAccountId}/campaigns`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(campBody),
-    });
-    const newCamp = await newCampRes.json();
-    if (newCamp.error) throw new Error(`[create campaign] ${JSON.stringify(newCamp.error)}`);
-    createdCampaignId = newCamp.id;
+    if (!campaignId) {
+      const newCampRes = await fetch(`${FB_API}/act_${adAccountId}/campaigns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(campBody),
+      });
+      const newCamp = await newCampRes.json();
+      if (newCamp.error) throw new Error(`[create campaign] ${JSON.stringify(newCamp.error)}`);
+      campaignId = newCamp.id;
+      await onProgress?.({ campaignId });
+    }
 
     // 3. Create adset — budget + bid_strategy only at adset level when not CBO
     // (with CBO both live on the campaign instead, see above).
     const adSetBody: Record<string, unknown> = {
       name: campaignName || `${templateAdSet.name} [PostFlow]`,
-      campaign_id: createdCampaignId,
+      campaign_id: campaignId,
       targeting,
       billing_event: templateAdSet.billing_event ?? "IMPRESSIONS",
       optimization_goal: templateAdSet.optimization_goal ?? "LINK_CLICKS",
@@ -336,18 +383,25 @@ export async function cloneAdCampaign(
     }
     if (startTime) adSetBody.start_time = startTime.toISOString();
 
-    const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(adSetBody),
-    });
-    const newAdSet = await newAdSetRes.json();
-    if (newAdSet.error) throw new Error(`[create adset] ${JSON.stringify(newAdSet.error)}`);
+    if (!adSetId) {
+      const newAdSetRes = await fetch(`${FB_API}/act_${adAccountId}/adsets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(adSetBody),
+      });
+      const newAdSet = await newAdSetRes.json();
+      if (newAdSet.error) throw new Error(`[create adset] ${JSON.stringify(newAdSet.error)}`);
+      adSetId = newAdSet.id;
+      await onProgress?.({ adSetId });
+    }
 
     // 5. Resolve correct page post story ID
   // fbPostId may be a bare video ID — look up actual page post ID from published_posts
-    let objectStoryId = fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
-    if (!fbPostId.includes("_")) {
+    let objectStoryId = "";
+    if (source.platform === "facebook") {
+      const fbPostId = source.fbPostId;
+      objectStoryId = fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
+      if (!fbPostId.includes("_")) {
     // Use page access token (not ad account token) to read published posts
     const lookupToken = pageAccessToken ?? accessToken;
     const postsRes = await fetch(
@@ -362,61 +416,72 @@ export async function cloneAdCampaign(
       });
       if (match) objectStoryId = match.id as string;
     }
-    }
+      }
     console.log("[creative] using objectStoryId:", objectStoryId);
+    }
 
   // A post just published (especially video) often isn't immediately eligible
   // for ads yet — FB needs a few seconds to finish processing it before it can
   // be referenced by an ad creative. Retry with backoff instead of failing on
   // the first attempt (OAuthException 2446187 "post cannot be advertised").
-    let creative: { id?: string; error?: unknown } = {};
-    const delaysMs = [3000, 5000, 8000, 10000];
-    for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
-    const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: campaignName || "PostFlow Creative",
-        object_story_id: objectStoryId,
-        access_token: accessToken,
-      }),
-    });
-    creative = await creativeRes.json();
-    if (!creative.error) break;
-    console.log(`[creative] attempt ${attempt + 1} failed:`, JSON.stringify(creative.error));
-    if (attempt < delaysMs.length) {
-      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    if (!creativeId) {
+      let creative: { id?: string; error?: unknown } = {};
+      const delaysMs = [3000, 5000, 8000, 10000];
+      for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+        const creativeBody: Record<string, unknown> = source.platform === "instagram"
+          ? buildInstagramExistingPostCreative({
+              name: campaignName || "PostFlow Instagram Creative",
+              pageId,
+              instagramUserId: source.instagramUserId,
+              igPostId: source.igPostId,
+              destinationUrl: source.destinationUrl,
+              accessToken,
+            })
+          : {
+              name: campaignName || "PostFlow Creative",
+              object_story_id: objectStoryId,
+              access_token: accessToken,
+            };
+        const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(creativeBody),
+        });
+        creative = await creativeRes.json();
+        if (!creative.error) break;
+        console.log(`[creative] attempt ${attempt + 1} failed:`, JSON.stringify(creative.error));
+        if (attempt < delaysMs.length) {
+          await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+        }
+      }
+      if (creative.error || !creative.id) throw new Error(`[creative] ${JSON.stringify(creative.error)}`);
+      creativeId = creative.id;
+      await onProgress?.({ creativeId });
     }
-    }
-    if (creative.error) throw new Error(`[creative] ${JSON.stringify(creative.error)}`);
 
   // 6. Create ad
-    const adRes = await fetch(`${FB_API}/act_${adAccountId}/ads`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: campaignName || "PostFlow Ad",
-      adset_id: newAdSet.id,
-      creative: { creative_id: creative.id },
-      status: adStatus,
-      access_token: accessToken,
-    }),
-    });
-    const ad = await adRes.json();
-    if (ad.error) throw new Error(`[create ad] ${JSON.stringify(ad.error)}`);
-
-    return { campaignId: createdCampaignId!, adSetId: newAdSet.id, adId: ad.id };
-  } catch (error) {
-    // Do not leave a campaign with no completed ad when a later step fails.
-    // Deleting the campaign also removes its draft ad set/ad, if any.
-    if (createdCampaignId) {
-      try {
-        const cleanupRes = await fetch(`${FB_API}/${createdCampaignId}?access_token=${encodeURIComponent(accessToken)}`, { method: "DELETE" });
-        if (!cleanupRes.ok) console.error(`[cleanup campaign] ${createdCampaignId}: HTTP ${cleanupRes.status}`);
-      } catch (cleanupError) {
-        console.error(`[cleanup campaign] ${createdCampaignId} failed:`, cleanupError);
-      }
+    if (!adId) {
+      const adRes = await fetch(`${FB_API}/act_${adAccountId}/ads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: campaignName || "PostFlow Ad",
+          adset_id: adSetId,
+          creative: { creative_id: creativeId },
+          status: adStatus,
+          access_token: accessToken,
+        }),
+      });
+      const ad = await adRes.json();
+      if (ad.error) throw new Error(`[create ad] ${JSON.stringify(ad.error)}`);
+      adId = ad.id;
+      await onProgress?.({ adId });
     }
+
+    return { campaignId: campaignId!, adSetId: adSetId!, creativeId: creativeId!, adId: adId! };
+  } catch (error) {
+    // Keep successfully-created IDs. The queue runner persists each stage and
+    // resumes from it, avoiding duplicate campaigns/ads after transient errors.
     throw error;
   }
 }

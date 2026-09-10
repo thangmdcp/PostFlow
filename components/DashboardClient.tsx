@@ -30,6 +30,9 @@ import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 import { adsPanel } from "@/lib/ui-classes";
 import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
+import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
+import type { PublishTarget } from "@/lib/publishTargets";
+import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -71,7 +74,7 @@ interface Props {
   adAccounts: FbAdAccount[];
 }
 
-const STATUS_FILTERS = ["all", "pending", "queued", "done", "failed"] as const;
+const STATUS_FILTERS = ["all", "pending", "queued", "done", "partial", "failed"] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
 const FILTER_LABELS: Record<StatusFilter, string> = {
@@ -79,6 +82,7 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
   pending: "Chờ đăng",
   queued: "Đang xếp hàng",
   done: "Đã đăng",
+  partial: "Một phần",
   failed: "Thất bại",
 };
 
@@ -129,6 +133,8 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const [selectedPageIds, setSelectedPageIdsRaw] = useState<string[]>(
     connections[0] ? [connections[0].pageId] : []
   );
+  const [publishTargets, setPublishTargets] = useState<PublishTarget[]>(["facebook"]);
+  const [publishTargetsTouched, setPublishTargetsTouched] = useState(false);
   // Shares the same server-side "batchDefaultPageIds" key BatchImportClient's
   // pre-batch panel writes to — otherwise this reset to connections[0] on
   // every reload, making it look like unchecking a page never stuck.
@@ -511,6 +517,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               adStatus: drawerAdConfig.adStatus,
               comments: comments.length ? comments : undefined,
               storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
+              publishTargets: [p.publishToFacebook ? "facebook" : null, p.publishToInstagram ? "instagram" : null].filter(Boolean),
             }),
           });
           if (res.ok) {
@@ -656,7 +663,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   // user picks tomorrow/the day after, not "today" (when they were created).
   const dateFiltered = dateRange
     ? localPosts.filter((p) => {
-        const d = new Date(p.scheduledAt ?? (p.fbPostUrl ? p.updatedAt : p.createdAt));
+        const d = new Date(p.scheduledAt ?? (p.fbPostUrl || p.igPostUrl ? p.updatedAt : p.createdAt));
         return d >= dateRange.from && d <= dateRange.to;
       })
     : localPosts;
@@ -667,6 +674,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     queued: dateFiltered.filter((p) => p.status === "queued").length,
     publishing: dateFiltered.filter((p) => p.status === "publishing").length,
     done: dateFiltered.filter((p) => p.status === "done").length,
+    partial: dateFiltered.filter((p) => p.status === "partial").length,
     failed: dateFiltered.filter((p) => p.status === "failed").length,
     fetching: dateFiltered.filter((p) => p.status === "fetching").length,
   };
@@ -784,7 +792,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       try {
         const res = await fetch(`/api/posts/${p.id}/queue-publish`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pageId, storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0 }),
+          body: JSON.stringify({ pageId, storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0, ...(publishTargetsTouched ? { publishTargets } : {}) }),
         });
         if (res.ok) {
           fbPostIdMap.set(p.id, "queued");
@@ -862,6 +870,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
         {/* Action buttons */}
         <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+          <PublishTargetsSelector value={publishTargets} onChange={(targets) => { setPublishTargets(targets); setPublishTargetsTouched(true); }} compact />
           {/* Page filter */}
           <div className="relative shrink-0" ref={pageFilterRef}>
             <button onClick={() => setPageFilterOpen((v) => !v)} title="Lọc theo Page"
@@ -1140,7 +1149,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       // cron scheduling flow sets it) — fall back to updatedAt,
                       // which is bumped right when the post flips to "done" on a
                       // successful immediate publish, so the column isn't blank.
-                      const effectiveDate = post.scheduledAt ?? (post.fbPostUrl ? post.updatedAt : null);
+                      const effectiveDate = post.scheduledAt ?? (post.fbPostUrl || post.igPostUrl ? post.updatedAt : null);
                       return (
                         <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                           {effectiveDate || post.fbPostUrl ? (
@@ -1150,6 +1159,12 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                                 <a href={post.fbPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài"
                                   className="inline-flex items-center text-green-600 hover:text-green-700 shrink-0">
                                   <ExternalLink size={12} />
+                                </a>
+                              )}
+                              {post.igPostUrl && (
+                                <a href={post.igPostUrl} target="_blank" rel="noopener noreferrer" title="Xem bài Instagram"
+                                  className="inline-flex items-center text-pink-600 hover:text-pink-700 shrink-0 text-[10px] font-semibold">
+                                  IG <ExternalLink size={11} />
                                 </a>
                               )}
                             </div>
@@ -1170,6 +1185,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                     {col.key === "status" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <StatusBadge status={post.status} />
+                        <PlatformPublishStatus post={post} />
                         {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.errorMsg}</p>}
                       </td>
                     )}
@@ -1217,7 +1233,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                           {post.status === "done" && (
                             post.adCampaignId
                               ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
-                                  <Megaphone size={10} />Ads ✓
+                                  <Megaphone size={10} />{post.adPlatform === "instagram" ? "Ads Instagram" : "Ads"} ✓
                                 </span>
                               : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
                                   onClick={() => openAdsDrawer([post.id])}>
@@ -1230,7 +1246,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                               <Megaphone size={11} />Ads
                             </Button>
                           )}
-                          {post.status === "failed" && (
+                          {(post.status === "failed" || post.status === "partial") && (
                             <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground"
                               onClick={() => retryPost(post.id)}>
                               <RefreshCw size={11} />Retry

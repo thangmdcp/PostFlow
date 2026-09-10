@@ -21,11 +21,15 @@ export async function POST(req: Request) {
       include: { extractedLinks: { orderBy: { order: "asc" } } },
     });
 
-    if (!post || post.status !== "done" || !post.fbPostId || !post.pageId) {
+    if (!post || post.status !== "done" || !post.pageId) {
       return NextResponse.json(
         { error: "Post must be published before creating an ad" },
         { status: 400 }
       );
+    }
+    const instagramOnly = post.publishToInstagram && !post.publishToFacebook;
+    if ((!instagramOnly && !post.fbPostId) || (instagramOnly && !post.igPostId)) {
+      return NextResponse.json({ error: instagramOnly ? "Bài Instagram chưa đăng thành công" : "Bài Facebook chưa đăng thành công" }, { status: 400 });
     }
     if (post.extractedLinks.some((link) => !link.myUrl || post.finalCaption?.includes(link.competitorUrl))) {
       return NextResponse.json({ error: "Bài chưa đổi xong link aff, không thể tạo Ads." }, { status: 400 });
@@ -37,6 +41,9 @@ export async function POST(req: Request) {
 
     if (!fbConn) {
       return NextResponse.json({ error: "No FB connection found for this page" }, { status: 400 });
+    }
+    if (instagramOnly && !fbConn.instagramUserId) {
+      return NextResponse.json({ error: "Page chưa kết nối Instagram Professional" }, { status: 400 });
     }
 
     // Use selected ad account (required from UI)
@@ -56,6 +63,9 @@ export async function POST(req: Request) {
 
     // Extract utm_content from first affiliate link as campaign name (like FB Ads tool)
     const affUrl = post.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
+    if (instagramOnly && !affUrl) {
+      return NextResponse.json({ error: "Quảng cáo Instagram cần ít nhất một link affiliate" }, { status: 400 });
+    }
     let campaignName = "";
     try {
       const parsed = new URL(affUrl);
@@ -65,7 +75,9 @@ export async function POST(req: Request) {
     const result = await cloneAdCampaign(
       templateCampaignId,
       post.pageId,
-      post.fbPostId,
+      instagramOnly
+        ? { platform: "instagram", igPostId: post.igPostId!, instagramUserId: fbConn.instagramUserId!, destinationUrl: affUrl }
+        : { platform: "facebook", fbPostId: post.fbPostId! },
       rawAdAccountId,
       accessToken,
       dailyBudget ?? "100000",
@@ -74,13 +86,36 @@ export async function POST(req: Request) {
       ageMin,
       ageMax,
       gender,
-      adStatus ?? "PAUSED"
+      adStatus ?? "PAUSED",
+      undefined,
+      {
+        campaignId: post.adCampaignId,
+        adSetId: post.adSetId,
+        creativeId: post.adCreativeId,
+        adId: post.adId,
+      },
+      async (progress) => {
+        await prisma.post.update({
+          where: { id: postId },
+          data: {
+            ...(progress.campaignId ? { adCampaignId: progress.campaignId } : {}),
+            ...(progress.adSetId ? { adSetId: progress.adSetId } : {}),
+            ...(progress.creativeId ? { adCreativeId: progress.creativeId } : {}),
+            ...(progress.adId ? { adId: progress.adId } : {}),
+          },
+        });
+      }
     );
 
     // Save campaign ID + ad params back to post so dashboard can show them
     await prisma.$executeRawUnsafe(
-      `UPDATE "Post" SET "adCampaignId" = $1, "adBudget" = $2, "adAgeMin" = $3, "adAgeMax" = $4, "adGender" = $5 WHERE "id" = $6`,
+      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adAgeMin" = $8, "adAgeMax" = $9, "adGender" = $10 WHERE "id" = $11`,
       result.campaignId,
+      result.adSetId,
+      result.creativeId,
+      result.adId,
+      instagramOnly ? "instagram" : "facebook",
+      instagramOnly ? affUrl : null,
       dailyBudget ?? "100000",
       ageMin ?? null,
       ageMax ?? null,

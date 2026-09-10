@@ -1,0 +1,29 @@
+ALTER TABLE "FbConnection"
+  ADD COLUMN IF NOT EXISTS "instagramUserId" TEXT,
+  ADD COLUMN IF NOT EXISTS "instagramUsername" TEXT,
+  ADD COLUMN IF NOT EXISTS "instagramProfilePicture" TEXT;
+
+ALTER TABLE "Post"
+  ADD COLUMN IF NOT EXISTS "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS "publishToInstagram" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS "fbPublishStatus" TEXT,
+  ADD COLUMN IF NOT EXISTS "fbErrorMsg" TEXT,
+  ADD COLUMN IF NOT EXISTS "igPublishStatus" TEXT,
+  ADD COLUMN IF NOT EXISTS "igContainerId" TEXT,
+  ADD COLUMN IF NOT EXISTS "igPostId" TEXT,
+  ADD COLUMN IF NOT EXISTS "igPostUrl" TEXT,
+  ADD COLUMN IF NOT EXISTS "igErrorMsg" TEXT,
+  ADD COLUMN IF NOT EXISTS "igMediaManifest" JSONB,
+  ADD COLUMN IF NOT EXISTS "adPlatform" TEXT DEFAULT 'facebook',
+  ADD COLUMN IF NOT EXISTS "adDestinationUrl" TEXT,
+  ADD COLUMN IF NOT EXISTS "adSetId" TEXT,
+  ADD COLUMN IF NOT EXISTS "adCreativeId" TEXT,
+  ADD COLUMN IF NOT EXISTS "adId" TEXT;
+
+UPDATE "Post"
+SET "fbPublishStatus" = 'done'
+WHERE "fbPostId" IS NOT NULL AND "fbPublishStatus" IS NULL;
+
+UPDATE "Post"
+SET "adPlatform" = 'facebook'
+WHERE "adPlatform" IS NULL;

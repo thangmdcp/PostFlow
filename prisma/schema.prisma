@@ -34,8 +34,23 @@ model Post {
   status         String          @default("fetching")
   fbPostId       String?
   fbPostUrl      String?
+  publishToFacebook  Boolean   @default(true)
+  publishToInstagram Boolean   @default(false)
+  fbPublishStatus    String?
+  fbErrorMsg         String?
+  igPublishStatus    String?
+  igContainerId      String?
+  igPostId           String?
+  igPostUrl          String?
+  igErrorMsg         String?
+  igMediaManifest    Json?
   adTemplateId   String?
+  adPlatform     String?         @default("facebook")
+  adDestinationUrl String?
   adCampaignId   String?
+  adSetId        String?
+  adCreativeId   String?
+  adId           String?
   adAccountUsed  String?
   adBudget       String?
   adAgeMin       Int?
@@ -96,6 +111,9 @@ model FbConnection {
   pageId      String   @unique
   pageName    String
   accessToken String
+  instagramUserId         String?
+  instagramUsername       String?
+  instagramProfilePicture String?
   createdAt   DateTime @default(now())
 }
 

@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
+import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, adBudget, comments, storyEnabled, storyCount } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, adBudget, comments, storyEnabled, storyCount, publishTargets } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -22,6 +23,7 @@ export async function PATCH(
       adBudget?: string;
       comments?: { text: string; imageUrl?: string }[];
       storyEnabled?: boolean; storyCount?: number;
+      publishTargets?: PublishTarget[];
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
@@ -42,6 +44,17 @@ export async function PATCH(
     if (post.extractedLinks.some((link) => post.finalCaption!.includes(link.competitorUrl))) {
       return NextResponse.json({ error: "Caption vẫn còn link gốc. Hoàn tất link aff trước khi lên lịch." }, { status: 400 });
     }
+    const connection = await prisma.fbConnection.findUnique({ where: { pageId } });
+    if (!connection) return NextResponse.json({ error: "Không tìm thấy kết nối Facebook Page" }, { status: 400 });
+    const targets = parsePublishTargets(publishTargets, post);
+    const targetError = validatePublishTargets(
+      post,
+      connection,
+      targets,
+      Boolean(templateId),
+      post.extractedLinks.some((link) => Boolean(link.myUrl))
+    );
+    if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
 
     const scheduled = await prisma.post.update({
       where: { id: params.id },
@@ -49,7 +62,24 @@ export async function PATCH(
         pageId,
         scheduledAt: new Date(scheduledAt),
         status: "pending",
-        ...(templateId ? { adTemplateId: templateId } : {}),
+        publishToFacebook: targets.includes("facebook"),
+        publishToInstagram: targets.includes("instagram"),
+        adPlatform: targets.length === 1 && targets[0] === "instagram" ? "instagram" : "facebook",
+        adDestinationUrl: templateId
+          ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null
+          : null,
+        adCampaignId: null,
+        adSetId: null,
+        adCreativeId: null,
+        adId: null,
+        adStatus: null,
+        adNextAttemptAt: null,
+        adAttempt: 0,
+        fbPublishStatus: targets.includes("facebook") ? "pending" : null,
+        igPublishStatus: targets.includes("instagram") ? "pending" : null,
+        fbErrorMsg: null,
+        igErrorMsg: null,
+        adTemplateId: templateId ?? null,
         ...(ctaHeadline ? { ctaHeadline } : {}),
         ...(adStatus ? { adPublishStatus: adStatus } : {}),
         // A normal re-schedule intentionally clears preparation mode.

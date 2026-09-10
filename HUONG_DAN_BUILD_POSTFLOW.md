@@ -23,6 +23,21 @@ User paste list URL
   → user chọn bài → set ads từ template camp
 ```
 
+## Đăng Instagram
+
+PostFlow hỗ trợ đăng ảnh, carousel ảnh và video dạng Reel vào Instagram Professional đã liên kết với Facebook Page. Trong **Cài đặt → Kết nối**, tạo lại token với các quyền `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`, bấm **Load** rồi lưu lại Page để PostFlow nhận Instagram User ID.
+
+Trước khi deploy phiên bản này:
+
+```bash
+npx prisma migrate deploy
+npx prisma generate
+```
+
+Đặt `META_GRAPH_API_VERSION` bằng phiên bản đang được hỗ trợ trong Meta App Dashboard (tối thiểu `v22.0`; mặc định hiện tại là `v25.0`). Bài mới mặc định chỉ đăng Facebook; bật nút **IG** tại Dashboard hoặc cột **Nền tảng** trong batch để cross-post.
+
+Khi chỉ chọn **IG** và bật **Chạy ads**, PostFlow sẽ đợi bài Instagram đăng thành công rồi dùng chính bài đó làm creative, lấy link affiliate đầu tiên làm nút `LEARN_MORE` và giới hạn placement ở Instagram. Tài khoản quảng cáo phải được cấp quyền dùng Instagram Professional đã liên kết. Comment và Story vẫn chỉ chạy theo Facebook.
+
 ---
 
 ## Thứ tự build chuẩn

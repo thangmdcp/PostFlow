@@ -7,13 +7,15 @@ cloudinary.config({
 });
 
 export async function uploadFromUrl(
-  mediaUrl: string
+  mediaUrl: string,
+  options: { forceJpeg?: boolean } = {}
 ): Promise<{ publicId: string; secureUrl: string; resourceType: string }> {
   // Try direct URL upload first (works for most CDNs)
   try {
     const result = await cloudinary.uploader.upload(mediaUrl, {
-      resource_type: "auto",
+      resource_type: options.forceJpeg ? "image" : "auto",
       folder: "postflow",
+      ...(options.forceJpeg ? { format: "jpg" } : {}),
     });
     return { publicId: result.public_id, secureUrl: result.secure_url, resourceType: result.resource_type };
   } catch {
@@ -32,7 +34,7 @@ export async function uploadFromUrl(
   const result = await new Promise<{ public_id: string; secure_url: string; resource_type: string }>(
     (resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: resourceType as "video" | "image" | "auto", folder: "postflow" },
+        { resource_type: resourceType as "video" | "image" | "auto", folder: "postflow", ...(options.forceJpeg ? { format: "jpg" } : {}) },
         (err, res) => {
           if (err || !res) return reject(err ?? new Error("Upload thất bại"));
           resolve(res as { public_id: string; secure_url: string; resource_type: string });
