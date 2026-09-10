@@ -134,6 +134,7 @@ interface Targeting {
 interface AttributionSpec { event_type: string; window_days: number; }
 interface AdCreative {
   id: string; name?: string; title?: string; body?: string;
+  applink_treatment?: string;
   link_description?: string;
   call_to_action_type?: string;
   call_to_action?: { type?: string; value?: { link?: string } };
@@ -356,6 +357,7 @@ function AdCard({ ad }: { ad: Ad & { _adsetName?: string } }) {
     { label: "Tiêu đề",     value: c?.title ?? "" },
     { label: "Nút kêu gọi", value: tr(CTA, c?.call_to_action_type ?? "") },
     { label: "URL đích",    value: c?.link_url ?? "" },
+    { label: "Liên kết sâu", value: c?.applink_treatment && c.applink_treatment !== "web_only" ? "Đã bật" : "Chưa bật" },
     { label: "Video ID",    value: c?.video_id ?? "" },
   ].filter(r => r.value);
 
@@ -415,7 +417,7 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
 
       // Fetch ads for each adset in parallel
       await Promise.all(adsets.map(async (adset) => {
-        const adRes = await fetch(`${META_GRAPH_API}/${adset.id}/ads?fields=id,name,status,effective_status,creative{id,name,body,title,object_type,call_to_action_type,link_url,image_url,thumbnail_url,video_id}&limit=20&access_token=${account!.accessToken}`);
+        const adRes = await fetch(`${META_GRAPH_API}/${adset.id}/ads?fields=id,name,status,effective_status,creative{id,name,body,title,object_type,call_to_action_type,link_url,image_url,thumbnail_url,video_id,applink_treatment}&limit=20&access_token=${account!.accessToken}`);
         const adData = await adRes.json();
         adset.ads = adData.data || [];
       }));

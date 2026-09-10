@@ -1,5 +1,9 @@
 import { META_GRAPH_API as FB_API, META_GRAPH_VIDEO_API as FB_VIDEO_API } from "@/lib/meta";
-import { buildInstagramExistingPostCreative, restrictTargetingToInstagram } from "@/lib/instagramAds";
+import {
+  buildFacebookExistingPostCreative,
+  buildInstagramExistingPostCreative,
+  restrictTargetingToInstagram,
+} from "@/lib/instagramAds";
 
 // Lets the queue runner distinguish a broken template from a transient Meta
 // API failure. The former must be reported immediately instead of retried.
@@ -437,11 +441,11 @@ export async function cloneAdCampaign(
               destinationUrl: source.destinationUrl,
               accessToken,
             })
-          : {
+          : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
-              object_story_id: objectStoryId,
-              access_token: accessToken,
-            };
+              objectStoryId,
+              accessToken,
+            });
         const creativeRes = await fetch(`${FB_API}/act_${adAccountId}/adcreatives`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

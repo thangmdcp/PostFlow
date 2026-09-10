@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  APP_DEEP_LINK_TREATMENT,
+  buildFacebookExistingPostCreative,
   buildInstagramExistingPostCreative,
   restrictTargetingToInstagram,
 } from "../lib/instagramAds.ts";
@@ -38,9 +40,23 @@ test("existing Instagram post creative includes identity, media and affiliate CT
   assert.equal(creative.object_id, "page-1");
   assert.equal(creative.instagram_user_id, "ig-user-1");
   assert.equal(creative.source_instagram_media_id, "ig-media-1");
+  assert.equal(creative.applink_treatment, "deeplink_with_web_fallback");
   assert.deepEqual(creative.call_to_action, {
     type: "LEARN_MORE",
     value: { link: "https://example.com/affiliate" },
   });
   assert.equal("object_story_id" in creative, false);
+});
+
+test("existing Facebook post creative enables app deep linking with web fallback", () => {
+  const creative = buildFacebookExistingPostCreative({
+    name: "Campaign B",
+    objectStoryId: "page-1_post-1",
+    accessToken: "secret-token",
+  });
+
+  assert.equal(APP_DEEP_LINK_TREATMENT, "deeplink_with_web_fallback");
+  assert.equal(creative.object_story_id, "page-1_post-1");
+  assert.equal(creative.applink_treatment, APP_DEEP_LINK_TREATMENT);
+  assert.equal(creative.access_token, "secret-token");
 });
