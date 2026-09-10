@@ -10,6 +10,9 @@ export function restrictTargetingToInstagram(
   delete targeting.facebook_positions;
   delete targeting.messenger_positions;
   delete targeting.audience_network_positions;
+  // Meta removed this legacy field. Older template ad sets may still return it,
+  // but sending it back now makes ad-set creation fail with subcode 1870197.
+  delete targeting.targeting_optimization;
   return targeting;
 }
 

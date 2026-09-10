@@ -1240,7 +1240,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
                           {post.status === "done" && (
-                            post.adId
+                            (post.adId || (post.adCampaignId && post.adPlatform !== "instagram"))
                               ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
                                   <Megaphone size={10} />{post.adPlatform === "instagram" ? "Ads Instagram" : "Ads"} ✓
                                 </span>

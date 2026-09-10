@@ -15,6 +15,7 @@ test("Instagram targeting keeps template IG placements and removes other surface
     instagram_positions: ["stream", "reels"],
     messenger_positions: ["messenger_home"],
     audience_network_positions: ["classic"],
+    targeting_optimization: "expansion_all",
   };
 
   const result = restrictTargetingToInstagram(template);
@@ -24,6 +25,7 @@ test("Instagram targeting keeps template IG placements and removes other surface
   assert.equal("facebook_positions" in result, false);
   assert.equal("messenger_positions" in result, false);
   assert.equal("audience_network_positions" in result, false);
+  assert.equal("targeting_optimization" in result, false);
   assert.deepEqual(template.publisher_platforms, ["facebook", "instagram", "messenger"]);
 });
 
