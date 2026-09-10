@@ -109,7 +109,7 @@ export async function POST(req: Request) {
 
     // Save campaign ID + ad params back to post so dashboard can show them
     await prisma.$executeRawUnsafe(
-      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adAgeMin" = $8, "adAgeMax" = $9, "adGender" = $10, "errorMsg" = NULL WHERE "id" = $11`,
+      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adAgeMin" = $8, "adAgeMax" = $9, "adGender" = $10, "adStatus" = 'done', "adAccountUsed" = $11, "errorMsg" = NULL, "adNextAttemptAt" = NULL WHERE "id" = $12`,
       result.campaignId,
       result.adSetId,
       result.creativeId,
@@ -120,6 +120,7 @@ export async function POST(req: Request) {
       ageMin ?? null,
       ageMax ?? null,
       gender ?? "",
+      resolvedAdAccountId,
       postId
     );
 
