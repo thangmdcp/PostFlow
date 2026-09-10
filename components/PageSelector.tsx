@@ -44,7 +44,7 @@ export function PageMultiSelect({ connections, selected, onChange }: PageMultiSe
         <ChevronDown size={12} className={`text-slate-400 transition-transform shrink-0 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute top-full mt-1 left-0 z-50 w-64 rounded-xl border bg-white dark:bg-slate-900 shadow-lg py-1">
+        <div className="absolute top-full mt-1 left-0 z-50 max-h-[min(18rem,calc(100vh-12rem))] w-64 overflow-y-auto overscroll-contain rounded-xl border bg-white py-1 shadow-lg dark:bg-slate-900">
           {connections.map((c) => (
             <label key={c.pageId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
               <input

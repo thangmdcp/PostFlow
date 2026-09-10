@@ -32,6 +32,19 @@ import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
+import {
+  COMPOSER_DRAFT_KEY,
+  batchDraftKey,
+  linkDraftKey,
+  migrateLegacyBatchDraft,
+  parseBatchDraft,
+  readComposerDraft,
+  readLinkDraft,
+  writeBatchDraft,
+  writeComposerDraft,
+  writeLinkDraft,
+  type BatchDraft,
+} from "@/lib/batchDraft";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
@@ -242,7 +255,10 @@ const LAST_BATCH_KEY = "postflow_last_batch_id";
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export function BatchImportClient({ connections, initialBatch }: Props) {
-  const [urlText, setUrlText] = useState("");
+  const [urlText, setUrlText] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try { return readComposerDraft(localStorage); } catch { return ""; }
+  });
   const [batchId, setBatchId] = useState<string | null>(() => {
     if (initialBatch?.id) return initialBatch.id;
     if (typeof window === "undefined") return null;
@@ -251,6 +267,21 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   const [loading, setLoading] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const { show, ToastComponent } = useToast();
+
+  useEffect(() => {
+    try { writeComposerDraft(localStorage, urlText); } catch { /* storage unavailable */ }
+  }, [urlText]);
+  useEffect(() => {
+    const syncComposer = (event: StorageEvent) => {
+      if (event.key !== COMPOSER_DRAFT_KEY) return;
+      try {
+        const next = readComposerDraft(localStorage);
+        setUrlText((current) => current === next ? current : next);
+      } catch { /* storage unavailable */ }
+    };
+    window.addEventListener("storage", syncComposer);
+    return () => window.removeEventListener("storage", syncComposer);
+  }, []);
 
   // ── Lifted ads config (persists across batches via localStorage) ──────────────
   const [adConfig, setAdConfig] = useState<BatchAdConfig>(DEFAULT_ADS_CONFIG);
@@ -712,6 +743,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
 
   return (
     <BatchView
+      key={batch.id}
       batch={batch} connections={connections}
       adConfig={adConfig} templates={templates} adAccounts={adAccounts} accountRows={accountRows}
       defaultPageIds={defaultPageIds} defaultScheduleMode={defaultScheduleMode}
@@ -772,23 +804,37 @@ interface BatchViewProps {
 }
 
 function BatchView({ batch, connections, adConfig, templates, adAccounts, accountRows, defaultPageIds, defaultScheduleMode, defaultStepMinutes, defaultPostsPerDay, defaultBaseTime, defaultEndTime, defaultCommentEnabled, defaultCommentUseCaption, defaultCommentCaptionAttachImage, defaultCommentCaptionImageUrls, defaultCommentCustomEntries, defaultCommentSharedImageUrls, defaultCommentRandomCount, defaultStoryEnabled, defaultStoryCount, onPatchAdConfig, onPatchAccountRow, onDeleteAccountRow, onAddAccountRow, onApplyAccountRows, onPatchComment, onPatchStory, onNewBatch, onToast, ToastComponent, mutateBatch }: BatchViewProps) {
+  const initialDraftRef = useRef<BatchDraft | null | undefined>(undefined);
+  if (initialDraftRef.current === undefined) {
+    initialDraftRef.current = null;
+    if (typeof window !== "undefined") {
+      try {
+        initialDraftRef.current = migrateLegacyBatchDraft(localStorage, sessionStorage, batch.id, {
+          validPostIds: batch.posts.map((post) => post.id),
+          validPageIds: connections.map((connection) => connection.pageId),
+        });
+      } catch { /* storage unavailable */ }
+    }
+  }
+  const initialDraft = initialDraftRef.current;
   const [selectedPageIds, setSelectedPageIds] = useState<string[]>(() => {
+    if (initialDraft?.selectedPageIds) return initialDraft.selectedPageIds;
     if (defaultPageIds.length > 0) return defaultPageIds.filter(id => connections.some(c => c.pageId === id));
     return connections.length > 0 ? [connections[0].pageId] : [];
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activeDetailPresetId, setActiveDetailPresetId] = useState<string | null>(null);
+  const [activeDetailPresetId, setActiveDetailPresetId] = useState<string | null>(initialDraft?.activeDetailPresetId ?? null);
   useEffect(() => {
     setSidebarCollapsed(localStorage.getItem("sidebar_collapsed") === "true");
     const h = (e: Event) => setSidebarCollapsed((e as CustomEvent<boolean>).detail);
     window.addEventListener("sidebar-toggle", h);
     return () => window.removeEventListener("sidebar-toggle", h);
   }, []);
-  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(defaultScheduleMode);
-  const [baseTime, setBaseTime] = useState(() => defaultBaseTime || vn7Now(5));
-  const [stepMinutes, setStepMinutes] = useState(defaultStepMinutes);
-  const [postsPerDay, setPostsPerDay] = useState(defaultPostsPerDay);
-  const [endTime, setEndTime] = useState(defaultEndTime);
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(initialDraft?.scheduleMode ?? defaultScheduleMode);
+  const [baseTime, setBaseTime] = useState(() => (initialDraft?.baseTime ?? defaultBaseTime) || vn7Now(5));
+  const [stepMinutes, setStepMinutes] = useState(initialDraft?.stepMinutes ?? defaultStepMinutes);
+  const [postsPerDay, setPostsPerDay] = useState(initialDraft?.postsPerDay ?? defaultPostsPerDay);
+  const [endTime, setEndTime] = useState(initialDraft?.endTime ?? defaultEndTime);
   // Comment defaults + TKQC rows are the same "Cài đặt Ads" source everywhere
   // now — this drawer reads/patches the props directly (onPatchComment/
   // onPatchAccountRow etc.), same as adConfig already did.
@@ -801,39 +847,28 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const commentRandomCount = defaultCommentRandomCount;
   const storyEnabled = defaultStoryEnabled;
   const storyCount = defaultStoryCount;
-  const [commentCustomEntryEnabled, setCommentCustomEntryEnabled] = useState<Record<string, boolean>>({});
+  const [commentCustomEntryEnabled, setCommentCustomEntryEnabled] = useState<Record<string, boolean>>(initialDraft?.commentCustomEntryEnabled ?? {});
   const localAccountRows = accountRows;
-  const [postTimes, setPostTimes] = useState<Record<string, string>>({});
-  const [manualApplyTime, setManualApplyTime] = useState(() => vn7Now(5));
+  const [postTimes, setPostTimes] = useState<Record<string, string>>(initialDraft?.postTimes ?? {});
+  const [manualApplyTime, setManualApplyTime] = useState(() => initialDraft?.manualApplyTime ?? vn7Now(5));
   const [prepareAdsOpen, setPrepareAdsOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [affiliateWarningOpen, setAffiliateWarningOpen] = useState(false);
-  const [adLaunchAt, setAdLaunchAt] = useState(() => vn7NextMidnight());
-  const [prepareSpacing, setPrepareSpacing] = useState("18");
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [adLaunchAt, setAdLaunchAt] = useState(() => initialDraft?.adLaunchAt ?? vn7NextMidnight());
+  const [prepareSpacing, setPrepareSpacing] = useState(initialDraft?.prepareSpacing ?? "18");
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set(initialDraft?.checkedIds ?? []));
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>({});
-  // These 4 are randomly rolled once per post (age/gender/budget/page/TKQC)
-  // and otherwise have no source of truth until the post actually
-  // publishes/schedules — persisted to sessionStorage per batch so
-  // navigating away and back (which remounts this component, wiping plain
-  // useState) restores the SAME picks instead of silently re-rolling
-  // different ones every time.
-  const draftKey = `pf_batch_draft_${batch.id}`;
-  const loadDraft = useCallback(<T,>(field: string, fallback: T): T => {
-    if (typeof window === "undefined") return fallback;
-    try {
-      const saved = JSON.parse(sessionStorage.getItem(draftKey) ?? "{}");
-      return saved[field] ?? fallback;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    } catch { return fallback; }
-  }, [draftKey]);
-  const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>(() => loadDraft("rowAdParams", {}));
-  const [rowPageId, setRowPageId] = useState<Record<string, string>>(() => loadDraft("rowPageId", {}));
-  const [rowAccountId, setRowAccountId] = useState<Record<string, string>>(() => loadDraft("rowAccountId", {}));
-  const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>(() => loadDraft("rowRunAds", {}));
-  const [defaultPublishTargets, setDefaultPublishTargets] = useState<PublishTarget[]>(["facebook"]);
-  const [rowPublishTargets, setRowPublishTargets] = useState<Record<string, PublishTarget[]>>(() => loadDraft("rowPublishTargets", {}));
+  const [rowOverrides, setRowOverrides] = useState<Record<string, boolean>>(initialDraft?.rowOverrides ?? {});
+  const [rowAdParams, setRowAdParams] = useState<Record<string, RowAdParams>>(() => (initialDraft?.rowAdParams ?? {}) as Record<string, RowAdParams>);
+  const [rowPageId, setRowPageId] = useState<Record<string, string>>(initialDraft?.rowPageId ?? {});
+  const [rowAccountId, setRowAccountId] = useState<Record<string, string>>(initialDraft?.rowAccountId ?? {});
+  const [rowRunAds, setRowRunAds] = useState<Record<string, boolean>>(initialDraft?.rowRunAds ?? {});
+  const [defaultPublishTargets, setDefaultPublishTargets] = useState<PublishTarget[]>(() =>
+    (initialDraft?.defaultPublishTargets?.filter((target): target is PublishTarget => target === "facebook" || target === "instagram") ?? ["facebook"])
+  );
+  const [rowPublishTargets, setRowPublishTargets] = useState<Record<string, PublishTarget[]>>(() =>
+    (initialDraft?.rowPublishTargets ?? {}) as Record<string, PublishTarget[]>
+  );
 
   const publishTargetsFor = useCallback((postId: string): PublishTarget[] => {
     const saved = rowPublishTargets[postId];
@@ -848,16 +883,15 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     return defaultPublishTargets;
   }, [rowPublishTargets, batch.posts, defaultPublishTargets]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    sessionStorage.setItem(draftKey, JSON.stringify({ rowAdParams, rowPageId, rowAccountId, rowRunAds, rowPublishTargets }));
-  }, [draftKey, rowAdParams, rowPageId, rowAccountId, rowRunAds, rowPublishTargets]);
-  const [bulkAccountId, setBulkAccountId] = useState("");
+  const [bulkAccountId, setBulkAccountId] = useState(initialDraft?.bulkAccountId ?? "");
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"ads" | "engagement">("ads");
+  const [detailTab, setDetailTab] = useState<"ads" | "engagement">(initialDraft?.detailTab ?? "ads");
   const [commentDrawerPostId, setCommentDrawerPostId] = useState<string | null>(null);
   const [randomFieldsOpen, setRandomFieldsOpen] = useState(false);
-  const [randomFields, setRandomFields] = useState<Set<RandomField>>(new Set(["age", "gender", "budget", "page", "account", "cta"]));
+  const [randomFields, setRandomFields] = useState<Set<RandomField>>(() => new Set(
+    (initialDraft?.randomFields?.filter((field): field is RandomField => RANDOM_FIELD_OPTIONS.some((option) => option.key === field))
+      ?? RANDOM_FIELD_OPTIONS.map((option) => option.key))
+  ));
   const randomPanelRef = useRef<HTMLDivElement>(null);
 
   // ── Sub_id export/import (Batch Custom Links) ───────────────────────────────
@@ -874,12 +908,97 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [colVisible, setColVisible] = useState<Record<ColKey, boolean>>(defaultVisible);
   const [colPanelOpen, setColPanelOpen] = useState(false);
   const colPanelRef = useRef<HTMLDivElement>(null);
-  const [pageFilterIds, setPageFilterIds] = useState<Set<string>>(new Set());
-  const [tkqcFilterIds, setTkqcFilterIds] = useState<Set<string>>(new Set());
+  const [pageFilterIds, setPageFilterIds] = useState<Set<string>>(() => new Set(initialDraft?.pageFilterIds ?? []));
+  const [tkqcFilterIds, setTkqcFilterIds] = useState<Set<string>>(() => new Set(initialDraft?.tkqcFilterIds ?? []));
   const [pageFilterOpen, setPageFilterOpen] = useState(false);
   const [tkqcFilterOpen, setTkqcFilterOpen] = useState(false);
   const pageFilterRef = useRef<HTMLDivElement>(null);
   const tkqcFilterRef = useRef<HTMLDivElement>(null);
+  const latestDraftTimestampRef = useRef(initialDraft?.updatedAt ?? 0);
+  const skipNextDraftWriteRef = useRef(false);
+
+  useEffect(() => {
+    if (skipNextDraftWriteRef.current) {
+      skipNextDraftWriteRef.current = false;
+      return;
+    }
+    try {
+      const saved = writeBatchDraft(localStorage, batch.id, {
+        selectedPageIds,
+        scheduleMode,
+        baseTime,
+        manualApplyTime,
+        stepMinutes,
+        postsPerDay,
+        endTime,
+        postTimes,
+        checkedIds: [...checkedIds],
+        rowOverrides,
+        rowAdParams,
+        rowPageId,
+        rowAccountId,
+        rowRunAds,
+        rowPublishTargets,
+        defaultPublishTargets,
+        bulkAccountId,
+        randomFields: [...randomFields],
+        pageFilterIds: [...pageFilterIds],
+        tkqcFilterIds: [...tkqcFilterIds],
+        detailTab,
+        activeDetailPresetId,
+        commentCustomEntryEnabled,
+        adLaunchAt,
+        prepareSpacing,
+      }, Math.max(Date.now(), latestDraftTimestampRef.current + 1));
+      latestDraftTimestampRef.current = saved.updatedAt;
+    } catch { /* storage unavailable */ }
+  }, [
+    batch.id, selectedPageIds, scheduleMode, baseTime, manualApplyTime, stepMinutes,
+    postsPerDay, endTime, postTimes, checkedIds, rowOverrides, rowAdParams,
+    rowPageId, rowAccountId, rowRunAds, rowPublishTargets, defaultPublishTargets,
+    bulkAccountId, randomFields, pageFilterIds, tkqcFilterIds, detailTab,
+    activeDetailPresetId, commentCustomEntryEnabled, adLaunchAt, prepareSpacing,
+  ]);
+
+  useEffect(() => {
+    const validPostIds = batch.posts.map((post) => post.id);
+    const validPageIds = connections.map((connection) => connection.pageId);
+    const syncDraft = (event: StorageEvent) => {
+      if (event.key !== batchDraftKey(batch.id) || !event.newValue) return;
+      const draft = parseBatchDraft(event.newValue, { validPostIds, validPageIds });
+      if (!draft || draft.updatedAt <= latestDraftTimestampRef.current) return;
+      latestDraftTimestampRef.current = draft.updatedAt;
+      skipNextDraftWriteRef.current = true;
+      if (draft.selectedPageIds) setSelectedPageIds(draft.selectedPageIds);
+      if (draft.scheduleMode) setScheduleMode(draft.scheduleMode);
+      if (draft.baseTime !== undefined) setBaseTime(draft.baseTime);
+      if (draft.manualApplyTime !== undefined) setManualApplyTime(draft.manualApplyTime);
+      if (draft.stepMinutes !== undefined) setStepMinutes(draft.stepMinutes);
+      if (draft.postsPerDay !== undefined) setPostsPerDay(draft.postsPerDay);
+      if (draft.endTime !== undefined) setEndTime(draft.endTime);
+      if (draft.postTimes) setPostTimes(draft.postTimes);
+      if (draft.checkedIds) setCheckedIds(new Set(draft.checkedIds));
+      if (draft.rowOverrides) setRowOverrides(draft.rowOverrides);
+      if (draft.rowAdParams) setRowAdParams(draft.rowAdParams as Record<string, RowAdParams>);
+      if (draft.rowPageId) setRowPageId(draft.rowPageId);
+      if (draft.rowAccountId) setRowAccountId(draft.rowAccountId);
+      if (draft.rowRunAds) setRowRunAds(draft.rowRunAds);
+      if (draft.rowPublishTargets) setRowPublishTargets(draft.rowPublishTargets as Record<string, PublishTarget[]>);
+      if (draft.defaultPublishTargets) setDefaultPublishTargets(draft.defaultPublishTargets.filter((target): target is PublishTarget => target === "facebook" || target === "instagram"));
+      if (draft.bulkAccountId !== undefined) setBulkAccountId(draft.bulkAccountId);
+      if (draft.randomFields) setRandomFields(new Set(draft.randomFields.filter((field): field is RandomField => RANDOM_FIELD_OPTIONS.some((option) => option.key === field))));
+      if (draft.pageFilterIds) setPageFilterIds(new Set(draft.pageFilterIds));
+      if (draft.tkqcFilterIds) setTkqcFilterIds(new Set(draft.tkqcFilterIds));
+      if (draft.detailTab) setDetailTab(draft.detailTab);
+      if (draft.activeDetailPresetId !== undefined) setActiveDetailPresetId(draft.activeDetailPresetId);
+      if (draft.commentCustomEntryEnabled) setCommentCustomEntryEnabled(draft.commentCustomEntryEnabled);
+      if (draft.adLaunchAt !== undefined) setAdLaunchAt(draft.adLaunchAt);
+      if (draft.prepareSpacing !== undefined) setPrepareSpacing(draft.prepareSpacing);
+    };
+    window.addEventListener("storage", syncDraft);
+    return () => window.removeEventListener("storage", syncDraft);
+  }, [batch.id, batch.posts, connections]);
+
   const colWidthsRef = useRef(colWidths);
   useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
   const colVisibleRef = useRef(colVisible);
@@ -1580,7 +1699,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     onToast(`Đã xoá ${ids.length} bài`, "success");
     // Deleting every row in the batch starts fresh rather than leaving an
     // empty batch behind for the "remember last batch" feature to restore.
-    if (ids.length >= batch.posts.length) { onNewBatch(); return; }
+    if (ids.length >= batch.posts.length) {
+      try { localStorage.removeItem(batchDraftKey(batch.id)); } catch { /* storage unavailable */ }
+      onNewBatch();
+      return;
+    }
     await mutateBatch();
   }
 
@@ -1824,8 +1947,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
       {scheduleOpen && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <div className="flex items-start justify-between bg-gradient-to-br from-blue-600 to-indigo-600 px-6 py-5 text-white">
+          <div className="w-full max-w-2xl overflow-visible rounded-3xl border border-white/60 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-start justify-between rounded-t-3xl bg-gradient-to-br from-blue-600 to-indigo-600 px-6 py-5 text-white">
               <div>
                 <div className="mb-1 flex items-center gap-2 text-sm font-semibold"><Calendar size={17} /> Lên lịch đăng bài</div>
                 <p className="text-xs leading-5 text-blue-100">Chọn Page và nhịp đăng ở một chỗ. Page được chia đều ngẫu nhiên cho các bài đã chọn.</p>
@@ -1858,7 +1981,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 </>}
               </div>
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4 dark:border-slate-800">
+            <div className="flex justify-end gap-2 rounded-b-3xl border-t border-slate-100 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
               <button onClick={() => setScheduleOpen(false)} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Huỷ</button>
               <button onClick={handleScheduleFromPopup} disabled={bulkRunning || scheduleTargets.length === 0 || !selectedPageIds.length} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 hover:bg-blue-700 disabled:opacity-50">{bulkRunning && <Loader2 size={15} className="animate-spin" />} Xác nhận lên lịch</button>
             </div>
@@ -2499,9 +2622,38 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 function InlineLinkInput({ link, saving, saved, onSave }: {
   link: ExtractedLink; saving: boolean; saved: boolean; onSave: (id: string, url: string) => void;
 }) {
-  const [value, setValue] = useState(link.myUrl ?? "");
+  const serverValue = link.myUrl ?? "";
+  const [value, setValue] = useState(() => {
+    if (typeof window === "undefined") return serverValue;
+    try { return readLinkDraft(localStorage, link.id, serverValue) ?? serverValue; }
+    catch { return serverValue; }
+  });
   const [copied, setCopied] = useState(false);
-  const isDirty = value !== (link.myUrl ?? "");
+  const isDirty = value !== serverValue;
+
+  useEffect(() => {
+    try {
+      const draft = readLinkDraft(localStorage, link.id, serverValue);
+      setValue(draft ?? serverValue);
+    } catch { setValue(serverValue); }
+  }, [link.id, serverValue]);
+
+  useEffect(() => {
+    try { writeLinkDraft(localStorage, link.id, value, serverValue); }
+    catch { /* storage unavailable */ }
+  }, [link.id, value, serverValue]);
+
+  useEffect(() => {
+    const syncLinkDraft = (event: StorageEvent) => {
+      if (event.key !== linkDraftKey(link.id)) return;
+      try {
+        const next = readLinkDraft(localStorage, link.id, serverValue) ?? serverValue;
+        setValue((current) => current === next ? current : next);
+      } catch { /* storage unavailable */ }
+    };
+    window.addEventListener("storage", syncLinkDraft);
+    return () => window.removeEventListener("storage", syncLinkDraft);
+  }, [link.id, serverValue]);
 
   function copyOriginal() {
     navigator.clipboard.writeText(link.competitorUrl);
