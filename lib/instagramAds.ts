@@ -13,6 +13,17 @@ export function restrictTargetingToInstagram(
   // Meta removed this legacy field. Older template ad sets may still return it,
   // but sending it back now makes ad-set creation fail with subcode 1870197.
   delete targeting.targeting_optimization;
+  // Explore home can only be selected together with the main Explore placement.
+  // Templates created in Ads Manager can expose just `explore_home`, which the
+  // Marketing API rejects when the ad set is cloned.
+  if (Array.isArray(targeting.instagram_positions)) {
+    const positions = targeting.instagram_positions.filter(
+      (position): position is string => typeof position === "string"
+    );
+    if (positions.includes("explore_home") && !positions.includes("explore")) {
+      targeting.instagram_positions = [...positions, "explore"];
+    }
+  }
   return targeting;
 }
 
