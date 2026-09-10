@@ -541,10 +541,19 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               }),
             });
             stepOk = res.ok;
-            if (res.ok) setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? {
-              ...x, adCampaignId: "created",
+            const payload = await res.json().catch(() => ({})) as {
+              campaignId?: string; adSetId?: string; creativeId?: string; adId?: string; error?: string;
+            };
+            setLocalPosts((prev) => prev.map((x) => (x.id === p.id ? {
+              ...x,
+              ...(payload.campaignId ? { adCampaignId: payload.campaignId } : {}),
+              ...(payload.adSetId ? { adSetId: payload.adSetId } : {}),
+              ...(payload.creativeId ? { adCreativeId: payload.creativeId } : {}),
+              ...(payload.adId ? { adId: payload.adId } : {}),
               adAccountUsed: accountId, adBudget: String(budget), adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender,
+              errorMsg: res.ok ? null : `[ads] ${payload.error || "Không thể tạo quảng cáo"}`,
             } : x)));
+            if (!res.ok) show(payload.error || "Không thể tạo quảng cáo", "error");
           }
           if (comments.length) {
             await fetch(`/api/posts/${p.id}/comments`, {
@@ -1231,7 +1240,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
                           {post.status === "done" && (
-                            post.adCampaignId
+                            post.adId
                               ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
                                   <Megaphone size={10} />{post.adPlatform === "instagram" ? "Ads Instagram" : "Ads"} ✓
                                 </span>
