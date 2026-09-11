@@ -16,7 +16,7 @@ import {
 const navLinks = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/posts/new", label: "Tạo batch", icon: PlusCircle },
-  { href: "/settings/ads", label: "Cài đặt", icon: Settings },
+  { href: "/settings/connections", label: "Cài đặt", icon: Settings },
 ];
 
 interface SidebarProps {

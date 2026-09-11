@@ -2,17 +2,15 @@
 
 import { useState } from "react";
 import type { FbConnection, FbAdAccount, CampaignTemplate } from "@prisma/client";
-import { Link2, SlidersHorizontal, Wrench, Palette, Megaphone } from "lucide-react";
+import { Link2, Wrench, Palette, Megaphone } from "lucide-react";
 import { ConnectionsClient } from "@/components/ConnectionsClient";
-import { AdSettingsClient } from "@/components/AdSettingsClient";
 import { SetupClient } from "@/components/SetupClient";
 import { BrandingClient } from "@/components/BrandingClient";
 import { AdsClient } from "@/components/AdsClient";
 
-export type SettingsTab = "connections" | "ads" | "campaigns" | "branding" | "setup";
+export type SettingsTab = "connections" | "campaigns" | "branding" | "setup";
 
 const TABS: { key: SettingsTab; label: string; href: string; icon: typeof Link2 }[] = [
-  { key: "ads", label: "Cài đặt Ads", href: "/settings/ads", icon: SlidersHorizontal },
   { key: "campaigns", label: "Quảng cáo", href: "/settings/campaigns", icon: Megaphone },
   { key: "connections", label: "Kết nối FB", href: "/settings/connections", icon: Link2 },
   { key: "branding", label: "Giao diện", href: "/settings/branding", icon: Palette },
@@ -59,9 +57,6 @@ export function SettingsClient({ initialTab, connections, savedAdAccounts, campa
 
       <div className={tab === "connections" ? "" : "hidden"}>
         {visited.has("connections") && <ConnectionsClient connections={connections} savedAdAccounts={savedAdAccounts} />}
-      </div>
-      <div className={tab === "ads" ? "" : "hidden"}>
-        {visited.has("ads") && <AdSettingsClient />}
       </div>
       <div className={tab === "campaigns" ? "" : "hidden"}>
         {visited.has("campaigns") && <AdsClient adAccounts={savedAdAccounts} templates={campaignTemplates ?? []} />}

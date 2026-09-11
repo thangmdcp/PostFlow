@@ -20,6 +20,18 @@ function normalizeComment(value: string) {
   return value.replace(/\s+/g, " ").trim().toLocaleLowerCase("vi");
 }
 
+async function availableCommentImage(url: string | null): Promise<string | undefined> {
+  if (!url) return undefined;
+  try {
+    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (response.status === 404 || response.status === 410) return undefined;
+  } catch {
+    // A temporary network failure should not silently strip a valid image;
+    // let Facebook try the public URL and keep the normal retry behavior.
+  }
+  return url;
+}
+
 // Replace any queued (not-yet-started) comment rows for this post with a
 // fresh set — called at schedule/publish-request time, before the post's
 // fbPostId is necessarily known yet. Idempotent: safe to call again if the
@@ -106,7 +118,11 @@ export async function attemptComment(commentRowId: string): Promise<{ retry: boo
       return { retry: false };
     }
 
-    const result = await postComment(existing.post.fbPostId, fbConn.accessToken, row.text, row.imageUrl ?? undefined);
+    const imageUrl = await availableCommentImage(row.imageUrl);
+    if (row.imageUrl && !imageUrl) {
+      await prisma.postComment.update({ where: { id: commentRowId }, data: { imageUrl: null } }).catch(() => {});
+    }
+    const result = await postComment(existing.post.fbPostId, fbConn.accessToken, row.text, imageUrl);
     await prisma.postComment.update({
       where: { id: commentRowId },
       data: { status: "done", commentId: result.id, attempt: attemptNumber, nextAttemptAt: null, errorMsg: null },

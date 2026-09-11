@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, Check, ChevronDown, Clock, Loader2, Plus, Send, Trash2, X } from "lucide-react";
 import type { FbConnection } from "@prisma/client";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
+import { BatchPresetBar } from "@/components/BatchPresetBar";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
-import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import { ScheduleModeSelector, type ScheduleMode } from "@/components/ScheduleModeSelector";
+import { CustomSelect } from "@/components/ui/CustomSelect";
 import type { AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import {
@@ -22,6 +23,8 @@ import {
   type BatchRunMode,
 } from "@/lib/batchAction";
 import type { PublishTarget } from "@/lib/publishTargets";
+import { cloudinaryCommentPublicId, collectCommentImageUrls, replaceCommentImageUrls } from "@/lib/commentImages";
+import { dateToVnSchedule, scheduleValidation } from "@/lib/schedulePlan";
 
 export interface BatchPageRow {
   pageId: string;
@@ -115,6 +118,17 @@ function reusablePreset(config: BatchActionConfig) {
   };
 }
 
+function quickScheduleTime(kind: "now" | "midnight") {
+  const date = new Date();
+  date.setSeconds(0, 0);
+  if (kind === "midnight") {
+    const vnDate = dateToVnSchedule(date).slice(0, 10);
+    const vnMidnight = new Date(`${vnDate}T00:00:00+07:00`);
+    date.setTime(vnMidnight.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return dateToVnSchedule(date);
+}
+
 export function BatchActionDialog({ kind, count, connections, templates, adAccounts, defaults, onClose, onConfirm }: Props) {
   const [config, setConfig] = useState<BatchActionConfig>(() => {
     if (typeof window === "undefined") return cloneConfig(defaults);
@@ -127,8 +141,11 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [legacyMediaBusy, setLegacyMediaBusy] = useState(false);
   const latestStorageTimestamp = useRef(0);
   const skipNextStorageWrite = useRef(false);
+  const migratingUrls = useRef<Set<string>>(new Set());
 
   const needsInstagram = config.publishTargets.includes("instagram");
   const hasFacebook = config.publishTargets.includes("facebook");
@@ -182,6 +199,22 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     window.addEventListener("storage", handler);
     return () => window.removeEventListener("storage", handler);
   }, [defaults, kind]);
+
+  useEffect(() => {
+    const legacy = collectCommentImageUrls(config.engagement).filter((url) => !cloudinaryCommentPublicId(url) && !migratingUrls.current.has(url));
+    if (!legacy.length) return;
+    legacy.forEach((url) => migratingUrls.current.add(url));
+    setLegacyMediaBusy(true);
+    fetch("/api/comment-images", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls: legacy }) })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Không thể chuyển ảnh cũ")))
+      .then((body: { replacements?: Record<string, string | null> }) => {
+        if (body.replacements) setConfig((current) => ({ ...current, engagement: replaceCommentImageUrls(current.engagement, body.replacements!) as BatchEngagementConfig }));
+      })
+      .catch(() => {})
+      .finally(() => setLegacyMediaBusy(false));
+  }, [config.engagement]);
+
+  const mediaBusy = uploadBusy || legacyMediaBusy;
 
   function patch(patchValue: Partial<BatchActionConfig>) {
     setConfig((current) => ({ ...current, ...patchValue }));
@@ -290,6 +323,11 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
     if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom))) return "Kiểm tra lại dải độ tuổi Ads.";
     if (kind === "prepare" && new Date(`${config.adLaunchAt}:00+07:00`).getTime() <= Date.now() + 60_000) return "Giờ bắt đầu Ads phải muộn hơn hiện tại ít nhất 1 phút.";
+    if (kind === "schedule") {
+      const scheduleError = scheduleValidation({ ids: ["preview"], mode: config.scheduleMode, baseTime: config.baseTime, manualTime: config.manualTime, stepMinutes: config.stepMinutes, postsPerDay: config.postsPerDay, endTime: config.endTime });
+      if (scheduleError) return scheduleError;
+    }
+    if (mediaBusy) return "Chờ ảnh bình luận upload xong.";
     return "";
   }
 
@@ -308,6 +346,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   const title = kind === "schedule" ? "Lên lịch" : kind === "prepare" ? "Chuẩn bị Ads" : "Đăng ngay";
   const Icon = kind === "schedule" ? Calendar : kind === "prepare" ? Clock : Send;
   const accent = kind === "prepare" ? "violet" : kind === "schedule" ? "blue" : "slate";
+  const presetSummary = `${config.publishTargets.map((target) => target === "facebook" ? "Facebook" : "Instagram").join(" + ")} · ${config.pageRows.length} Page · ${kind === "schedule" ? config.scheduleMode === "manual" ? "Cùng giờ" : config.scheduleMode === "interval" ? "Giãn cách" : "Theo ngày" : title} · ${runsAds ? "Có Ads" : "Chỉ đăng"}`;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 p-3 backdrop-blur-sm">
@@ -317,11 +356,10 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
             <div className="flex items-center gap-2 text-base font-bold"><Icon size={18} /> {title}</div>
             <p className="mt-1 text-xs text-white/75">Một cấu hình chung cho {count} bài đã chọn. Ads luôn được tạo sau khi có bài nguồn.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <FullSettingsPresetPanel getCurrentData={() => ({ batchActionV1: reusablePreset(config) })} onLoad={applyPreset} activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
-            <button type="button" onClick={onClose} className="rounded-lg p-1 text-white/75 hover:bg-white/15 hover:text-white"><X size={19} /></button>
-          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-1 text-white/75 hover:bg-white/15 hover:text-white"><X size={19} /></button>
         </div>
+
+        <BatchPresetBar getCurrentData={() => ({ batchActionV1: reusablePreset(config) })} onLoad={applyPreset} summary={presetSummary} activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
 
         <div className="min-h-0 overflow-y-auto overscroll-contain p-6">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
@@ -348,9 +386,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                   {config.pageRows.map((row, index) => {
                     const connection = connections.find((item) => item.pageId === row.pageId);
                     return <div key={`${row.pageId}-${index}`} className="grid grid-cols-[minmax(0,1fr)_72px_52px_28px] items-center gap-2 rounded-xl border bg-white p-2.5 dark:bg-slate-800">
-                      <select value={row.pageId} onChange={(event) => patchPageRow(index, { pageId: event.target.value })} className="min-w-0 rounded-lg border bg-white px-2.5 py-2 text-xs dark:bg-slate-900">
-                        {eligibleConnections.map((item) => <option key={item.pageId} value={item.pageId} disabled={item.pageId !== row.pageId && config.pageRows.some((selected) => selected.pageId === item.pageId)}>{item.pageName}{needsInstagram ? ` · @${item.instagramUsername ?? 'Instagram'}` : ''}</option>)}
-                      </select>
+                      <CustomSelect className="min-w-0" value={row.pageId} onChange={(pageId) => patchPageRow(index, { pageId })} options={eligibleConnections.map((item) => ({ value: item.pageId, label: `${item.pageName}${needsInstagram ? ` · @${item.instagramUsername ?? "Instagram"}` : ""}`, disabled: item.pageId !== row.pageId && config.pageRows.some((selected) => selected.pageId === item.pageId) }))} />
                       <div className="relative"><input type="number" min={1} max={100} value={row.weight} onChange={(event) => patchPageRow(index, { weight: Number(event.target.value) })} className="w-full rounded-lg border bg-white px-2 py-2 pr-5 text-center text-xs dark:bg-slate-900" /><span className="absolute right-2 top-2 text-[10px] text-slate-400">%</span></div>
                       <span className="text-center text-[10px] font-semibold text-blue-600">{pageCounts[row.pageId] ?? 0} bài</span>
                       <button type="button" onClick={() => setConfig((current) => ({ ...current, pageRows: applyEvenWeights(current.pageRows.filter((_, rowIndex) => rowIndex !== index)) }))} disabled={config.pageRows.length === 1} className="text-slate-400 hover:text-red-500 disabled:opacity-30"><Trash2 size={14} /></button>
@@ -361,7 +397,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                 </div>
               </section>
 
-              {kind === "schedule" && <ScheduleModeSelector connections={[]} selectedPageIds={[]} onPageIdsChange={() => {}} hidePageSelector hideInlinePreset scheduleMode={config.scheduleMode} onScheduleModeChange={(scheduleMode) => patch({ scheduleMode })} stepMinutes={config.stepMinutes} onStepMinutesChange={(stepMinutes) => patch({ stepMinutes })} postsPerDay={config.postsPerDay} onPostsPerDayChange={(postsPerDay) => patch({ postsPerDay })} baseTime={config.scheduleMode === "manual" ? config.manualTime : config.baseTime} onBaseTimeChange={(value) => config.scheduleMode === "manual" ? patch({ manualTime: value }) : patch({ baseTime: value })} endTime={config.endTime} onEndTimeChange={(endTime) => patch({ endTime })} onQuickNow={() => config.scheduleMode === "manual" ? patch({ manualTime: defaults.manualTime }) : patch({ baseTime: defaults.baseTime })} onQuickMidnight={() => config.scheduleMode === "manual" ? patch({ manualTime: defaults.adLaunchAt }) : patch({ baseTime: defaults.adLaunchAt })} />}
+              {kind === "schedule" && <ScheduleModeSelector count={count} scheduleMode={config.scheduleMode} onScheduleModeChange={(scheduleMode) => patch({ scheduleMode })} stepMinutes={config.stepMinutes} onStepMinutesChange={(stepMinutes) => patch({ stepMinutes })} postsPerDay={config.postsPerDay} onPostsPerDayChange={(postsPerDay) => patch({ postsPerDay })} baseTime={config.baseTime} onBaseTimeChange={(baseTime) => patch({ baseTime })} manualTime={config.manualTime} onManualTimeChange={(manualTime) => patch({ manualTime })} endTime={config.endTime} onEndTimeChange={(endTime) => patch({ endTime })} onQuickNow={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("now") }) : patch({ baseTime: quickScheduleTime("now") })} onQuickMidnight={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("midnight") }) : patch({ baseTime: quickScheduleTime("midnight") })} />}
 
               {kind === "prepare" && <section className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 dark:border-violet-900/50 dark:bg-violet-950/20"><p className="text-sm font-semibold text-violet-900 dark:text-violet-100">Thời gian chuẩn bị</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">Ads bắt đầu chạy</span><input type="datetime-local" value={config.adLaunchAt} onChange={(event) => patch({ adLaunchAt: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 text-sm dark:bg-slate-900" /></label><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">Khoảng cách đăng bài</span><div className="relative"><input type="number" min={0} max={180} value={config.prepareSpacing} onChange={(event) => patch({ prepareSpacing: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 pr-14 text-sm dark:bg-slate-900" /><span className="absolute right-3 top-2.5 text-xs text-slate-400">phút</span></div></label></div></section>}
             </div>
@@ -374,7 +410,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                 <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Nâng cao <ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} /></button>
                 {advancedOpen && <div className="space-y-4 p-4">
                   {!hasFacebook ? <p className="rounded-xl border border-pink-100 bg-pink-50 px-3 py-2 text-xs text-pink-700">Instagram không hỗ trợ chạy ẩn, comment hoặc Story trong phiên bản này. Bài Instagram luôn được đăng organic.</p> : <>
-                    <CommentSettingsPanel enabled={config.engagement.commentEnabled} onEnabledChange={(commentEnabled) => patch({ engagement: { ...config.engagement, commentEnabled } })} useCaption={config.engagement.commentUseCaption} onUseCaptionChange={(commentUseCaption) => patch({ engagement: { ...config.engagement, commentUseCaption } })} captionAttachImage={config.engagement.commentCaptionAttachImage} onCaptionAttachImageChange={(commentCaptionAttachImage) => patch({ engagement: { ...config.engagement, commentCaptionAttachImage } })} captionImageUrls={config.engagement.commentCaptionImageUrls} onCaptionImageUrlsChange={(commentCaptionImageUrls) => patch({ engagement: { ...config.engagement, commentCaptionImageUrls } })} sharedImageUrls={config.engagement.commentSharedImageUrls} onSharedImageUrlsChange={(commentSharedImageUrls) => patch({ engagement: { ...config.engagement, commentSharedImageUrls } })} randomCount={config.engagement.commentRandomCount} onRandomCountChange={(commentRandomCount) => patch({ engagement: { ...config.engagement, commentRandomCount } })} entries={config.engagement.commentCustomEntries} onEntriesChange={(commentCustomEntries) => patch({ engagement: { ...config.engagement, commentCustomEntries } })} entryEnabled={config.engagement.commentCustomEntryEnabled} onEntryEnabledChange={(id, enabled) => patch({ engagement: { ...config.engagement, commentCustomEntryEnabled: { ...config.engagement.commentCustomEntryEnabled, [id]: enabled } } })} />
+                    <CommentSettingsPanel enabled={config.engagement.commentEnabled} onEnabledChange={(commentEnabled) => patch({ engagement: { ...config.engagement, commentEnabled } })} useCaption={config.engagement.commentUseCaption} onUseCaptionChange={(commentUseCaption) => patch({ engagement: { ...config.engagement, commentUseCaption } })} captionAttachImage={config.engagement.commentCaptionAttachImage} onCaptionAttachImageChange={(commentCaptionAttachImage) => patch({ engagement: { ...config.engagement, commentCaptionAttachImage } })} captionImageUrls={config.engagement.commentCaptionImageUrls} onCaptionImageUrlsChange={(commentCaptionImageUrls) => patch({ engagement: { ...config.engagement, commentCaptionImageUrls } })} sharedImageUrls={config.engagement.commentSharedImageUrls} onSharedImageUrlsChange={(commentSharedImageUrls) => patch({ engagement: { ...config.engagement, commentSharedImageUrls } })} randomCount={config.engagement.commentRandomCount} onRandomCountChange={(commentRandomCount) => patch({ engagement: { ...config.engagement, commentRandomCount } })} entries={config.engagement.commentCustomEntries} onEntriesChange={(commentCustomEntries) => patch({ engagement: { ...config.engagement, commentCustomEntries } })} entryEnabled={config.engagement.commentCustomEntryEnabled} onEntryEnabledChange={(id, enabled) => patch({ engagement: { ...config.engagement, commentCustomEntryEnabled: { ...config.engagement.commentCustomEntryEnabled, [id]: enabled } } })} onUploadingChange={setUploadBusy} />
                     <div className="rounded-xl border p-3"><div className="flex items-center justify-between"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Tự động đăng Story</span><button type="button" onClick={() => patch({ engagement: { ...config.engagement, storyEnabled: !config.engagement.storyEnabled } })} className={`relative h-5 w-9 rounded-full ${config.engagement.storyEnabled ? "bg-violet-600" : "bg-slate-200"}`}><span className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${config.engagement.storyEnabled ? "translate-x-4" : "translate-x-0"}`} /></button></div>{config.engagement.storyEnabled && <label className="mt-3 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">Số bài đầu mỗi ngày<input type="number" min={0} value={config.engagement.storyCount} onChange={(event) => patch({ engagement: { ...config.engagement, storyCount: event.target.value } })} className="w-16 rounded-lg border px-2 py-1.5 text-center dark:bg-slate-800" /></label>}</div>
                   </>}
                 </div>}
@@ -385,7 +421,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
 
         <div className="flex items-center justify-between gap-3 rounded-b-3xl border-t bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
           <div>{error ? <p className="text-xs font-medium text-red-600">{error}</p> : <p className="flex items-center gap-1.5 text-xs text-slate-500"><Check size={13} className="text-emerald-500" /> Các giá trị random sẽ được chốt một lần khi xác nhận.</p>}</div>
-          <div className="flex gap-2"><button type="button" onClick={onClose} disabled={busy} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Huỷ</button><button type="button" onClick={submit} disabled={busy || count === 0} className={`inline-flex items-center gap-2 rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${accent === "violet" ? "bg-violet-600 hover:bg-violet-700" : accent === "blue" ? "bg-blue-600 hover:bg-blue-700" : "bg-slate-800 hover:bg-slate-700"}`}>{busy && <Loader2 size={15} className="animate-spin" />} Xác nhận {title.toLowerCase()}</button></div>
+          <div className="flex gap-2"><button type="button" onClick={onClose} disabled={busy} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Huỷ</button><button type="button" onClick={submit} disabled={busy || mediaBusy || count === 0} className={`inline-flex items-center gap-2 rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${accent === "violet" ? "bg-violet-600 hover:bg-violet-700" : accent === "blue" ? "bg-blue-600 hover:bg-blue-700" : "bg-slate-800 hover:bg-slate-700"}`}>{busy && <Loader2 size={15} className="animate-spin" />} Xác nhận {title.toLowerCase()}</button></div>
         </div>
       </div>
     </div>

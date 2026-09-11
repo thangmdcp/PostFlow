@@ -1,195 +1,58 @@
 "use client";
 
-import { useState, useEffect, useRef, type ReactNode } from "react";
-import { Clock } from "lucide-react";
-import { PageMultiSelect, PresetPanel } from "@/components/PageSelector";
-import { schedulePanel } from "@/lib/ui-classes";
+import { useMemo } from "react";
+import { CalendarClock, Check, Clock3, Layers3 } from "lucide-react";
+import { buildScheduleTimes, scheduleValidation, type ScheduleMode } from "@/lib/schedulePlan";
 
-export type ScheduleMode = "manual" | "interval" | "daily";
+export type { ScheduleMode } from "@/lib/schedulePlan";
 
-// ─── DateTimePicker ───────────────────────────────────────────────────────────
-const TIME_PRESETS = ["00:00","06:00","07:00","08:00","09:00","10:00","11:00","12:00",
-  "13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00","23:59"];
-
-export function DateTimePicker({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
-  const [date, setDate] = useState(() => value ? value.slice(0, 10) : "");
-  const [time, setTime] = useState(() => value ? value.slice(11, 16) : "");
-  const [showPresets, setShowPresets] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Sync external value → internal parts
-  useEffect(() => {
-    if (value) { setDate(value.slice(0, 10)); setTime(value.slice(11, 16)); }
-  }, [value]);
-
-  // Emit combined value upward
-  function emit(d: string, t: string) {
-    if (d && t) onChange(`${d}T${t}`);
-  }
-
-  useEffect(() => {
-    if (!showPresets) return;
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setShowPresets(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [showPresets]);
-
-  const inpBase = "rounded-lg border bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs";
-
-  return (
-    <div className={["flex items-center gap-1", compact ? "" : "flex-wrap"].join(" ")} ref={ref}>
-      <input type="date" value={date}
-        onChange={e => { setDate(e.target.value); emit(e.target.value, time); }}
-        className={`${inpBase} px-2 py-1.5 ${compact ? "w-[118px]" : "w-[130px]"}`} />
-      <div className="relative">
-        <input type="time" value={time}
-          onChange={e => { setTime(e.target.value); emit(date, e.target.value); }}
-          onClick={() => setShowPresets(v => !v)}
-          className={`${inpBase} px-2 py-1.5 w-[80px] cursor-pointer`} />
-        {showPresets && (
-          <div className="absolute top-full left-0 mt-1 z-50 w-24 max-h-52 overflow-y-auto rounded-xl border bg-white dark:bg-slate-900 shadow-xl py-1">
-            {TIME_PRESETS.map(t => (
-              <button key={t} onClick={() => { setTime(t); emit(date, t); setShowPresets(false); }}
-                className={["w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors tabular-nums",
-                  time === t ? "text-blue-600 font-semibold bg-blue-50 dark:bg-blue-900/20" : "text-slate-700 dark:text-slate-300"].join(" ")}>
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+interface Props {
+  count: number;
+  scheduleMode: ScheduleMode; onScheduleModeChange: (value: ScheduleMode) => void;
+  stepMinutes: string; onStepMinutesChange: (value: string) => void;
+  postsPerDay: string; onPostsPerDayChange: (value: string) => void;
+  baseTime: string; onBaseTimeChange: (value: string) => void;
+  manualTime: string; onManualTimeChange: (value: string) => void;
+  endTime: string; onEndTimeChange: (value: string) => void;
+  onQuickNow: () => void; onQuickMidnight: () => void;
 }
 
-// ─── ScheduleModeSelector ─────────────────────────────────────────────────────
-interface ConnectionLike { pageId: string; pageName: string; }
+const MODES: { value: ScheduleMode; title: string; description: string; icon: typeof Clock3 }[] = [
+  { value: "manual", title: "Cùng một giờ", description: "Tất cả bài cùng thời điểm", icon: Clock3 },
+  { value: "interval", title: "Giãn cách", description: "Mỗi bài cách nhau X phút", icon: CalendarClock },
+  { value: "daily", title: "Theo ngày", description: "Chia đều số bài mỗi ngày", icon: Layers3 },
+];
 
-export interface ScheduleModeSelectorProps {
-  connections: ConnectionLike[];
-  selectedPageIds: string[]; onPageIdsChange: (ids: string[]) => void;
-  scheduleMode: ScheduleMode; onScheduleModeChange: (m: ScheduleMode) => void;
-  stepMinutes: string; onStepMinutesChange: (v: string) => void;
-  postsPerDay: string; onPostsPerDayChange: (v: string) => void;
-  baseTime: string; onBaseTimeChange: (v: string) => void;
-  endTime: string; onEndTimeChange: (v: string) => void;
-  onQuickNow: () => void;
-  onQuickMidnight: () => void;
-  /** Render this instead of the built-in page-only preset button — e.g. a preset covering the whole settings cluster */
-  presetSlot?: ReactNode;
-  /** Hide the page-only preset button entirely (use when presetSlot is rendered elsewhere, at the cluster level) */
-  hideInlinePreset?: boolean;
-  /** The batch action dialog renders weighted Page/Instagram destinations separately. */
-  hidePageSelector?: boolean;
+function formatVn(value?: string) {
+  if (!value) return "—";
+  const [date, time] = value.split("T");
+  const [year, month, day] = date.split("-");
+  return `${time} · ${day}/${month}/${year}`;
 }
 
-export function ScheduleModeSelector({
-  connections, selectedPageIds, onPageIdsChange,
-  scheduleMode, onScheduleModeChange,
-  stepMinutes, onStepMinutesChange,
-  postsPerDay, onPostsPerDayChange,
-  baseTime, onBaseTimeChange,
-  endTime, onEndTimeChange,
-  onQuickNow, onQuickMidnight,
-  presetSlot, hideInlinePreset, hidePageSelector,
-}: ScheduleModeSelectorProps) {
-  const numInp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500 w-16";
-  const quickLinks = (
-    <div className="flex items-center gap-2 mt-1">
-      <button type="button" onClick={onQuickNow} className="text-[10px] text-blue-500 hover:underline">Bây giờ</button>
-      <span className="text-slate-300 text-[10px]">·</span>
-      <button type="button" onClick={onQuickMidnight} className="text-[10px] text-blue-500 hover:underline">0h ngày mai</button>
+export function ScheduleModeSelector(props: Props) {
+  const ids = useMemo(() => Array.from({ length: props.count }, (_, index) => String(index)), [props.count]);
+  const input = { ids, mode: props.scheduleMode, baseTime: props.baseTime, manualTime: props.manualTime, stepMinutes: props.stepMinutes, postsPerDay: props.postsPerDay, endTime: props.endTime };
+  const validation = scheduleValidation(input);
+  const times = validation ? [] : Object.values(buildScheduleTimes(input));
+  const activeTime = props.scheduleMode === "manual" ? props.manualTime : props.baseTime;
+  const setActiveTime = props.scheduleMode === "manual" ? props.onManualTimeChange : props.onBaseTimeChange;
+
+  return <section className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 dark:border-blue-900/60 dark:bg-blue-950/20">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Lịch đăng</p><p className="mt-0.5 text-xs text-slate-500">Múi giờ Việt Nam (UTC+7)</p></div>
+      <div className="flex gap-2 text-[11px] font-medium"><button type="button" onClick={props.onQuickNow} className="rounded-lg border bg-white px-2.5 py-1.5 text-blue-600 hover:border-blue-300 dark:bg-slate-900">Bây giờ</button><button type="button" onClick={props.onQuickMidnight} className="rounded-lg border bg-white px-2.5 py-1.5 text-blue-600 hover:border-blue-300 dark:bg-slate-900">0h ngày mai</button></div>
     </div>
-  );
-  return (
-    <div className={`${schedulePanel} p-5 space-y-4`}>
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <Clock size={14} className="text-blue-600 shrink-0" />
-        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Lịch đăng</span>
-      </div>
-
-      {/* Pages: full-width, same total width as tabs below */}
-      {!hidePageSelector && (connections.length > 0 ? (
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5">
-            <div className="flex-1 min-w-0">
-              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-              <PageMultiSelect connections={connections as any} selected={selectedPageIds} onChange={onPageIdsChange} />
-            </div>
-            {presetSlot ?? (hideInlinePreset ? null : (
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              <PresetPanel connections={connections as any} selected={selectedPageIds} onLoad={onPageIdsChange} />
-            ))}
-          </div>
-          {selectedPageIds.length > 1 && (
-            <p className="text-[10px] text-blue-500">Random 1 trang mỗi bài</p>
-          )}
-        </div>
-      ) : (
-        <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 border border-amber-200">Chưa có trang — vào Kết nối FB.</p>
-      ))}
-
-      {/* Schedule mode tabs — same height as inputs (py-1.5 + border) */}
-      <div className="flex gap-1 bg-white dark:bg-slate-800 rounded-xl border p-1">
-        {([["manual","Thủ công"],["interval","Cách nhau"],["daily","Theo ngày"]] as [ScheduleMode,string][]).map(([m, label]) => (
-          <button key={m} type="button" onClick={() => onScheduleModeChange(m)}
-            className={["flex-1 px-2 py-[5px] rounded-lg text-xs font-medium transition-all",
-              scheduleMode === m ? "bg-blue-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800",
-            ].join(" ")}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Mode-specific controls */}
-      {scheduleMode === "manual" && (
-        <div className="space-y-2">
-          <DateTimePicker value={baseTime} onChange={onBaseTimeChange} compact />
-          {quickLinks}
-        </div>
-      )}
-
-      {scheduleMode === "interval" && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-3 flex-wrap gap-y-2">
-            <DateTimePicker value={baseTime} onChange={onBaseTimeChange} compact />
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">đến:</span>
-              <input type="time" value={endTime} onChange={e => onEndTimeChange(e.target.value)} className={numInp + " w-20"} />
-              {endTime && (
-                <button type="button" onClick={() => onEndTimeChange("")} className="text-[10px] text-slate-400 hover:text-red-500">Bỏ</button>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">Cách nhau:</span>
-              <input type="number" min={1} value={stepMinutes} onChange={e => onStepMinutesChange(e.target.value)} className={numInp} />
-              <span className="text-xs text-slate-500">phút</span>
-            </div>
-          </div>
-          {quickLinks}
-        </div>
-      )}
-
-      {scheduleMode === "daily" && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-3 flex-wrap gap-y-2">
-            <DateTimePicker value={baseTime} onChange={onBaseTimeChange} compact />
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">đến:</span>
-              <input type="time" value={endTime} onChange={e => onEndTimeChange(e.target.value)} className={numInp + " w-20"} />
-              {endTime && (
-                <button type="button" onClick={() => onEndTimeChange("")} className="text-[10px] text-slate-400 hover:text-red-500">Bỏ</button>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-500">Số bài/ngày:</span>
-              <input type="number" min={1} max={24} value={postsPerDay} onChange={e => onPostsPerDayChange(e.target.value)} className={numInp} />
-            </div>
-          </div>
-          {quickLinks}
-        </div>
-      )}
+    <div className="mt-4 grid gap-2 sm:grid-cols-3">{MODES.map(({ value, title, description, icon: Icon }) => {
+      const selected = props.scheduleMode === value;
+      return <button key={value} type="button" onClick={() => props.onScheduleModeChange(value)} className={`relative rounded-xl border p-3 text-left transition ${selected ? "border-blue-500 bg-white shadow-sm ring-1 ring-blue-500 dark:bg-slate-900" : "border-slate-200 bg-white/60 hover:border-blue-300 dark:border-slate-700 dark:bg-slate-900/50"}`}><div className="flex items-center gap-2"><Icon size={15} className={selected ? "text-blue-600" : "text-slate-400"} /><span className="text-xs font-semibold text-slate-800 dark:text-slate-100">{title}</span>{selected && <Check size={13} className="ml-auto text-blue-600" />}</div><p className="mt-1 text-[10px] leading-4 text-slate-500">{description}</p></button>;
+    })}</div>
+    <div className="mt-4 grid gap-3 rounded-xl border bg-white p-3 dark:bg-slate-900 sm:grid-cols-2">
+      <label className="space-y-1"><span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">{props.scheduleMode === "manual" ? "Thời điểm đăng" : "Bắt đầu từ"}</span><input type="datetime-local" value={activeTime} onChange={(event) => setActiveTime(event.target.value)} className="w-full rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800" /></label>
+      {props.scheduleMode === "interval" && <label className="space-y-1"><span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">Khoảng cách mỗi bài</span><div className="relative"><input type="number" min={1} value={props.stepMinutes} onChange={(event) => props.onStepMinutesChange(event.target.value)} className="w-full rounded-lg border bg-white px-3 py-2 pr-14 text-xs outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800" /><span className="absolute right-3 top-2 text-[11px] text-slate-400">phút</span></div></label>}
+      {props.scheduleMode === "daily" && <label className="space-y-1"><span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">Số bài mỗi ngày</span><input type="number" min={1} value={props.postsPerDay} onChange={(event) => props.onPostsPerDayChange(event.target.value)} className="w-full rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800" /></label>}
+      {props.scheduleMode !== "manual" && <label className="space-y-1 sm:col-span-2"><span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">Giờ kết thúc mỗi ngày <span className="font-normal text-slate-400">(không bắt buộc)</span></span><div className="flex items-center gap-2"><input type="time" value={props.endTime} onChange={(event) => props.onEndTimeChange(event.target.value)} className="w-32 rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800" />{props.endTime && <button type="button" onClick={() => props.onEndTimeChange("")} className="text-[11px] text-slate-500 hover:text-red-500">Bỏ giới hạn</button>}</div></label>}
     </div>
-  );
+    <div className="mt-3 rounded-xl border border-blue-100 bg-white p-3 text-xs dark:border-blue-900/50 dark:bg-slate-900">{validation ? <p className="font-medium text-red-600">{validation}</p> : <><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-slate-700 dark:text-slate-200">Xem trước {props.count} bài</p><p className="text-slate-500">Đầu: <b>{formatVn(times[0])}</b> · Cuối: <b>{formatVn(times[times.length - 1])}</b></p></div><div className="mt-2 grid gap-1.5 sm:grid-cols-2">{times.slice(0, 6).map((time, index) => <div key={`${time}-${index}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] dark:bg-slate-800"><span className="text-slate-500">Bài {index + 1}</span><b className="tabular-nums text-slate-700 dark:text-slate-200">{formatVn(time)}</b></div>)}</div>{times.length > 6 && <p className="mt-2 text-center text-[10px] text-slate-400">Còn {times.length - 6} bài theo cùng quy tắc</p>}</>}</div>
+  </section>;
 }

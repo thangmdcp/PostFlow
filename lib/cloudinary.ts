@@ -9,7 +9,7 @@ cloudinary.config({
 
 export async function uploadFromUrl(
   mediaUrl: string,
-  options: { forceJpeg?: boolean; ensureInstagramAdWidth?: boolean } = {}
+  options: { forceJpeg?: boolean; ensureInstagramAdWidth?: boolean; folder?: string } = {}
 ): Promise<{ publicId: string; secureUrl: string; resourceType: string; width?: number; height?: number }> {
   type UploadResult = {
     public_id: string;
@@ -24,7 +24,7 @@ export async function uploadFromUrl(
   try {
     result = await cloudinary.uploader.upload(mediaUrl, {
       resource_type: options.forceJpeg ? "image" : "auto",
-      folder: "postflow",
+      folder: options.folder ?? "postflow",
       ...(options.forceJpeg ? { format: "jpg" } : {}),
     });
   } catch {
@@ -43,7 +43,7 @@ export async function uploadFromUrl(
 
     result = await new Promise<UploadResult>((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: resourceType as "video" | "image" | "auto", folder: "postflow", ...(options.forceJpeg ? { format: "jpg" } : {}) },
+        { resource_type: resourceType as "video" | "image" | "auto", folder: options.folder ?? "postflow", ...(options.forceJpeg ? { format: "jpg" } : {}) },
         (err, res) => {
           if (err || !res) return reject(err ?? new Error("Upload thất bại"));
           resolve(res as UploadResult);
@@ -104,8 +104,9 @@ export async function uploadBuffer(
   return { publicId: result.public_id, secureUrl: result.secure_url };
 }
 
-export async function deleteFile(publicId: string, resourceType = "image") {
+export async function deleteFile(publicId: string, resourceType = "image", invalidate = false) {
   await cloudinary.uploader.destroy(publicId, {
     resource_type: resourceType as "image" | "video" | "raw",
+    invalidate,
   });
 }

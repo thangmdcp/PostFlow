@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { MessageCircle, Pin, PinOff, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ImagePlus, Loader2, MessageCircle, Pin, PinOff, X } from "lucide-react";
 import { adsPanel } from "@/lib/ui-classes";
+import { replaceCommentImageUrls } from "@/lib/commentImages";
+import { useToast } from "@/components/ui/toast";
 
 export interface CommentEntry { id: string; text: string; attachImage: boolean; imageUrls: string[]; pinned: boolean; appendAffLink?: boolean; }
 
@@ -17,14 +19,33 @@ export interface CommentSettingsPanelProps {
   /** Batch-only quick per-entry enable checklist — omit on the global settings page. */
   entryEnabled?: Record<string, boolean>;
   onEntryEnabledChange?: (id: string, v: boolean) => void;
+  onUploadingChange?: (uploading: boolean) => void;
 }
 
 export function CommentSettingsPanel({
   enabled, onEnabledChange, useCaption, onUseCaptionChange,
   captionAttachImage, onCaptionAttachImageChange, captionImageUrls, onCaptionImageUrlsChange,
   sharedImageUrls, onSharedImageUrlsChange, randomCount, onRandomCountChange,
-  entries, onEntriesChange, entryEnabled, onEntryEnabledChange,
+  entries, onEntriesChange, entryEnabled, onEntryEnabledChange, onUploadingChange,
 }: CommentSettingsPanelProps) {
+  const [uploadingGroups, setUploadingGroups] = useState<Set<string>>(new Set());
+  useEffect(() => onUploadingChange?.(uploadingGroups.size > 0), [onUploadingChange, uploadingGroups]);
+  useEffect(() => {
+    const removeDeletedAsset = (event: Event) => {
+      const url = (event as CustomEvent<string>).detail;
+      if (!url) return;
+      onCaptionImageUrlsChange(captionImageUrls.filter((item) => item !== url));
+      onSharedImageUrlsChange(sharedImageUrls.filter((item) => item !== url));
+      onEntriesChange(entries.map((entry) => ({ ...entry, imageUrls: entry.imageUrls.filter((item) => item !== url) })));
+    };
+    window.addEventListener("postflow-comment-image-deleted", removeDeletedAsset);
+    return () => window.removeEventListener("postflow-comment-image-deleted", removeDeletedAsset);
+  }, [captionImageUrls, entries, onCaptionImageUrlsChange, onEntriesChange, onSharedImageUrlsChange, sharedImageUrls]);
+  const setGroupUploading = useCallback((key: string, uploading: boolean) => setUploadingGroups((current) => {
+    const next = new Set(current);
+    uploading ? next.add(key) : next.delete(key);
+    return next;
+  }), []);
   function patchEntry(i: number, patch: Partial<CommentEntry>) {
     onEntriesChange(entries.map((e, ei) => ei === i ? { ...e, ...patch } : e));
   }
@@ -68,7 +89,7 @@ export function CommentSettingsPanel({
                     className="rounded accent-violet-600" />
                   <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh</span>
                 </label>
-                <ImageUrlListEditor urls={captionImageUrls} onChange={onCaptionImageUrlsChange} />
+                {captionAttachImage && <CommentImageGrid groupKey="caption" urls={captionImageUrls} onChange={onCaptionImageUrlsChange} onUploadingChange={setGroupUploading} />}
               </div>
             )}
           </div>
@@ -112,7 +133,7 @@ export function CommentSettingsPanel({
                   <span className="text-xs text-slate-600 dark:text-slate-300">Đính kèm ảnh</span>
                 </label>
                 {entry.attachImage && (
-                  <ImageUrlListEditor urls={entry.imageUrls} onChange={urls => patchEntry(i, { imageUrls: urls })} />
+                  <CommentImageGrid groupKey={`entry-${entry.id}`} urls={entry.imageUrls} onChange={urls => patchEntry(i, { imageUrls: urls })} onUploadingChange={setGroupUploading} />
                 )}
                 <label className="flex items-center gap-2 cursor-pointer" title="Tự động nối link aff của bài (sau nội dung, cách 1 khoảng trắng) khi đăng bình luận">
                   <input type="checkbox" checked={entry.appendAffLink ?? false}
@@ -127,7 +148,7 @@ export function CommentSettingsPanel({
           {/* Shared image pool + total comment count */}
           <div className="rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2">
             <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Ảnh dùng chung</span>
-            <ImageUrlListEditor urls={sharedImageUrls} onChange={onSharedImageUrlsChange} />
+            <CommentImageGrid groupKey="shared" urls={sharedImageUrls} onChange={onSharedImageUrlsChange} onUploadingChange={setGroupUploading} />
           </div>
 
           <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
@@ -141,37 +162,58 @@ export function CommentSettingsPanel({
   );
 }
 
-function ImageUrlListEditor({ urls, onChange }: { urls: string[]; onChange: (urls: string[]) => void }) {
-  const [newUrl, setNewUrl] = useState("");
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        <input type="text" value={newUrl} onChange={e => setNewUrl(e.target.value)}
-          placeholder="Dán URL ảnh rồi bấm Thêm"
-          className="flex-1 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500" />
-        <button type="button" onClick={() => {
-          const url = newUrl.trim();
-          if (!url) return;
-          onChange([...urls, url]);
-          setNewUrl("");
-        }}
-          className="rounded-lg bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 text-xs font-medium transition-colors shrink-0">
-          Thêm
-        </button>
-      </div>
-      {urls.length > 0 && (
-        <ul className="space-y-1">
-          {urls.map((url, i) => (
-            <li key={i} className="flex items-center gap-2 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5">
-              <span className="flex-1 truncate text-xs text-slate-600 dark:text-slate-300">{url}</span>
-              <button type="button" onClick={() => onChange(urls.filter((_, ci) => ci !== i))}
-                className="text-slate-400 hover:text-red-500 shrink-0">
-                <X size={13} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+function CommentImageGrid({ groupKey, urls, onChange, onUploadingChange }: { groupKey: string; urls: string[]; onChange: (urls: string[]) => void; onUploadingChange: (key: string, uploading: boolean) => void }) {
+  const { show, ToastComponent } = useToast();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(0);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  useEffect(() => () => onUploadingChange(groupKey, false), [groupKey, onUploadingChange]);
+
+  async function upload(files: FileList | null) {
+    const selected = files ? Array.from(files) : [];
+    if (!selected.length) return;
+    const invalid = selected.find((file) => !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024);
+    if (invalid) { show(`${invalid.name}: chỉ nhận JPEG/PNG/WebP tối đa 10 MB`, "error"); return; }
+    setUploading(selected.length); onUploadingChange(groupKey, true);
+    const uploaded: string[] = [];
+    for (const file of selected) {
+      try {
+        const data = new FormData(); data.append("file", file);
+        const response = await fetch("/api/comment-images", { method: "POST", body: data });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body?.error || "Upload thất bại");
+        uploaded.push(body.url);
+      } catch (error) { show(error instanceof Error ? error.message : `Không thể upload ${file.name}`, "error"); }
+      finally { setUploading((count) => Math.max(0, count - 1)); }
+    }
+    if (uploaded.length) onChange([...new Set([...urls, ...uploaded])]);
+    onUploadingChange(groupKey, false);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  async function remove(url: string) {
+    setDeleting(url);
+    try {
+      const response = await fetch("/api/comment-images", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error || "Không thể xóa ảnh");
+      onChange(urls.filter((item) => item !== url));
+      for (const kind of ["schedule", "prepare", "publish"]) {
+        const key = `postflow_batch_action_v1_${kind}`;
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        try { localStorage.setItem(key, JSON.stringify(replaceCommentImageUrls(JSON.parse(raw), { [url]: null }))); } catch { /* ignore malformed draft */ }
+      }
+      window.dispatchEvent(new CustomEvent("postflow-comment-image-deleted", { detail: url }));
+    } catch (error) { show(error instanceof Error ? error.message : "Không thể xóa ảnh", "error"); }
+    finally { setDeleting(null); }
+  }
+
+  return <div className="flex flex-wrap gap-2">
+    {ToastComponent}
+    {urls.map((url) => <div key={url} className="group relative h-[60px] w-[60px] overflow-hidden rounded-lg border bg-slate-100 shadow-sm dark:bg-slate-800"><img src={url} alt="Ảnh bình luận" className="h-full w-full object-cover" /><button type="button" onClick={() => void remove(url)} disabled={deleting === url} title="Xóa ảnh khỏi Cloudinary và mọi cấu hình" className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full bg-slate-950/75 text-white shadow hover:bg-red-600 disabled:opacity-60">{deleting === url ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}</button></div>)}
+    {Array.from({ length: uploading }).map((_, index) => <div key={`upload-${index}`} className="grid h-[60px] w-[60px] place-items-center rounded-lg border border-dashed bg-violet-50 text-violet-600 dark:bg-violet-950/30"><Loader2 size={17} className="animate-spin" /></div>)}
+    <button type="button" onClick={() => inputRef.current?.click()} className="grid h-[60px] w-[60px] place-items-center rounded-lg border border-dashed border-violet-300 bg-violet-50/60 text-violet-600 transition hover:border-violet-500 hover:bg-violet-50 dark:bg-violet-950/20" title="Thêm ảnh"><ImagePlus size={18} /></button>
+    <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" onChange={(event) => void upload(event.target.files)} />
+  </div>;
 }
