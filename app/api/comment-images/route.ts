@@ -35,14 +35,21 @@ export async function PUT(request: Request) {
         });
         const contentType = response.headers.get("content-type")?.split(";")[0] ?? "";
         const contentLength = Number(response.headers.get("content-length") || 0);
-        if (!response.ok || !["image/jpeg", "image/png", "image/webp"].includes(contentType) || contentLength > MAX_SIZE) {
-          throw new Error("Ảnh cũ không còn hợp lệ");
+        if (response.status === 404 || response.status === 410 || (response.ok && !["image/jpeg", "image/png", "image/webp"].includes(contentType))) {
+          replacements[url] = null;
+          continue;
         }
+        if (!response.ok) throw new Error(`Không tải được ảnh cũ (HTTP ${response.status})`);
+        if (contentLength > MAX_SIZE) throw new Error("Ảnh cũ vượt quá 10 MB");
         const buffer = Buffer.from(await response.arrayBuffer());
         if (buffer.length > MAX_SIZE) throw new Error("Ảnh cũ vượt quá 10 MB");
         const uploaded = await uploadBuffer(buffer, "postflow/comments");
         replacements[url] = uploaded.secureUrl;
-      } catch { replacements[url] = null; }
+      } catch {
+        // Keep the old URL when a temporary DNS/network/host error prevents
+        // migration. The UI can retry later without silently losing the image.
+        replacements[url] = url;
+      }
     }
     return NextResponse.json({ replacements });
   } catch (error) {

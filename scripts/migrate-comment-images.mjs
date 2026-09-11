@@ -45,10 +45,20 @@ async function upload(url) {
     try {
       response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; PostFlow/1.0)", Referer: "https://postimg.cc/" }, signal: AbortSignal.timeout(15_000) });
       if (response.ok) break;
+      if (response.status === 404 || response.status === 410) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.permanentlyMissing = true;
+        throw error;
+      }
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) { lastError = error; }
   }
-  if (!response?.ok || !(response.headers.get("content-type") ?? "").startsWith("image/")) throw new Error(lastError instanceof Error ? lastError.message : `Không tải được ảnh (${response?.status ?? "network"})`);
+  if (!response?.ok) throw lastError ?? new Error(`Không tải được ảnh (${response?.status ?? "network"})`);
+  if (!(response.headers.get("content-type") ?? "").startsWith("image/")) {
+    const error = new Error(`URL không trả về ảnh (${response.headers.get("content-type") ?? "unknown"})`);
+    error.permanentlyMissing = true;
+    throw error;
+  }
   const buffer = Buffer.from(await response.arrayBuffer());
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream({ resource_type: "image", folder: "postflow/comments", format: "jpg" }, (error, uploaded) => error || !uploaded ? reject(error ?? new Error("Upload thất bại")) : resolve(uploaded));
@@ -80,7 +90,14 @@ try {
       while (cursor < external.length) {
         const url = external[cursor++];
         try { replacements[url] = await upload(url); console.log(`uploaded ${url}`); }
-        catch (error) { replacements[url] = null; console.error(`removed ${url}: ${error instanceof Error ? error.message : error}`); }
+        catch (error) {
+          if (error?.permanentlyMissing) {
+            replacements[url] = null;
+            console.error(`removed ${url}: ${error instanceof Error ? error.message : error}`);
+          } else {
+            throw new Error(`Dừng migration để giữ nguyên dữ liệu; không thể tải ${url}: ${error instanceof Error ? error.message : error}`);
+          }
+        }
       }
     }));
     await prisma.$transaction([
