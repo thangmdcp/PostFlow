@@ -79,6 +79,8 @@ export interface ScheduleModeSelectorProps {
   presetSlot?: ReactNode;
   /** Hide the page-only preset button entirely (use when presetSlot is rendered elsewhere, at the cluster level) */
   hideInlinePreset?: boolean;
+  /** The batch action dialog renders weighted Page/Instagram destinations separately. */
+  hidePageSelector?: boolean;
 }
 
 export function ScheduleModeSelector({
@@ -89,7 +91,7 @@ export function ScheduleModeSelector({
   baseTime, onBaseTimeChange,
   endTime, onEndTimeChange,
   onQuickNow, onQuickMidnight,
-  presetSlot, hideInlinePreset,
+  presetSlot, hideInlinePreset, hidePageSelector,
 }: ScheduleModeSelectorProps) {
   const numInp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500 w-16";
   const quickLinks = (
@@ -108,7 +110,7 @@ export function ScheduleModeSelector({
       </div>
 
       {/* Pages: full-width, same total width as tabs below */}
-      {connections.length > 0 ? (
+      {!hidePageSelector && (connections.length > 0 ? (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <div className="flex-1 min-w-0">
@@ -126,7 +128,7 @@ export function ScheduleModeSelector({
         </div>
       ) : (
         <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 border border-amber-200">Chưa có trang — vào Kết nối FB.</p>
-      )}
+      ))}
 
       {/* Schedule mode tabs — same height as inputs (py-1.5 + border) */}
       <div className="flex gap-1 bg-white dark:bg-slate-800 rounded-xl border p-1">

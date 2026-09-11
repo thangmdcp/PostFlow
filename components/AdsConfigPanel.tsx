@@ -82,9 +82,10 @@ interface AdsConfigPanelProps {
   onPatchRow?: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;
   onDeleteRow?: (idx: number) => void;
   onAddRow?: () => void;
+  hideRunAdsToggle?: boolean;
 }
 
-export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow }: AdsConfigPanelProps) {
+export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false }: AdsConfigPanelProps) {
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
@@ -100,7 +101,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
       />
 
       {/* Run ads toggle */}
-      <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
+      {!hideRunAdsToggle && <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-slate-700 dark:text-slate-200">Chạy quảng cáo ngay sau đăng</span>
           <span className={["text-[10px] px-1.5 py-0.5 rounded-full font-medium",
@@ -114,7 +115,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
           <span className={["pointer-events-none h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
             adConfig.runAds ? "translate-x-4" : "translate-x-0"].join(" ")} />
         </button>
-      </div>
+      </div>}
 
       {/* Trạng thái ads sau khi tạo: Active hay Pause */}
       {adConfig.runAds && (

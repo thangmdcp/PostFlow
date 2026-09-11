@@ -32,6 +32,8 @@ import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
+import { BatchActionDialog, type BatchActionConfig, type BatchEngagementConfig } from "@/components/BatchActionDialog";
+import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAction";
 import {
   COMPOSER_DRAFT_KEY,
   batchDraftKey,
@@ -691,9 +693,9 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           </div>
         </div>
 
-        {/* Main body: URLs left, ads settings right */}
-        <div className="flex gap-4 items-start">
-          <div className="flex-1 min-w-0">
+        {/* Batch composer stays focused on source links. */}
+        <div className="flex items-start">
+          <div className="min-w-0 flex-1">
             <div className={`grid ${gridCls} gap-3`}>
               {colLines.map((lines, ci) => (
                 <div key={ci} className="flex flex-col gap-1.5">
@@ -721,21 +723,6 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
             )}
           </div>
 
-          {/* Create-batch stays focused on links; detailed setup comes after Fetch. */}
-          <div className="w-[300px] shrink-0 space-y-3">
-            <div className="flex items-center justify-between rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 px-3 py-2">
-              <p className="text-xs text-slate-500">
-                <span className="font-medium text-slate-600 dark:text-slate-300">Preset cấu hình</span>
-              </p>
-              <FullSettingsPresetPanel getCurrentData={buildPresetData} onLoad={applyPresetData}
-                activePresetId={activePresetId} onActivePresetChange={setActivePresetId} />
-            </div>
-            <div className="rounded-2xl border bg-white p-4 text-xs leading-5 text-slate-600 shadow-sm dark:bg-slate-900 dark:text-slate-300">
-              <p className="font-semibold text-slate-800 dark:text-slate-100">Tạo batch trước, cài sau</p>
-              <p className="mt-1">Sau khi Fetch, tick bài rồi bấm <b>Cài đặt</b> để chỉnh Ads, bình luận và Story tại một nơi.</p>
-              <a href="/settings/ads" className="mt-3 inline-flex font-semibold text-blue-600 hover:underline">Mở cài đặt mặc định →</a>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -853,6 +840,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const [manualApplyTime, setManualApplyTime] = useState(() => initialDraft?.manualApplyTime ?? vn7Now(5));
   const [prepareAdsOpen, setPrepareAdsOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [actionDialog, setActionDialog] = useState<BatchActionKind | null>(null);
   const [affiliateWarningOpen, setAffiliateWarningOpen] = useState(false);
   const [adLaunchAt, setAdLaunchAt] = useState(() => initialDraft?.adLaunchAt ?? vn7NextMidnight());
   const [prepareSpacing, setPrepareSpacing] = useState(initialDraft?.prepareSpacing ?? "18");
@@ -1489,8 +1477,16 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   // Pinned entries always post exactly as authored; unpinned entries feed a
   // shared random pool where text and image are picked independently and
   // combined into new pairings that never existed as a fixed entry.
-  function resolveCommentJobs(id: string): { text: string; imageUrl?: string }[] {
-    if (!commentEnabled) return [];
+  function resolveCommentJobs(id: string, actionEngagement?: BatchEngagementConfig): { text: string; imageUrl?: string }[] {
+    const enabled = actionEngagement?.commentEnabled ?? commentEnabled;
+    const useCaption = actionEngagement?.commentUseCaption ?? commentUseCaption;
+    const captionAttachImage = actionEngagement?.commentCaptionAttachImage ?? commentCaptionAttachImage;
+    const captionImageUrls = actionEngagement?.commentCaptionImageUrls ?? commentCaptionImageUrls;
+    const customEntries = actionEngagement?.commentCustomEntries ?? commentCustomEntries;
+    const sharedImageUrls = actionEngagement?.commentSharedImageUrls ?? commentSharedImageUrls;
+    const randomCount = actionEngagement?.commentRandomCount ?? commentRandomCount;
+    const entryEnabled = actionEngagement?.commentCustomEntryEnabled ?? commentCustomEntryEnabled;
+    if (!enabled) return [];
     const p = batch.posts.find(x => x.id === id);
     const jobs: { text: string; imageUrl?: string }[] = [];
     // The post's aff link — "Kèm link aff" appends this after a space, not
@@ -1500,14 +1496,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const affLink = p?.extractedLinks?.find(l => l.myUrl)?.myUrl ?? "";
     const withAff = (text: string, on?: boolean) => (on && affLink ? `${text} ${affLink}` : text);
 
-    if (commentUseCaption) {
+    if (useCaption) {
       const text = (p?.finalCaption ?? p?.rawCaption ?? "").trim();
-      if (text) jobs.push({ text, imageUrl: resolveImage(commentCaptionAttachImage, commentCaptionImageUrls, commentSharedImageUrls) });
+      if (text) jobs.push({ text, imageUrl: resolveImage(captionAttachImage, captionImageUrls, sharedImageUrls) });
     }
 
-    const active = commentCustomEntries.filter(e => commentCustomEntryEnabled[e.id] !== false && e.text.trim());
+    const active = customEntries.filter(e => entryEnabled[e.id] !== false && e.text.trim());
     for (const e of active.filter(e => e.pinned)) {
-      jobs.push({ text: withAff(e.text, e.appendAffLink), imageUrl: resolveImage(e.attachImage, e.imageUrls, commentSharedImageUrls) });
+      jobs.push({ text: withAff(e.text, e.appendAffLink), imageUrl: resolveImage(e.attachImage, e.imageUrls, sharedImageUrls) });
     }
 
     // The count is a TOTAL target, not an "extra" amount — caption + pinned
@@ -1515,11 +1511,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     // remaining gap up to that total (never fewer than the fixed set, never
     // more than requested).
     const unpinned = active.filter(e => !e.pinned);
-    const total = Math.max(0, Number(commentRandomCount) || 0);
+    const total = Math.max(0, Number(randomCount) || 0);
     if (unpinned.length && total > jobs.length) {
       const remaining = total - jobs.length;
       const textPool = unpinned.map(e => ({ text: e.text, appendAffLink: e.appendAffLink }));
-      const imagePool = unpinned.flatMap(e => e.attachImage ? (e.imageUrls.length ? e.imageUrls : commentSharedImageUrls) : []);
+      const imagePool = unpinned.flatMap(e => e.attachImage ? (e.imageUrls.length ? e.imageUrls : sharedImageUrls) : []);
       for (let i = 0; i < remaining; i++) {
         const picked = textPool[Math.floor(Math.random() * textPool.length)];
         const imageUrl = imagePool.length ? imagePool[Math.floor(Math.random() * imagePool.length)] : undefined;
@@ -1568,7 +1564,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       } catch {}
     }
     setBulkRunning(false);
-    await mutateBatch();
+    await mutateBatch().catch(() => undefined);
     onToast(`Đã lên lịch ${ok}/${targets.length} bài`, "success");
     setCheckedIds(new Set());
   }
@@ -1688,6 +1684,123 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setCheckedIds(new Set());
   }
 
+  async function executeBatchAction(kind: BatchActionKind, config: BatchActionConfig): Promise<boolean> {
+    const targets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
+    if (!targets.length) { onToast("Chọn ít nhất một bài sẵn sàng", "error"); return false; }
+    if (affiliateBlocked) { setAffiliateWarningOpen(true); return false; }
+
+    const runsAds = kind === "prepare" || config.runMode === "publish_and_ads";
+    const ids = targets.map((post) => post.id);
+    const allocation = buildBatchActionAllocation(
+      ids,
+      config.pageRows.map((row) => ({ id: row.pageId, weight: row.weight })),
+      runsAds ? config.accountRows.map((row) => ({ id: row.accountId, weight: row.weight })) : [],
+    );
+    const scheduleTimes = kind === "schedule"
+      ? computeScheduleTimes(ids, config.scheduleMode, config.baseTime, config.stepMinutes, config.postsPerDay, config.manualTime, config.endTime)
+      : {};
+    const preparedFirst = new Date();
+    const prepareSpacingMinutes = Math.max(0, Number(config.prepareSpacing) || 0);
+    const rolledParams: Record<string, RowAdParams> = {};
+    ids.forEach((id) => {
+      const accountId = allocation.accountByPost[id];
+      const account = config.accountRows.find((row) => row.accountId === accountId);
+      rolledParams[id] = {
+        ...genRowParams(config.adConfig),
+        budget: randomStep(
+          Number(account?.budgetMin ?? config.adConfig.budgetMin),
+          Number(account?.budgetMax ?? config.adConfig.budgetMax),
+          Number(account?.budgetStep ?? config.adConfig.budgetStep),
+        ),
+      };
+    });
+
+    setRowPageId((current) => ({ ...current, ...allocation.pageByPost }));
+    setRowAccountId((current) => ({ ...current, ...allocation.accountByPost }));
+    setRowAdParams((current) => ({ ...current, ...rolledParams }));
+    setRowRunAds((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, runsAds])) }));
+    setRowPublishTargets((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, config.publishTargets])) }));
+    setRowOverrides((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, config.adConfig.overridePublish])) }));
+
+    setBulkRunning(true);
+    const outcomes = await Promise.all(targets.map(async (post, index) => {
+      const id = post.id;
+      const pageId = allocation.pageByPost[id];
+      const accountId = allocation.accountByPost[id];
+      const params = rolledParams[id];
+      const facebookEngagement = config.publishTargets.includes("facebook");
+      const comments = facebookEngagement ? resolveCommentJobs(id, config.engagement) : [];
+      const common = {
+        pageId,
+        publishTargets: config.publishTargets,
+        templateId: runsAds ? config.adConfig.templateId : undefined,
+        ...(runsAds && accountId ? { adAccountId: accountId } : {}),
+        ...(runsAds && config.adConfig.postType === "dark" && params.ctaHeadline ? { ctaHeadline: params.ctaHeadline } : {}),
+        ...(comments.length ? { comments } : {}),
+        storyEnabled: facebookEngagement ? config.engagement.storyEnabled : false,
+        storyCount: facebookEngagement ? Number(config.engagement.storyCount) || 0 : 0,
+      };
+      try {
+        if (kind === "publish") {
+          const response = await fetch(`/api/posts/${id}/queue-publish`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...common,
+              ...(config.adConfig.postType === "dark" && config.adConfig.overridePublish ? { publishToPage: true } : {}),
+              ...(runsAds ? {
+                ageMinFrom: String(params.ageMin), ageMinTo: String(params.ageMin),
+                ageMaxFrom: String(params.ageMax), ageMaxTo: String(params.ageMax),
+                gender: params.gender,
+                budgetMin: String(params.budget), budgetMax: String(params.budget), budgetStep: "1",
+                adStatus: config.adConfig.adStatus,
+              } : {}),
+            }),
+          });
+          return response.ok;
+        }
+
+        const publishAt = kind === "prepare"
+          ? new Date(preparedFirst.getTime() + index * prepareSpacingMinutes * 60_000)
+          : vn7ToDate(scheduleTimes[id]);
+        const adStartAt = kind === "prepare"
+          ? nextPreparedAdsStart(vn7ToDate(config.adLaunchAt), publishAt).toISOString()
+          : undefined;
+        const response = await fetch(`/api/posts/${id}/schedule`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...common,
+            scheduledAt: publishAt.toISOString(),
+            ...(runsAds ? {
+              adStatus: config.adConfig.adStatus,
+              adAgeMin: params.ageMin, adAgeMax: params.ageMax, adGender: params.gender, adBudget: String(params.budget),
+            } : {}),
+            ...(adStartAt ? { adStartAt } : {}),
+          }),
+        });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    }));
+
+    const succeededIds = ids.filter((_, index) => outcomes[index]);
+    const plannedTimes = Object.fromEntries(ids.map((id, index) => {
+      if (kind === "schedule") return [id, scheduleTimes[id]];
+      if (kind === "prepare") return [id, dateToVn7(new Date(preparedFirst.getTime() + index * prepareSpacingMinutes * 60_000))];
+      return [id, ""];
+    }).filter(([, value]) => value));
+    if (Object.keys(plannedTimes).length) setPostTimes((current) => ({ ...current, ...plannedTimes }));
+    setCheckedIds((current) => new Set([...current].filter((id) => !succeededIds.includes(id))));
+    setBulkRunning(false);
+    await mutateBatch().catch(() => undefined);
+    const failed = outcomes.length - succeededIds.length;
+    onToast(
+      failed ? `Đã gửi ${succeededIds.length}/${outcomes.length} bài · giữ lại ${failed} bài lỗi` : `Đã gửi thành công ${succeededIds.length} bài`,
+      failed ? "error" : "success",
+    );
+    return failed === 0;
+  }
+
   async function handleBulkDelete() {
     if (checkedIds.size === 0) return;
     if (!confirm(`Xoá ${checkedIds.size} bài đã chọn?`)) return;
@@ -1709,7 +1822,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500";
   const numInp = inp + " w-16 text-center";
-  const activeColumnDefs = COLUMN_DEFS.filter(c => c.key !== "comment" || commentEnabled);
+  const simpleColumnKeys = new Set<ColKey>(["status", "title", "campaignName", "caption", "linkAff", "scheduledAt", "page", "platform"]);
+  const activeColumnDefs = COLUMN_DEFS.filter((column) => simpleColumnKeys.has(column.key));
   const { order: colOrder, dragKey, onDragStart, onDragOver, onDrop } = useColumnOrder<ColKey>(
     "postflow_batch_colorder_v1", COLUMN_DEFS.map(c => c.key)
   );
@@ -1717,6 +1831,38 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     .map(k => activeColumnDefs.find(c => c.key === k))
     .filter((c): c is typeof activeColumnDefs[number] => !!c && colVisible[c.key]);
   const tableWidth = 40 + visibleCols.reduce((s, c) => s + colWidths[c.key], 0);
+  const defaultActionPages = applyEvenWeights(
+    (selectedPageIds.length ? selectedPageIds : connections.slice(0, 1).map((connection) => connection.pageId))
+      .filter((pageId) => connections.some((connection) => connection.pageId === pageId))
+      .map((pageId) => ({ pageId, weight: 1 })),
+  );
+  const actionDefaults: BatchActionConfig = {
+    runMode: adConfig.runAds ? "publish_and_ads" : "publish_only",
+    publishTargets: defaultPublishTargets,
+    pageRows: defaultActionPages,
+    adConfig: { ...adConfig, runAds: true },
+    accountRows: localAccountRows.map((row) => ({ ...row })),
+    scheduleMode,
+    baseTime: resolveBaseTime(baseTime || vn7Now(5)),
+    manualTime: resolveBaseTime(manualApplyTime || vn7Now(5)),
+    endTime,
+    stepMinutes,
+    postsPerDay,
+    adLaunchAt: vn7ToDate(adLaunchAt).getTime() > Date.now() + 60_000 ? adLaunchAt : vn7NextMidnight(),
+    prepareSpacing,
+    engagement: {
+      commentEnabled,
+      commentUseCaption,
+      commentCaptionAttachImage,
+      commentCaptionImageUrls,
+      commentCustomEntries,
+      commentSharedImageUrls,
+      commentRandomCount,
+      commentCustomEntryEnabled,
+      storyEnabled,
+      storyCount,
+    },
+  };
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -1730,44 +1876,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             <PlusCircle size={13} /> {sidebarCollapsed && "Tạo batch"}
           </button>
 
-          {/* Random split-button */}
-          <div className="relative flex items-center shrink-0" ref={randomPanelRef}>
-            <div className="flex items-center rounded-lg border bg-white dark:bg-slate-800 overflow-hidden">
-              <button onClick={handleRandomize} disabled={checkedIds.size === 0}
-                title="Random các thông số đã tích trong danh sách bên cạnh"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
-                <Shuffle size={13} /> {sidebarCollapsed && "Random"}
-              </button>
-              <button onClick={() => setRandomFieldsOpen(v => !v)} disabled={checkedIds.size === 0}
-                className="px-1.5 py-1.5 border-l text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                <ChevronDown size={11} />
-              </button>
-            </div>
-            {randomFieldsOpen && (
-              <div className="absolute left-0 top-full mt-1 z-50 w-48 rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-2 space-y-0.5">
-                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 pt-1 pb-1.5">Random thông số nào</p>
-                {RANDOM_FIELD_OPTIONS.map(opt => (
-                  <label key={opt.key} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
-                    <input type="checkbox" checked={randomFields.has(opt.key)}
-                      onChange={e => setRandomFields(prev => {
-                        const n = new Set(prev);
-                        e.target.checked ? n.add(opt.key) : n.delete(opt.key);
-                        return n;
-                      })}
-                      className="rounded accent-blue-600" />
-                    <span className="text-xs text-slate-700 dark:text-slate-200">{opt.label}</span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Cài đặt chi tiết */}
-          <button onClick={() => setDetailPanelOpen(v => !v)} disabled={checkedIds.size === 0} title="Cài đặt"
-            className={["flex items-center gap-1.5 text-xs font-medium rounded-lg border px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap",
-              detailPanelOpen && checkedIds.size > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"].join(" ")}>
-            <SlidersHorizontal size={13} /> {sidebarCollapsed && "Cài đặt"}
-          </button>
+          <span className="hidden text-xs text-slate-400 sm:inline">Tick bài rồi chọn hành động</span>
         </div>
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
@@ -1787,26 +1896,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ))}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <PublishTargetsSelector value={defaultPublishTargets} onChange={(targets) => {
-            setDefaultPublishTargets(targets);
-            if (checkedIds.size) setRowPublishTargets((current) => {
-              const next = { ...current };
-              checkedIds.forEach((id) => { next[id] = targets; });
-              return next;
-            });
-          }} compact />
-          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setScheduleOpen(true)} disabled={bulkRunning || checkedIds.size === 0}
-            title="Mở kế hoạch lịch đăng cho các dòng đã chọn"
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setActionDialog("schedule")} disabled={bulkRunning || scheduleTargets.length === 0}
+            title="Chọn nền tảng, Page, lịch đăng và tuỳ chọn Ads"
             className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Calendar size={11} />} Lên lịch
           </button>
-          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setPrepareAdsOpen(true)} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setActionDialog("prepare")} disabled={bulkRunning || scheduleTargets.length === 0}
             title="Đăng Page theo nhịp từ trước, tạo Ads sẵn để bắt đầu đúng giờ bạn chọn"
             className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 hover:bg-violet-100 text-violet-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
             <Clock size={11} /> Chuẩn bị Ads
           </button>
-          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : handleBulkPublish()} disabled={bulkRunning || checkedIds.size === 0 || !adConfig.templateId}
-            title="Đăng ngay lập tức, bỏ qua giờ đã đặt — có chạy ads hay không tuỳ theo cột &quot;Chạy ads&quot; của từng dòng"
+          <button onClick={() => affiliateBlocked ? setAffiliateWarningOpen(true) : setActionDialog("publish")} disabled={bulkRunning || scheduleTargets.length === 0}
+            title="Chọn nền tảng, Page và đăng bài; có thể bật Ads trong bước tiếp theo"
             className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Đăng ngay
           </button>
@@ -1943,6 +2044,20 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             </div>
           </div>
         </div>
+      )}
+
+      {actionDialog && (
+        <BatchActionDialog
+          key={actionDialog}
+          kind={actionDialog}
+          count={scheduleTargets.length}
+          connections={connections}
+          templates={templates}
+          adAccounts={adAccounts}
+          defaults={actionDefaults}
+          onClose={() => setActionDialog(null)}
+          onConfirm={(config) => executeBatchAction(actionDialog, config)}
+        />
       )}
 
       {scheduleOpen && (
@@ -2532,7 +2647,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       )}
 
       {col.key === "platform" && cell("platform",
-        <PublishTargetsSelector value={publishTargets} onChange={onPublishTargetsChange} compact disabled={!editable} />
+        <PublishTargetsSelector value={publishTargets} onChange={onPublishTargetsChange} compact disabled />
       )}
 
       {col.key === "age" && cell("age",
