@@ -6,6 +6,8 @@ export interface PreparedInstagramMedia {
   url: string;
   publicId: string;
   resourceType: string;
+  width?: number;
+  height?: number;
 }
 
 function readManifest(value: unknown): PreparedInstagramMedia[] {
@@ -39,8 +41,17 @@ export async function prepareInstagramMedia(post: Post): Promise<PreparedInstagr
 
   const prepared: PreparedInstagramMedia[] = [];
   for (const source of sources) {
-    const uploaded = await uploadFromUrl(source, { forceJpeg: post.mediaType !== "video" });
-    prepared.push({ url: uploaded.secureUrl, publicId: uploaded.publicId, resourceType: uploaded.resourceType });
+    const uploaded = await uploadFromUrl(source, {
+      forceJpeg: post.mediaType !== "video",
+      ensureInstagramAdWidth: true,
+    });
+    prepared.push({
+      url: uploaded.secureUrl,
+      publicId: uploaded.publicId,
+      resourceType: uploaded.resourceType,
+      width: uploaded.width,
+      height: uploaded.height,
+    });
     await prisma.post.update({ where: { id: post.id }, data: { igMediaManifest: prepared as unknown as Prisma.InputJsonValue } });
   }
   return prepared;

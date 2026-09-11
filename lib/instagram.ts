@@ -1,4 +1,7 @@
 import { META_GRAPH_API } from "@/lib/meta";
+import { isRetryableInstagramApiError } from "@/lib/instagramRetry";
+
+export { isRetryableInstagramApiError } from "@/lib/instagramRetry";
 
 export type InstagramMediaType = "image" | "video" | "carousel";
 
@@ -38,8 +41,10 @@ async function graphRequest<T>(url: string, init?: RequestInit): Promise<T> {
   }
   const json = await response.json().catch(() => ({})) as T & { error?: { message?: string; code?: number; is_transient?: boolean } };
   if (!response.ok || json.error) {
-    const retryable = response.status >= 500 || response.status === 429 || Boolean(json.error?.is_transient) || json.error?.code === 4 || json.error?.code === 17 || json.error?.code === 32;
-    throw new InstagramPublishError(json.error?.message ?? `Instagram API ${response.status}`, retryable);
+    const message = json.error?.message ?? `Instagram API ${response.status}`;
+    const retryable = response.status >= 500 || response.status === 429 || Boolean(json.error?.is_transient) ||
+      isRetryableInstagramApiError(json.error?.code, message);
+    throw new InstagramPublishError(message, retryable);
   }
   return json;
 }
@@ -63,8 +68,17 @@ async function waitForContainer(containerId: string, token: string): Promise<voi
     if (json.status_code === "PUBLISHED") {
       throw new InstagramPublishError("Container Instagram đã được publish; PostFlow dừng để tránh đăng trùng.");
     }
-    if (json.status_code === "ERROR" || json.status_code === "EXPIRED") {
-      throw new InstagramPublishError(json.status ?? `Instagram container ${json.status_code}`);
+    if (json.status_code === "EXPIRED") {
+      throw new InstagramPublishError(json.status ?? "Instagram container EXPIRED");
+    }
+    if (json.status_code === "ERROR") {
+      const message = json.status ?? "Instagram container ERROR";
+      // Meta can temporarily report 2207076 while it is still fetching or
+      // transcoding the video, then move that same container to FINISHED.
+      // Keep polling it and let the Queue retry the saved container later.
+      if (!isRetryableInstagramApiError(undefined, message)) {
+        throw new InstagramPublishError(message);
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
