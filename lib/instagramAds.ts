@@ -1,18 +1,23 @@
 export const APP_DEEP_LINK_TREATMENT = "deeplink_with_web_fallback" as const;
 
+export function sanitizeMetaTargeting(
+  templateTargeting: Record<string, unknown>
+): Record<string, unknown> {
+  const targeting = { ...templateTargeting };
+  delete targeting.targeting_optimization;
+  return targeting;
+}
+
 export function restrictTargetingToInstagram(
   templateTargeting: Record<string, unknown>
 ): Record<string, unknown> {
   const targeting: Record<string, unknown> = {
-    ...templateTargeting,
+    ...sanitizeMetaTargeting(templateTargeting),
     publisher_platforms: ["instagram"],
   };
   delete targeting.facebook_positions;
   delete targeting.messenger_positions;
   delete targeting.audience_network_positions;
-  // Meta removed this legacy field. Older template ad sets may still return it,
-  // but sending it back now makes ad-set creation fail with subcode 1870197.
-  delete targeting.targeting_optimization;
   // Explore home can only be selected together with the main Explore placement.
   // Templates created in Ads Manager can expose just `explore_home`, which the
   // Marketing API rejects when the ad set is cloned.

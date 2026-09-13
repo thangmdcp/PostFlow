@@ -5,6 +5,7 @@ import { CustomSelect } from "@/components/ui/CustomSelect";
 
 export interface AutoAdsAccountRowLike {
   accountId: string;
+  templateId?: string;
   weight: number;
   budgetMin: string;
   budgetMax: string;
@@ -14,11 +15,13 @@ export interface AutoAdsAccountRowLike {
 }
 
 export interface AdAccountLike { accountId: string; name: string; }
+export interface AccountTemplateLike { campaignId: string; templateName: string; adAccountId?: string; settings?: { postType?: string }; }
 
 interface EditableProps {
   readOnly?: false;
   rows: AutoAdsAccountRowLike[];
   adAccounts: AdAccountLike[];
+  templates?: AccountTemplateLike[];
   loading?: boolean;
   onPatchRow: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;
   onDeleteRow: (idx: number) => void;
@@ -30,6 +33,7 @@ interface ReadOnlyProps {
   readOnly: true;
   rows: AutoAdsAccountRowLike[];
   adAccounts: AdAccountLike[];
+  templates?: AccountTemplateLike[];
 }
 
 export type AutoAdsAccountEditorProps = EditableProps | ReadOnlyProps;
@@ -37,6 +41,7 @@ export type AutoAdsAccountEditorProps = EditableProps | ReadOnlyProps;
 export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
   const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-[5px] text-xs focus:outline-none focus:ring-2 focus:ring-violet-500";
   const { rows, adAccounts } = props;
+  const templates = props.templates ?? [];
 
   if (props.readOnly) {
     if (rows.length === 0) return null;
@@ -94,7 +99,7 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
             <div key={idx} className={["rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2", row.dirty ? "border-violet-300" : ""].join(" ")}>
               <div className="flex items-center gap-2">
                 <CustomSelect className="flex-1 min-w-0" value={row.accountId} onChange={v => onPatchRow(idx, { accountId: v })}
-                  options={adAccounts.map(a => ({ value: a.accountId, label: a.name }))} />
+                  options={adAccounts.map(a => ({ value: a.accountId, label: a.name, disabled: rows.some((other, otherIndex) => otherIndex !== idx && other.accountId === a.accountId) }))} />
                 <div className="flex items-center gap-1 shrink-0">
                   <input type="number" min={1} max={100} value={row.weight} onChange={e => onPatchRow(idx, { weight: Number(e.target.value) })}
                     className={inp + " w-14 text-center"} />
@@ -104,6 +109,12 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
                   <Trash2 size={12} />
                 </button>
               </div>
+              {templates.length > 0 && <CustomSelect value={row.templateId ?? ""} onChange={v => onPatchRow(idx, { templateId: v })}
+                placeholder="-- Chọn template của TKQC --"
+                options={templates.filter((template) => template.adAccountId === row.accountId).map((template) => ({
+                  value: template.campaignId,
+                  label: `${template.templateName} (${template.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"})`,
+                }))} />}
               <div className="space-y-1">
                 <div className="grid grid-cols-3 gap-1">
                   <div>

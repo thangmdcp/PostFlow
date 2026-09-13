@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
+import { validateAdSelection } from "@/lib/adSelection";
 
 export async function PATCH(
   req: Request,
@@ -55,6 +56,8 @@ export async function PATCH(
       post.extractedLinks.some((link) => Boolean(link.myUrl))
     );
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
+    const adSelectionError = await validateAdSelection(templateId, adAccountId);
+    if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
 
     const scheduled = await prisma.post.update({
       where: { id: params.id },

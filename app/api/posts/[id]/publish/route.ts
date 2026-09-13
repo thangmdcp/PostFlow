@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { publishDuePost } from "@/lib/publishDuePost";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
+import { validateAdSelection } from "@/lib/adSelection";
 
 export const maxDuration = 90;
 
@@ -43,6 +44,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       post.extractedLinks.some((link) => Boolean(link.myUrl))
     );
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
+    const adSelectionError = await validateAdSelection(body.templateId, body.adAccountId);
+    if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
 
     const queued = await prisma.post.update({ where: { id: post.id }, data: {
       pageId: body.pageId,

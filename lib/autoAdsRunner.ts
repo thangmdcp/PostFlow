@@ -177,7 +177,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError;
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|trường .* đã bị gỡ|field .* removed/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = isMetaRateLimited(msg);
     // A quota response needs a much longer, individually-jittered retry. It
@@ -270,13 +270,15 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
 
   const rowOverride = p.adAccountId ? accountRows.find((r) => r.accountId === p.adAccountId) : undefined;
 
-  if (rowOverride) {
-    pickedAccountId  = rowOverride.accountId;
-    pickedBudgetMin  = Number(rowOverride.budgetMin)  || 100000;
-    pickedBudgetMax  = Number(rowOverride.budgetMax)  || 200000;
-    pickedBudgetStep = Number(rowOverride.budgetStep) || 10000;
-    pickedTemplateId = rowOverride.templateId ?? cfg.autoAdsTemplateId;
-    pickedRowId      = rowOverride.id;
+  if (p.adAccountId) {
+    // Post.adAccountUsed is authoritative. AutoAdsAccount only supplies
+    // weighted defaults and must never redirect an explicit user choice.
+    pickedAccountId = p.adAccountId;
+    pickedBudgetMin = Number(rowOverride?.budgetMin ?? p.budgetMin ?? cfg.batchBudgetMin) || 100000;
+    pickedBudgetMax = Number(rowOverride?.budgetMax ?? p.budgetMax ?? cfg.batchBudgetMax) || pickedBudgetMin;
+    pickedBudgetStep = Number(rowOverride?.budgetStep ?? p.budgetStep ?? cfg.batchBudgetStep) || 1;
+    pickedTemplateId = p.templateId ?? rowOverride?.templateId ?? "";
+    pickedRowId = rowOverride?.id ?? null;
   } else if (accountRows.length > 0) {
     // Deficit-based weighted round-robin — see publish route history for why.
     const totalWeight = accountRows.reduce((s, r) => s + (Number(r.weight) || 1), 0);
@@ -305,7 +307,9 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
 
   const rawAdAccountId = pickedAccountId.replace(/^act_/, "");
   const adAccount = await prisma.fbAdAccount.findUnique({ where: { accountId: pickedAccountId } });
-  const adsAccessToken = adAccount?.accessToken ?? p.fbConnAccessToken;
+  if (!adAccount) throw new AdTemplateConfigurationError(`Không tìm thấy tài khoản quảng cáo ${pickedAccountId}; hệ thống không tự đổi sang TKQC khác.`);
+  if (!adAccount.accessToken) throw new AdTemplateConfigurationError(`Tài khoản quảng cáo ${pickedAccountId} chưa có access token.`);
+  const adsAccessToken = adAccount.accessToken;
 
   const postFull = await prisma.post.findUnique({
     where: { id: p.postId },
@@ -371,6 +375,14 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
 
   const finalTemplateId = p.templateId ?? pickedTemplateId;
   if (!finalTemplateId) throw new Error("Không xác định được template quảng cáo");
+  const templateSnapshot = await prisma.campaignTemplate.findFirst({
+    where: { campaignId: finalTemplateId },
+    select: { adAccountId: true },
+  });
+  if (!templateSnapshot) throw new AdTemplateConfigurationError("Không tìm thấy template quảng cáo đã chọn.");
+  if (templateSnapshot.adAccountId !== pickedAccountId) {
+    throw new AdTemplateConfigurationError("Template không thuộc tài khoản quảng cáo đã chọn; hệ thống đã dừng để tránh chạy sai TKQC.");
+  }
 
   // Persist the exact account and randomized parameters before the first
   // external create call. If Meta fails halfway through, the next queue

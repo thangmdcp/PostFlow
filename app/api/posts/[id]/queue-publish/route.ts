@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
+import { validateAdSelection } from "@/lib/adSelection";
 
 type QueuePublishBody = {
   pageId: string;
@@ -55,6 +56,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       post.extractedLinks.some((link) => Boolean(link.myUrl))
     );
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
+    const adSelectionError = await validateAdSelection(body.templateId, body.adAccountId);
+    if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
     const publishToFacebook = publishTargets.includes("facebook");
     const publishToInstagram = publishTargets.includes("instagram");
 

@@ -8,7 +8,7 @@ import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
 import { AutoAdsAccountEditor, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { adsPanel } from "@/lib/ui-classes";
 
-export interface CampaignTemplate { id: string; templateName: string; campaignId: string; settings?: Record<string, unknown>; }
+export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
 
 export interface BatchAdConfig {
   templateId: string;
@@ -83,9 +83,10 @@ interface AdsConfigPanelProps {
   onDeleteRow?: (idx: number) => void;
   onAddRow?: () => void;
   hideRunAdsToggle?: boolean;
+  hideTemplateSelect?: boolean;
 }
 
-export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false }: AdsConfigPanelProps) {
+export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false }: AdsConfigPanelProps) {
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
@@ -94,11 +95,11 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
       </div>
 
       {/* Template */}
-      <CampaignTemplateSelect
+      {!hideTemplateSelect && <CampaignTemplateSelect
         templates={templates} value={adConfig.templateId} onChange={v => onPatch({ templateId: v })}
         overridePublish={adConfig.overridePublish}
         onOverridePublishChange={checked => onPatch({ overridePublish: checked })}
-      />
+      />}
 
       {/* Run ads toggle */}
       {!hideRunAdsToggle && <div className="flex items-center justify-between rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5">
@@ -139,8 +140,8 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
       {/* TKQC — editable when handlers are provided (batch drawer), summary-only otherwise (pre-batch panel) */}
       {adConfig.runAds && (
         onPatchRow && onDeleteRow && onAddRow
-          ? <AutoAdsAccountEditor rows={accountRows} adAccounts={adAccounts} onPatchRow={onPatchRow} onDeleteRow={onDeleteRow} onAddRow={onAddRow} />
-          : <AutoAdsAccountEditor readOnly rows={accountRows} adAccounts={adAccounts} />
+          ? <AutoAdsAccountEditor rows={accountRows} adAccounts={adAccounts} templates={templates} onPatchRow={onPatchRow} onDeleteRow={onDeleteRow} onAddRow={onAddRow} />
+          : <AutoAdsAccountEditor readOnly rows={accountRows} adAccounts={adAccounts} templates={templates} />
       )}
 
       {/* Age / Gender / Budget */}

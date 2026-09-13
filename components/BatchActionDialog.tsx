@@ -108,7 +108,7 @@ function reusablePreset(config: BatchActionConfig) {
     publishTargets: config.publishTargets,
     pageRows: config.pageRows,
     adConfig: config.adConfig,
-    accountRows: config.accountRows.map(({ accountId, weight, budgetMin, budgetMax, budgetStep }) => ({ accountId, weight, budgetMin, budgetMax, budgetStep })),
+    accountRows: config.accountRows.map(({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep }) => ({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep })),
     scheduleMode: config.scheduleMode,
     endTime: config.endTime,
     stepMinutes: config.stepMinutes,
@@ -168,10 +168,16 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   useEffect(() => {
     const validAccounts = new Set(adAccounts.map((account) => account.accountId));
     setConfig((current) => {
-      const accountRows = current.accountRows.filter((row) => validAccounts.has(row.accountId));
-      return accountRows.length === current.accountRows.length ? current : { ...current, accountRows: applyEvenWeights(accountRows) };
+      const filtered = current.accountRows.filter((row) => validAccounts.has(row.accountId));
+      const accountRows = filtered.map((row) => {
+        if (templates.some((template) => template.campaignId === row.templateId && template.adAccountId === row.accountId)) return row;
+        const legacyTemplate = templates.find((template) => template.campaignId === current.adConfig.templateId && template.adAccountId === row.accountId);
+        const fallback = legacyTemplate ?? templates.find((template) => template.adAccountId === row.accountId);
+        return { ...row, templateId: fallback?.campaignId ?? "" };
+      });
+      return JSON.stringify(accountRows) === JSON.stringify(current.accountRows) ? current : { ...current, accountRows: applyEvenWeights(accountRows) };
     });
-  }, [adAccounts]);
+  }, [adAccounts, templates]);
 
   useEffect(() => {
     if (skipNextStorageWrite.current) {
@@ -253,6 +259,10 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
 
   function patchAccountRow(index: number, patchValue: Partial<AutoAdsAccountRowLike>) {
     setConfig((current) => {
+      if (patchValue.accountId !== undefined) {
+        const firstTemplate = templates.find((template) => template.adAccountId === patchValue.accountId);
+        patchValue = { ...patchValue, templateId: firstTemplate?.campaignId ?? "" };
+      }
       let rows = current.accountRows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patchValue } : row);
       if (patchValue.weight !== undefined) rows = rebalanceWeights(rows, index, patchValue.weight);
       return { ...current, accountRows: rows };
@@ -271,6 +281,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
           budgetMin: current.adConfig.budgetMin,
           budgetMax: current.adConfig.budgetMax,
           budgetStep: current.adConfig.budgetStep,
+          templateId: templates.find((template) => template.adAccountId === free.accountId)?.campaignId ?? "",
         }]),
       };
     });
@@ -317,7 +328,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (!weightsAreValid(config.pageRows.map((row) => ({ id: row.pageId, weight: row.weight })))) return "Tỷ lệ Page phải có tổng đúng 100%.";
     if (new Set(config.pageRows.map((row) => row.pageId)).size !== config.pageRows.length) return "Mỗi Page chỉ được chọn một lần.";
     if (needsInstagram && config.pageRows.some((row) => !connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId)) return "Tất cả Page đã chọn phải có Instagram Professional liên kết.";
-    if (runsAds && !templates.some((template) => template.campaignId === config.adConfig.templateId)) return "Chọn template Ads hợp lệ.";
+    if (runsAds && config.accountRows.some((row) => !templates.some((template) => template.campaignId === row.templateId && template.adAccountId === row.accountId))) return "Mỗi TKQC phải chọn đúng template thuộc tài khoản đó.";
     if (runsAds && !weightsAreValid(config.accountRows.map((row) => ({ id: row.accountId, weight: row.weight })))) return "Tỷ lệ TKQC phải có tổng đúng 100%.";
     if (runsAds && new Set(config.accountRows.map((row) => row.accountId)).size !== config.accountRows.length) return "Mỗi TKQC chỉ được chọn một lần.";
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
@@ -403,8 +414,8 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
             </div>
 
             <div className="space-y-5">
-              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle />}
-              {runsAds && config.accountRows.length > 0 && <div className="rounded-xl border bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/50 dark:text-slate-300"><p className="mb-1 font-semibold">Dự kiến phân Ads</p>{config.accountRows.map((row) => <p key={row.accountId}>{adAccounts.find((account) => account.accountId === row.accountId)?.name ?? row.accountId}: <b>{accountCounts[row.accountId] ?? 0} bài</b></p>)}</div>}
+              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect />}
+              {runsAds && config.accountRows.length > 0 && <div className="rounded-xl border bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/50 dark:text-slate-300"><p className="mb-1 font-semibold">Dự kiến phân Ads</p>{config.accountRows.map((row) => <p key={row.accountId}>{adAccounts.find((account) => account.accountId === row.accountId)?.name ?? row.accountId} · {templates.find((template) => template.campaignId === row.templateId)?.templateName ?? <span className="font-semibold text-red-600">Chưa chọn template</span>}: <b>{accountCounts[row.accountId] ?? 0} bài</b></p>)}</div>}
 
               <section className="overflow-hidden rounded-2xl border">
                 <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Nâng cao <ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} /></button>

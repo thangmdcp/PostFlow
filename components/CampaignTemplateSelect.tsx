@@ -6,6 +6,7 @@ export interface CampaignTemplateLike {
   id: string;
   templateName: string;
   campaignId: string;
+  adAccountId?: string;
   settings?: { postType?: string };
 }
 

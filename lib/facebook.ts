@@ -3,6 +3,7 @@ import {
   buildFacebookExistingPostCreative,
   buildInstagramExistingPostCreative,
   restrictTargetingToInstagram,
+  sanitizeMetaTargeting,
 } from "@/lib/instagramAds";
 
 // Lets the queue runner distinguish a broken template from a transient Meta
@@ -294,7 +295,7 @@ export async function cloneAdCampaign(
     throw new AdTemplateConfigurationError("Template quảng cáo không có Ad Set khả dụng. Kiểm tra lại campaign mẫu trước khi đăng.");
   }
 
-  let targeting = { ...(templateAdSet.targeting ?? {}) };
+  let targeting = sanitizeMetaTargeting(templateAdSet.targeting ?? {});
   if (source.platform === "instagram") {
     // Keep template instagram_positions when present, but hard-limit delivery
     // to Instagram and remove placement families belonging to other surfaces.

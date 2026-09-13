@@ -1469,15 +1469,19 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const id = post.id;
       const pageId = allocation.pageByPost[id];
       const accountId = allocation.accountByPost[id];
+      const account = config.accountRows.find((row) => row.accountId === accountId);
+      const templateId = runsAds ? account?.templateId : undefined;
+      const selectedTemplate = templates.find((template) => template.campaignId === templateId);
+      const postType = (selectedTemplate?.settings?.postType as "published" | "dark") ?? "published";
       const params = rolledParams[id];
       const facebookEngagement = config.publishTargets.includes("facebook");
       const comments = facebookEngagement ? resolveCommentJobs(id, config.engagement) : [];
       const common = {
         pageId,
         publishTargets: config.publishTargets,
-        templateId: runsAds ? config.adConfig.templateId : undefined,
+        templateId,
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
-        ...(runsAds && config.adConfig.postType === "dark" && params.ctaHeadline ? { ctaHeadline: params.ctaHeadline } : {}),
+        ...(runsAds && postType === "dark" && params.ctaHeadline ? { ctaHeadline: params.ctaHeadline } : {}),
         ...(comments.length ? { comments } : {}),
         storyEnabled: facebookEngagement ? config.engagement.storyEnabled : false,
         storyCount: facebookEngagement ? Number(config.engagement.storyCount) || 0 : 0,
@@ -1488,7 +1492,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               ...common,
-              ...(config.adConfig.postType === "dark" && config.adConfig.overridePublish ? { publishToPage: true } : {}),
+              ...(postType === "dark" && config.adConfig.overridePublish ? { publishToPage: true } : {}),
               ...(runsAds ? {
                 ageMinFrom: String(params.ageMin), ageMinTo: String(params.ageMin),
                 ageMaxFrom: String(params.ageMax), ageMaxTo: String(params.ageMax),

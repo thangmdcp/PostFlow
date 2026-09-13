@@ -5,7 +5,15 @@ import {
   buildFacebookExistingPostCreative,
   buildInstagramExistingPostCreative,
   restrictTargetingToInstagram,
+  sanitizeMetaTargeting,
 } from "../lib/instagramAds.ts";
+
+test("all Meta targeting removes fields retired by Meta without mutating template", () => {
+  const template = { geo_locations: { countries: ["VN"] }, targeting_optimization: "expansion_all" };
+  const result = sanitizeMetaTargeting(template);
+  assert.equal("targeting_optimization" in result, false);
+  assert.equal(template.targeting_optimization, "expansion_all");
+});
 
 test("Instagram targeting keeps template IG placements and removes other surfaces", () => {
   const template = {
