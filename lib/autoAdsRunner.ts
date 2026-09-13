@@ -157,10 +157,11 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
   // processDueAdRetries would otherwise retry it forever since it never
   // sees the count go up. Bumping it up-front means a stuck row hits
   // MAX_ATTEMPTS and gets marked failed instead of looping.
-  await prisma.post.update({
-    where: { id: params.postId },
+  const attemptClaim = await prisma.post.updateMany({
+    where: { id: params.postId, adStatus: { in: ["pending", "queued"] } },
     data: { adStatus: "creating", adAttempt: attemptNumber },
-  }).catch(() => {});
+  }).catch(() => ({ count: 0 }));
+  if (!attemptClaim.count) return { retry: false };
 
   try {
     const { campaignId, adAccountId } = await createAdCampaignForPost(params);
