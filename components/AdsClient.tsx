@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Search, Save, Globe, EyeOff } from "lucide-react";
 import { CustomSelect } from "@/components/ui/CustomSelect";
 import { META_GRAPH_API } from "@/lib/meta";
+import { getDeepLinkDisplay } from "@/lib/deepLink";
 
 // ─── Translation maps ───────────────────────────────────────────────────────
 const OBJECTIVE: Record<string, string> = {
@@ -349,6 +350,7 @@ function AdCard({ ad }: { ad: Ad & { _adsetName?: string } }) {
   const c = ad.creative;
   const thumbUrl   = c?.thumbnail_url ?? c?.image_url ?? "";
   const objectType = c?.object_type ?? "";
+  const deepLink = getDeepLinkDisplay(c?.applink_treatment);
 
   const rows = [
     { label: "Trạng thái",  value: tr(STATUS, ad.effective_status ?? ad.status) },
@@ -357,7 +359,7 @@ function AdCard({ ad }: { ad: Ad & { _adsetName?: string } }) {
     { label: "Tiêu đề",     value: c?.title ?? "" },
     { label: "Nút kêu gọi", value: tr(CTA, c?.call_to_action_type ?? "") },
     { label: "URL đích",    value: c?.link_url ?? "" },
-    { label: "Liên kết sâu", value: c?.applink_treatment && c.applink_treatment !== "web_only" ? "Đã bật" : "Chưa bật" },
+    { label: "Liên kết sâu", value: deepLink.label },
     { label: "Video ID",    value: c?.video_id ?? "" },
   ].filter(r => r.value);
 
@@ -499,6 +501,10 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
 
           <CampaignTabs data={foundCampaign as unknown as Record<string, unknown>} />
 
+          <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300">
+            Trạng thái của quảng cáo mẫu chỉ để tham khảo vì Meta có thể không trả trường liên kết sâu. Mọi Ads mới do PostFlow tạo luôn bật liên kết sâu và dùng website làm phương án dự phòng.
+          </p>
+
           <div className="flex gap-2 pt-1">
             <input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="Đặt tên template..."
               className="flex-1 rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -514,6 +520,7 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
       {templates.length > 0 && (
         <div className="space-y-3 pt-2 border-t">
           <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Templates đã lưu ({templates.length})</p>
+          <p className="text-xs text-muted-foreground">Mọi template cũ và mới đều được PostFlow ép bật liên kết sâu khi tạo Ads, không phụ thuộc dữ liệu Meta trả về lúc quét.</p>
           {templates.map(t => {
             const isOpen = expandedTemplate === t.id;
             const s = t.settings as Record<string, unknown>;
