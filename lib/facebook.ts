@@ -409,17 +409,20 @@ export async function cloneAdCampaign(
       if (!fbPostId.includes("_")) {
     // Use page access token (not ad account token) to read published posts
     const lookupToken = pageAccessToken ?? accessToken;
-    const postsRes = await fetch(
-      `${FB_API}/${pageId}/published_posts?fields=id,attachments{target{id}}&limit=10&access_token=${lookupToken}`
-    );
-    const postsData = await postsRes.json();
-    console.log("[published_posts]", JSON.stringify(postsData.data?.slice(0, 3)));
-    if (!postsData.error) {
-      const match = (postsData.data ?? []).find((p: Record<string, unknown>) => {
-        const attData = ((p.attachments as Record<string, unknown>) ?? {}).data as Record<string, unknown>[] ?? [];
-        return attData.some((a) => (a.target as Record<string, string> | undefined)?.id === fbPostId);
+    let postsUrl: string | null = `${FB_API}/${pageId}/published_posts?fields=id,attachments{target{id}}&limit=25&access_token=${lookupToken}`;
+    // Busy Pages can publish well over ten items between scheduling and Ads.
+    // Follow a bounded number of pages so a stored Reel/video ID is resolved
+    // to its real Page story ID instead of inventing pageId_videoId.
+    for (let page = 0; postsUrl && page < 8; page++) {
+      const postsRes: Response = await fetch(postsUrl);
+      const postsData = await postsRes.json();
+      if (postsData.error) break;
+      const match = (postsData.data ?? []).find((publishedPost: Record<string, unknown>) => {
+        const attData = ((publishedPost.attachments as Record<string, unknown>) ?? {}).data as Record<string, unknown>[] ?? [];
+        return attData.some((attachment) => (attachment.target as Record<string, string> | undefined)?.id === fbPostId);
       });
-      if (match) objectStoryId = match.id as string;
+      if (match) { objectStoryId = match.id as string; break; }
+      postsUrl = postsData.paging?.next ?? null;
     }
       }
     console.log("[creative] using objectStoryId:", objectStoryId);
