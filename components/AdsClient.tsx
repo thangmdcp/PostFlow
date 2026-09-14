@@ -536,6 +536,7 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
                     <div className="min-w-0">
                       <p className="text-sm font-semibold truncate">{t.templateName}</p>
                       <p className="text-[11px] text-muted-foreground truncate">{t.campaignName}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">Nguồn: {adAccounts.find((account) => account.accountId === t.adAccountId)?.name ?? t.adAccountId}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cloneAdCampaign } from "@/lib/facebook";
+import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
+import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 
 export async function POST(req: Request) {
 
@@ -56,7 +57,24 @@ export async function POST(req: Request) {
     const adAccount = adAccountId
       ? await prisma.fbAdAccount.findUnique({ where: { accountId: adAccountId } })
       : null;
-    const accessToken = adAccount?.accessToken ?? fbConn.accessToken;
+    if (!adAccount) return NextResponse.json({ error: `Không tìm thấy tài khoản quảng cáo ${resolvedAdAccountId}.` }, { status: 400 });
+    if (!adAccount.accessToken) return NextResponse.json({ error: `Tài khoản quảng cáo ${resolvedAdAccountId} chưa có access token.` }, { status: 400 });
+    const accessToken = adAccount.accessToken;
+
+    const template = await prisma.campaignTemplate.findFirst({
+      where: { campaignId: templateCampaignId },
+      select: { adAccountId: true, settings: true },
+    });
+    if (!template) return NextResponse.json({ error: "Không tìm thấy template quảng cáo đã chọn." }, { status: 400 });
+    const crossAccount = template.adAccountId !== resolvedAdAccountId;
+    let blueprint = templateBlueprintFromSettings(template.settings);
+    if (!blueprint) {
+      if (crossAccount) {
+        return NextResponse.json({ error: "Template cũ thiếu snapshot Ad Set; hãy quét và lưu lại trước khi dùng cho TKQC khác." }, { status: 400 });
+      }
+      blueprint = await fetchAdTemplateBlueprint(templateCampaignId, accessToken);
+    }
+    const portableTemplate = portableTemplateBlueprint(blueprint, crossAccount);
 
     // facebook.ts prepends act_ internally, so strip it here if present
     const rawAdAccountId = resolvedAdAccountId.replace(/^act_/, "");
@@ -73,7 +91,7 @@ export async function POST(req: Request) {
     } catch { /* ignore */ }
 
     const result = await cloneAdCampaign(
-      templateCampaignId,
+      portableTemplate.blueprint,
       post.pageId,
       instagramOnly
         ? { platform: "instagram", igPostId: post.igPostId!, instagramUserId: fbConn.instagramUserId!, destinationUrl: affUrl }
@@ -127,6 +145,6 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: msg }, { status: err instanceof AdTemplateConfigurationError ? 400 : 500 });
   }
 }

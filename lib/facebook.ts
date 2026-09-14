@@ -5,6 +5,10 @@ import {
   restrictTargetingToInstagram,
   sanitizeMetaTargeting,
 } from "@/lib/instagramAds";
+import {
+  templateBlueprintFromSettings,
+  type AdTemplateBlueprint,
+} from "@/lib/adTemplateBlueprint";
 
 // Lets the queue runner distinguish a broken template from a transient Meta
 // API failure. The former must be reported immediately instead of retried.
@@ -257,8 +261,27 @@ export interface AdCreationProgress {
   adId?: string;
 }
 
-export async function cloneAdCampaign(
+export async function fetchAdTemplateBlueprint(
   templateCampaignId: string,
+  accessToken: string,
+): Promise<AdTemplateBlueprint> {
+  const [campaignResponse, adSetsResponse] = await Promise.all([
+    fetch(`${FB_API}/${templateCampaignId}?fields=name,objective,special_ad_categories,daily_budget,lifetime_budget&access_token=${encodeURIComponent(accessToken)}`),
+    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,billing_event,optimization_goal&limit=1&access_token=${encodeURIComponent(accessToken)}`),
+  ]);
+  const campaign = await campaignResponse.json();
+  if (campaign.error) throw new Error(`[get campaign] ${campaign.error.message}`);
+  const adSets = await adSetsResponse.json();
+  if (adSets.error) throw new Error(`[get template adsets] ${adSets.error.message}`);
+  const blueprint = templateBlueprintFromSettings({ ...campaign, adsets: adSets.data ?? [] });
+  if (!blueprint) {
+    throw new AdTemplateConfigurationError("Template quảng cáo không có Ad Set/targeting khả dụng. Hãy quét và lưu lại campaign mẫu.");
+  }
+  return blueprint;
+}
+
+export async function cloneAdCampaign(
+  template: AdTemplateBlueprint,
   pageId: string,
   source: AdPostSource,
   adAccountId: string,
@@ -274,28 +297,26 @@ export async function cloneAdCampaign(
   existing: AdCreationState = {},
   onProgress?: (progress: AdCreationProgress) => Promise<void>
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
-  // 1. Get template campaign objective + adset targeting (like FB Ads tool),
-  // and convert dailyBudget (in the account's display currency, e.g. "2.75"
+  // Convert dailyBudget (in the account's display currency, e.g. "2.75"
   // USD) into the minor-unit integer the Marketing API actually expects
   // (e.g. "275" cents) — sending the display value directly only happens to
   // work for zero-decimal currencies like VND, and silently fails/creates a
   // near-zero budget for anything else (USD, EUR, ...).
-  const [campRes, adSetsRes, minorUnitBudget] = await Promise.all([
-    fetch(`${FB_API}/${templateCampaignId}?fields=name,objective,special_ad_categories,daily_budget,lifetime_budget&access_token=${accessToken}`),
-    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,billing_event,optimization_goal&access_token=${accessToken}`),
-    toFbMinorUnits(adAccountId, accessToken, dailyBudget),
-  ]);
-  dailyBudget = minorUnitBudget;
-  const camp = await campRes.json();
-  if (camp.error) throw new Error(`[get campaign] ${camp.error.message}`);
-  const adSets = await adSetsRes.json();
-  if (adSets.error) throw new Error(`[get template adsets] ${adSets.error.message}`);
-  const templateAdSet = adSets.data?.[0];
-  if (!templateAdSet) {
-    throw new AdTemplateConfigurationError("Template quảng cáo không có Ad Set khả dụng. Kiểm tra lại campaign mẫu trước khi đăng.");
+  dailyBudget = await toFbMinorUnits(adAccountId, accessToken, dailyBudget);
+
+  // Fail before creating an empty campaign when the target ad account cannot
+  // promote the selected Page. Identity belongs to the destination account,
+  // never to the account where the template was originally scanned.
+  const promotePagesResponse = await fetch(
+    `${FB_API}/act_${adAccountId}/promote_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`
+  );
+  const promotePages = await promotePagesResponse.json();
+  if (promotePages.error) throw new Error(`[page ad access] ${JSON.stringify(promotePages.error)}`);
+  if (!(promotePages.data ?? []).some((page: { id?: string }) => page.id === pageId)) {
+    throw new AdTemplateConfigurationError("Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.");
   }
 
-  let targeting = sanitizeMetaTargeting(templateAdSet.targeting ?? {});
+  let targeting = sanitizeMetaTargeting(template.targeting);
   if (source.platform === "instagram") {
     // Keep template instagram_positions when present, but hard-limit delivery
     // to Instagram and remove placement families belonging to other surfaces.
@@ -331,7 +352,7 @@ export async function cloneAdCampaign(
   }
 
   // Detect if template uses CBO (campaign-level budget)
-  const useCBO = !!(camp.daily_budget || camp.lifetime_budget);
+  const useCBO = template.useCampaignBudget;
 
   // 2. Create campaign
   // is_adset_budget_sharing_enabled is a distinct, mutually-exclusive
@@ -339,10 +360,10 @@ export async function cloneAdCampaign(
   // CBO) — FB rejects the request if both are present, so it must stay
   // false/omitted whenever we're setting an explicit campaign daily_budget.
   const campBody: Record<string, unknown> = {
-    name: campaignName || `${camp.name} [PostFlow]`,
-    objective: camp.objective,
+    name: campaignName || `${template.name} [PostFlow]`,
+    objective: template.objective,
     status: adStatus,
-    special_ad_categories: camp.special_ad_categories ?? [],
+    special_ad_categories: template.specialAdCategories,
     buying_type: "AUCTION",
     access_token: accessToken,
   };
@@ -374,11 +395,11 @@ export async function cloneAdCampaign(
     // 3. Create adset — budget + bid_strategy only at adset level when not CBO
     // (with CBO both live on the campaign instead, see above).
     const adSetBody: Record<string, unknown> = {
-      name: campaignName || `${templateAdSet.name} [PostFlow]`,
+      name: campaignName || `${template.name} [PostFlow]`,
       campaign_id: campaignId,
       targeting,
-      billing_event: templateAdSet.billing_event ?? "IMPRESSIONS",
-      optimization_goal: templateAdSet.optimization_goal ?? "LINK_CLICKS",
+      billing_event: template.billingEvent,
+      optimization_goal: template.optimizationGoal,
       status: adStatus,
       access_token: accessToken,
     };

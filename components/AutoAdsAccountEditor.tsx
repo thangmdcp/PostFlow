@@ -110,10 +110,10 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
                 </button>
               </div>
               {templates.length > 0 && <CustomSelect value={row.templateId ?? ""} onChange={v => onPatchRow(idx, { templateId: v })}
-                placeholder="-- Chọn template của TKQC --"
-                options={templates.filter((template) => template.adAccountId === row.accountId).map((template) => ({
+                placeholder="-- Chọn template --"
+                options={templates.map((template) => ({
                   value: template.campaignId,
-                  label: `${template.templateName} (${template.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"})`,
+                  label: `${template.templateName} (${template.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"}) · nguồn ${adAccounts.find((account) => account.accountId === template.adAccountId)?.name ?? template.adAccountId ?? "không rõ"}`,
                 }))} />}
               <div className="space-y-1">
                 <div className="grid grid-cols-3 gap-1">

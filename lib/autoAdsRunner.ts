@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { AdTemplateConfigurationError, cloneAdCampaign } from "@/lib/facebook";
+import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
+import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
 import { enqueueAds } from "@/lib/cloudflareQueue";
@@ -378,11 +379,20 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   if (!finalTemplateId) throw new Error("Không xác định được template quảng cáo");
   const templateSnapshot = await prisma.campaignTemplate.findFirst({
     where: { campaignId: finalTemplateId },
-    select: { adAccountId: true },
+    select: { adAccountId: true, settings: true },
   });
   if (!templateSnapshot) throw new AdTemplateConfigurationError("Không tìm thấy template quảng cáo đã chọn.");
-  if (templateSnapshot.adAccountId !== pickedAccountId) {
-    throw new AdTemplateConfigurationError("Template không thuộc tài khoản quảng cáo đã chọn; hệ thống đã dừng để tránh chạy sai TKQC.");
+  const crossAccount = templateSnapshot.adAccountId !== pickedAccountId;
+  let templateBlueprint = templateBlueprintFromSettings(templateSnapshot.settings);
+  if (!templateBlueprint) {
+    if (crossAccount) {
+      throw new AdTemplateConfigurationError("Template cũ thiếu snapshot Ad Set; hãy quét và lưu lại trước khi dùng cho TKQC khác.");
+    }
+    templateBlueprint = await fetchAdTemplateBlueprint(finalTemplateId, adsAccessToken);
+  }
+  const portableTemplate = portableTemplateBlueprint(templateBlueprint, crossAccount);
+  if (portableTemplate.removedFields.length) {
+    console.warn(`[auto-ads] stripped account-bound template fields for ${pickedAccountId}: ${portableTemplate.removedFields.join(", ")}`);
   }
 
   // Persist the exact account and randomized parameters before the first
@@ -402,7 +412,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   });
 
   const result = await cloneAdCampaign(
-    finalTemplateId,
+    portableTemplate.blueprint,
     p.pageId,
     p.adPlatform === "instagram"
       ? {
