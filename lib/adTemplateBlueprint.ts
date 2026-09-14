@@ -66,8 +66,13 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
 
   const saved = record(root.blueprint);
   if (saved?.version === AD_TEMPLATE_BLUEPRINT_VERSION) {
-    const targeting = record(saved.targeting);
-    if (typeof saved.objective !== "string" || !saved.objective || !targeting) return null;
+    const savedTargeting = record(saved.targeting);
+    if (typeof saved.objective !== "string" || !saved.objective || !savedTargeting) return null;
+    const targeting = { ...savedTargeting };
+    const targetingAutomation = normalizeTargetingAutomation(
+      saved.targetingAutomation ?? targeting.targeting_automation,
+    );
+    delete targeting.targeting_automation;
     return {
       version: AD_TEMPLATE_BLUEPRINT_VERSION,
       name: typeof saved.name === "string" ? saved.name : "PostFlow template",
@@ -75,7 +80,7 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
       specialAdCategories: stringArray(saved.specialAdCategories),
       useCampaignBudget: Boolean(saved.useCampaignBudget),
       targeting,
-      targetingAutomation: normalizeTargetingAutomation(saved.targetingAutomation),
+      targetingAutomation,
       billingEvent: typeof saved.billingEvent === "string" && saved.billingEvent ? saved.billingEvent : "IMPRESSIONS",
       optimizationGoal: typeof saved.optimizationGoal === "string" && saved.optimizationGoal ? saved.optimizationGoal : "LINK_CLICKS",
       accountBoundFields: stringArray(saved.accountBoundFields),
@@ -85,8 +90,13 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
   // Legacy templates stored the complete campaign scan directly in settings.
   const adsets = Array.isArray(root.adsets) ? root.adsets : [];
   const firstAdset = record(adsets[0]);
-  const targeting = record(firstAdset?.targeting);
-  if (typeof root.objective !== "string" || !root.objective || !firstAdset || !targeting) return null;
+  const savedTargeting = record(firstAdset?.targeting);
+  if (typeof root.objective !== "string" || !root.objective || !firstAdset || !savedTargeting) return null;
+  const targeting = { ...savedTargeting };
+  const targetingAutomation = normalizeTargetingAutomation(
+    targeting.targeting_automation ?? firstAdset.targeting_automation,
+  );
+  delete targeting.targeting_automation;
   return {
     version: AD_TEMPLATE_BLUEPRINT_VERSION,
     name: typeof root.name === "string" ? root.name : "PostFlow template",
@@ -94,7 +104,7 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
     specialAdCategories: stringArray(root.special_ad_categories),
     useCampaignBudget: Boolean(root.daily_budget || root.lifetime_budget),
     targeting,
-    targetingAutomation: normalizeTargetingAutomation(firstAdset.targeting_automation),
+    targetingAutomation,
     billingEvent: typeof firstAdset.billing_event === "string" && firstAdset.billing_event ? firstAdset.billing_event : "IMPRESSIONS",
     optimizationGoal: typeof firstAdset.optimization_goal === "string" && firstAdset.optimization_goal ? firstAdset.optimization_goal : "LINK_CLICKS",
     accountBoundFields: record(firstAdset.promoted_object)

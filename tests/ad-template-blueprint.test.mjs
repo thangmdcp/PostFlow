@@ -48,9 +48,16 @@ test("Advantage Audience preserves an explicit source value and defaults legacy 
 
   const enabled = templateBlueprintFromSettings({
     ...legacySettings,
-    adsets: [{ ...legacySettings.adsets[0], targeting_automation: { advantage_audience: 1 } }],
+    adsets: [{
+      ...legacySettings.adsets[0],
+      targeting: {
+        ...legacySettings.adsets[0].targeting,
+        targeting_automation: { advantage_audience: 1 },
+      },
+    }],
   });
   assert.deepEqual(enabled?.targetingAutomation, { advantage_audience: 1 });
+  assert.equal("targeting_automation" in enabled.targeting, false);
 });
 
 test("cross-account template strips nested account-bound assets without mutating snapshot", () => {

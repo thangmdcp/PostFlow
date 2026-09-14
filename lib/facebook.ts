@@ -267,7 +267,7 @@ export async function fetchAdTemplateBlueprint(
 ): Promise<AdTemplateBlueprint> {
   const [campaignResponse, adSetsResponse] = await Promise.all([
     fetch(`${FB_API}/${templateCampaignId}?fields=name,objective,special_ad_categories,daily_budget,lifetime_budget&access_token=${encodeURIComponent(accessToken)}`),
-    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,targeting_automation,billing_event,optimization_goal&limit=1&access_token=${encodeURIComponent(accessToken)}`),
+    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,billing_event,optimization_goal&limit=1&access_token=${encodeURIComponent(accessToken)}`),
   ]);
   const campaign = await campaignResponse.json();
   if (campaign.error) throw new Error(`[get campaign] ${campaign.error.message}`);
@@ -350,6 +350,10 @@ export async function cloneAdCampaign(
   } else {
     delete (targeting as Record<string, unknown>).genders;
   }
+  // Since Marketing API v24+, this flag is mandatory INSIDE the targeting
+  // object. Sending it as an Ad Set sibling is accepted by neither v24 nor
+  // v25 and results in OAuth subcode 1870227.
+  targeting.targeting_automation = template.targetingAutomation;
 
   // Detect if template uses CBO (campaign-level budget)
   const useCBO = template.useCampaignBudget;
@@ -398,7 +402,6 @@ export async function cloneAdCampaign(
       name: campaignName || `${template.name} [PostFlow]`,
       campaign_id: campaignId,
       targeting,
-      targeting_automation: template.targetingAutomation,
       billing_event: template.billingEvent,
       optimization_goal: template.optimizationGoal,
       status: adStatus,
