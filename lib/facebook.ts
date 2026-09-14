@@ -267,7 +267,7 @@ export async function fetchAdTemplateBlueprint(
 ): Promise<AdTemplateBlueprint> {
   const [campaignResponse, adSetsResponse] = await Promise.all([
     fetch(`${FB_API}/${templateCampaignId}?fields=name,objective,special_ad_categories,daily_budget,lifetime_budget&access_token=${encodeURIComponent(accessToken)}`),
-    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,billing_event,optimization_goal&limit=1&access_token=${encodeURIComponent(accessToken)}`),
+    fetch(`${FB_API}/${templateCampaignId}/adsets?fields=name,targeting,targeting_automation,billing_event,optimization_goal&limit=1&access_token=${encodeURIComponent(accessToken)}`),
   ]);
   const campaign = await campaignResponse.json();
   if (campaign.error) throw new Error(`[get campaign] ${campaign.error.message}`);
@@ -398,6 +398,7 @@ export async function cloneAdCampaign(
       name: campaignName || `${template.name} [PostFlow]`,
       campaign_id: campaignId,
       targeting,
+      targeting_automation: template.targetingAutomation,
       billing_event: template.billingEvent,
       optimization_goal: template.optimizationGoal,
       status: adStatus,

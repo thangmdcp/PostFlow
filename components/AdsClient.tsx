@@ -156,6 +156,7 @@ interface Adset {
   budget_remaining?: string; destination_type?: string;
   pacing_type?: string[]; attribution_spec?: AttributionSpec[];
   targeting?: Targeting; start_time?: string; end_time?: string;
+  targeting_automation?: { advantage_audience?: 0 | 1 };
   promoted_object?: Record<string, string>;
   ads?: Ad[];
 }
@@ -309,6 +310,7 @@ function AdsetDetail({ adset }: { adset: Adset }) {
     { label: "Chiến lược giá thầu", value: tr(BID_STRATEGY,      adset.bid_strategy ?? "") },
     { label: "Mục tiêu tối ưu",     value: tr(OPTIMIZATION_GOAL, adset.optimization_goal ?? "") },
     { label: "Sự kiện tính tiền",   value: tr(BILLING_EVENT,     adset.billing_event ?? "") },
+    { label: "Đối tượng Advantage", value: adset.targeting_automation?.advantage_audience === 1 ? "Bật" : "Tắt" },
     { label: "Giá thầu tối đa",     value: fmtBudget(adset.bid_amount) },
     { label: "Ngân sách ngày",      value: fmtBudget(adset.daily_budget) },
     { label: "Ngân sách trọn đời",  value: fmtBudget(adset.lifetime_budget) },
@@ -410,11 +412,13 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
         "optimization_goal", "billing_event", "bid_strategy", "bid_amount",
         "daily_budget", "lifetime_budget", "budget_remaining",
         "destination_type", "pacing_type", "attribution_spec",
+        "targeting_automation",
         "promoted_object", "start_time", "end_time",
         "targeting{age_min,age_max,genders,geo_locations,locales,publisher_platforms,facebook_positions,instagram_positions,device_platforms,flexible_spec,exclusions,custom_audiences,excluded_custom_audiences}",
       ].join(",");
       const aRes = await fetch(`${META_GRAPH_API}/${found.id}/adsets?fields=${adsetFields}&limit=50&access_token=${account.accessToken}`);
       const aData = await aRes.json();
+      if (aData.error) throw new Error(aData.error.message);
       const adsets: Adset[] = aData.data || [];
 
       // Fetch ads for each adset in parallel

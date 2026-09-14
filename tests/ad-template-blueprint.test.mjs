@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   normalizeCampaignTemplateSettings,
+  normalizeTargetingAutomation,
   portableTemplateBlueprint,
   templateBlueprintFromSettings,
   templatePortability,
@@ -35,7 +36,21 @@ test("legacy campaign scan becomes a frozen portable blueprint", () => {
   assert.equal(blueprint?.name, "Chạy Ẩn");
   assert.equal(blueprint?.objective, "OUTCOME_TRAFFIC");
   assert.equal(blueprint?.useCampaignBudget, true);
+  assert.deepEqual(blueprint?.targetingAutomation, { advantage_audience: 0 });
   assert.equal(normalized?.postType, "dark");
+});
+
+test("Advantage Audience preserves an explicit source value and defaults legacy templates off", () => {
+  assert.deepEqual(normalizeTargetingAutomation(undefined), { advantage_audience: 0 });
+  assert.deepEqual(normalizeTargetingAutomation({ advantage_audience: 0 }), { advantage_audience: 0 });
+  assert.deepEqual(normalizeTargetingAutomation({ advantage_audience: 1 }), { advantage_audience: 1 });
+  assert.deepEqual(normalizeTargetingAutomation({ advantage_audience: 2 }), { advantage_audience: 0 });
+
+  const enabled = templateBlueprintFromSettings({
+    ...legacySettings,
+    adsets: [{ ...legacySettings.adsets[0], targeting_automation: { advantage_audience: 1 } }],
+  });
+  assert.deepEqual(enabled?.targetingAutomation, { advantage_audience: 1 });
 });
 
 test("cross-account template strips nested account-bound assets without mutating snapshot", () => {

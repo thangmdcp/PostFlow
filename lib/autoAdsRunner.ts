@@ -179,7 +179,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|trường .* đã bị gỡ|field .* removed/i.test(msg);
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = isMetaRateLimited(msg);
     // A quota response needs a much longer, individually-jittered retry. It

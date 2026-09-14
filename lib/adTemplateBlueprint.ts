@@ -7,6 +7,7 @@ export interface AdTemplateBlueprint {
   specialAdCategories: string[];
   useCampaignBudget: boolean;
   targeting: Record<string, unknown>;
+  targetingAutomation: { advantage_audience: 0 | 1 };
   billingEvent: string;
   optimizationGoal: string;
   accountBoundFields: string[];
@@ -49,6 +50,16 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+/**
+ * Meta requires every new Ad Set to explicitly opt in or out of Advantage
+ * Audience. Older template snapshots predate that requirement, so preserve
+ * their manual targeting by opting out instead of letting Meta expand it.
+ */
+export function normalizeTargetingAutomation(value: unknown): { advantage_audience: 0 | 1 } {
+  const source = record(value);
+  return { advantage_audience: source?.advantage_audience === 1 ? 1 : 0 };
+}
+
 export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlueprint | null {
   const root = record(settings);
   if (!root) return null;
@@ -64,6 +75,7 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
       specialAdCategories: stringArray(saved.specialAdCategories),
       useCampaignBudget: Boolean(saved.useCampaignBudget),
       targeting,
+      targetingAutomation: normalizeTargetingAutomation(saved.targetingAutomation),
       billingEvent: typeof saved.billingEvent === "string" && saved.billingEvent ? saved.billingEvent : "IMPRESSIONS",
       optimizationGoal: typeof saved.optimizationGoal === "string" && saved.optimizationGoal ? saved.optimizationGoal : "LINK_CLICKS",
       accountBoundFields: stringArray(saved.accountBoundFields),
@@ -82,6 +94,7 @@ export function templateBlueprintFromSettings(settings: unknown): AdTemplateBlue
     specialAdCategories: stringArray(root.special_ad_categories),
     useCampaignBudget: Boolean(root.daily_budget || root.lifetime_budget),
     targeting,
+    targetingAutomation: normalizeTargetingAutomation(firstAdset.targeting_automation),
     billingEvent: typeof firstAdset.billing_event === "string" && firstAdset.billing_event ? firstAdset.billing_event : "IMPRESSIONS",
     optimizationGoal: typeof firstAdset.optimization_goal === "string" && firstAdset.optimization_goal ? firstAdset.optimization_goal : "LINK_CLICKS",
     accountBoundFields: record(firstAdset.promoted_object)
