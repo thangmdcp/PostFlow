@@ -33,6 +33,7 @@ import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 import { BatchActionDialog, type BatchActionConfig, type BatchEngagementConfig } from "@/components/BatchActionDialog";
+import { SubIdPresetPicker } from "@/components/SubIdPresetPicker";
 import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAction";
 import {
   COMPOSER_DRAFT_KEY,
@@ -1628,6 +1629,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
         <div className="flex items-center gap-2 shrink-0">
+          <SubIdPresetPicker value={subIdConfig} onChange={setSubIdConfig} />
           {subIdConfig.map((cfg, i) => (
             <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm để ghim cố định" : "Đã ghim cố định cho mọi bài — bấm để chuyển sang tự động tăng số"}>
               <input type="text" value={cfg.text}
