@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { FbConnection, FbAdAccount, CampaignTemplate } from "@prisma/client";
+import type { CampaignTemplate } from "@prisma/client";
+import type { PublicFbConnection, PublicFbAdAccount } from "@/lib/publicFacebook";
 import { Link2, Wrench, Palette, Megaphone } from "lucide-react";
 import { ConnectionsClient } from "@/components/ConnectionsClient";
 import { SetupClient } from "@/components/SetupClient";
@@ -19,8 +20,8 @@ const TABS: { key: SettingsTab; label: string; href: string; icon: typeof Link2 
 
 interface SettingsClientProps {
   initialTab: SettingsTab;
-  connections: FbConnection[];
-  savedAdAccounts: FbAdAccount[];
+  connections: PublicFbConnection[];
+  savedAdAccounts: PublicFbAdAccount[];
   campaignTemplates?: CampaignTemplate[];
 }
 

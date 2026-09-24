@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Bookmark, Pencil, Trash2, X, Check, Plus, Loader2, Users } from "lucide-react";
-import type { FbConnection } from "@prisma/client";
+import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { useToast } from "@/components/ui/toast";
 
 interface PagePreset { id: string; name: string; pageIds: string[] }

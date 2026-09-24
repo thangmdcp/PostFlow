@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import useSWR, { mutate as globalMutate, type KeyedMutator } from "swr";
 import * as XLSX from "xlsx";
-import type { Post, ExtractedLink, FbConnection, PostComment } from "@prisma/client";
+import type { Post, ExtractedLink, PostComment } from "@prisma/client";
+import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { publicFbAdAccountSelect } from "@/lib/publicFacebook";
 
 export async function GET() {
-  const accounts = await prisma.fbAdAccount.findMany({ orderBy: { createdAt: "desc" } });
+    const accounts = await prisma.fbAdAccount.findMany({ select: publicFbAdAccountSelect, orderBy: { createdAt: "desc" } });
   return NextResponse.json(accounts);
 }
 
@@ -17,7 +18,8 @@ export async function POST(req: Request) {
       update: { name, accessToken },
       create: { accountId, name, accessToken },
     });
-    return NextResponse.json(account);
+    const { accessToken: _accessToken, ...publicAccount } = account;
+    return NextResponse.json(publicAccount);
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Lỗi server" },

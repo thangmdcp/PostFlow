@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { publicFbConnectionSelect } from "@/lib/publicFacebook";
 
 export async function GET() {
-  const connections = await prisma.fbConnection.findMany({ orderBy: { createdAt: "desc" } });
+  const connections = await prisma.fbConnection.findMany({ select: publicFbConnectionSelect, orderBy: { createdAt: "desc" } });
   return NextResponse.json(connections);
 }
 
@@ -20,7 +21,8 @@ export async function POST(req: Request) {
       create: { pageId, pageName, accessToken, instagramUserId: instagramUserId ?? null, instagramUsername: instagramUsername ?? null, instagramProfilePicture: instagramProfilePicture ?? null },
     });
 
-    return NextResponse.json(conn);
+    const { accessToken: _accessToken, ...publicConnection } = conn;
+    return NextResponse.json(publicConnection);
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Lỗi server" },

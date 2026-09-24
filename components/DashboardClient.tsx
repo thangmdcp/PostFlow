@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import type { Post, ExtractedLink, FbConnection, FbAdAccount, PostComment } from "@prisma/client";
+import type { Post, ExtractedLink, PostComment } from "@prisma/client";
+import type { PublicFbConnection as FbConnection, PublicFbAdAccount as FbAdAccount } from "@/lib/publicFacebook";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { formatDate, truncate } from "@/lib/utils";

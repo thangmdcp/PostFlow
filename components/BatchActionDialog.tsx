@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, Check, ChevronDown, Clock, Loader2, Plus, Send, Trash2, X } from "lucide-react";
-import type { FbConnection } from "@prisma/client";
+import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { BatchPresetBar } from "@/components/BatchPresetBar";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";

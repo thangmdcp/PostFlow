@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Bookmark, ChevronDown, Loader2 } from "lucide-react";
-import type { FbConnection } from "@prisma/client";
+import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
 import { CustomSelect } from "@/components/ui/CustomSelect";
 

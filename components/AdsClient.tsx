@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { FbAdAccount, CampaignTemplate } from "@prisma/client";
+import type { CampaignTemplate } from "@prisma/client";
+import type { PublicFbAdAccount } from "@/lib/publicFacebook";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Search, Save, Globe, EyeOff } from "lucide-react";
 import { CustomSelect } from "@/components/ui/CustomSelect";
-import { META_GRAPH_API } from "@/lib/meta";
 import { getDeepLinkDisplay } from "@/lib/deepLink";
 
 // ─── Translation maps ───────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ interface Campaign {
   buying_type?: string; start_time?: string; stop_time?: string;
   special_ad_categories?: string[]; adsets?: Adset[];
 }
-interface Props { adAccounts: FbAdAccount[]; templates: CampaignTemplate[]; }
+interface Props { adAccounts: PublicFbAdAccount[]; templates: CampaignTemplate[]; }
 
 // ─── Ad (nội dung QC) block ───────────────────────────────────────────────────
 // ─── Info row (shared) ────────────────────────────────────────────────────────
@@ -401,33 +401,10 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
     if (!account || !campName.trim()) { show("Chọn TKQC và nhập tên camp", "error"); return; }
     setSearching(true); setFoundCampaign(null);
     try {
-      const campFields = "id,name,status,effective_status,objective,daily_budget,lifetime_budget,budget_remaining,spend_cap,bid_strategy,buying_type,start_time,stop_time,special_ad_categories,configured_status";
-      const res = await fetch(`${META_GRAPH_API}/${account.accountId}/campaigns?fields=${campFields}&limit=200&access_token=${account.accessToken}`);
+      const res = await fetch(`/api/ads/campaigns?adAccountId=${encodeURIComponent(account.accountId)}&query=${encodeURIComponent(campName.trim())}`);
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
-      const found: Campaign | undefined = (data.data as Campaign[]).find(c => c.name.toLowerCase().includes(campName.trim().toLowerCase()));
-      if (!found) { show("Không tìm thấy camp với tên này", "error"); return; }
-      const adsetFields = [
-        "id", "name", "status", "effective_status", "campaign_id",
-        "optimization_goal", "billing_event", "bid_strategy", "bid_amount",
-        "daily_budget", "lifetime_budget", "budget_remaining",
-        "destination_type", "pacing_type", "attribution_spec",
-        "promoted_object", "start_time", "end_time",
-        "targeting{age_min,age_max,genders,geo_locations,locales,publisher_platforms,facebook_positions,instagram_positions,device_platforms,flexible_spec,exclusions,custom_audiences,excluded_custom_audiences,targeting_automation}",
-      ].join(",");
-      const aRes = await fetch(`${META_GRAPH_API}/${found.id}/adsets?fields=${adsetFields}&limit=50&access_token=${account.accessToken}`);
-      const aData = await aRes.json();
-      if (aData.error) throw new Error(aData.error.message);
-      const adsets: Adset[] = aData.data || [];
-
-      // Fetch ads for each adset in parallel
-      await Promise.all(adsets.map(async (adset) => {
-        const adRes = await fetch(`${META_GRAPH_API}/${adset.id}/ads?fields=id,name,status,effective_status,creative{id,name,body,title,object_type,call_to_action_type,link_url,image_url,thumbnail_url,video_id,applink_treatment}&limit=20&access_token=${account!.accessToken}`);
-        const adData = await adRes.json();
-        adset.ads = adData.data || [];
-      }));
-
-      found.adsets = adsets;
+      if (!res.ok || data.error) throw new Error(data.error || "Không thể quét campaign");
+      const found = data.campaign as Campaign;
       setFoundCampaign(found);
       setTemplateName(found.name);
     } catch (err: unknown) {

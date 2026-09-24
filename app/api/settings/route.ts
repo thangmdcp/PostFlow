@@ -9,6 +9,9 @@ const ENV_PATH = path.join(process.cwd(), ".env.local");
 // specific keys so the Setup UI can still tell whether they're configured.
 const KNOWN_ENV_KEYS = [
   "DATABASE_URL",
+  "META_GRAPH_API_VERSION",
+  "FACEBOOK_CLIENT_ID",
+  "FACEBOOK_CLIENT_SECRET",
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
@@ -16,6 +19,14 @@ const KNOWN_ENV_KEYS = [
   "AUTODOWN_API_KEY",
   "AUTODOWN_BASE_URL",
 ];
+
+const SECRET_ENV_KEYS = new Set([
+  "DATABASE_URL",
+  "FACEBOOK_CLIENT_SECRET",
+  "CLOUDINARY_API_SECRET",
+  "RAPIDAPI_KEY",
+  "AUTODOWN_API_KEY",
+]);
 
 function parseEnv(content: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -49,6 +60,12 @@ export async function GET() {
 
   for (const key of KNOWN_ENV_KEYS) {
     if (!vars[key] && process.env[key]) vars[key] = process.env[key]!;
+  }
+
+  // The Setup page only needs to know that a secret exists. Never serialize
+  // credentials into a Client Component or an API response.
+  for (const key of SECRET_ENV_KEYS) {
+    if (vars[key]) vars[key] = "__CONFIGURED__";
   }
 
   return NextResponse.json({ vars, writable });
