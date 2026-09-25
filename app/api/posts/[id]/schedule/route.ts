@@ -4,13 +4,15 @@ import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
 import { validateAdSelection } from "@/lib/adSelection";
+import { Prisma } from "@prisma/client";
+import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, adBudget, comments, storyEnabled, storyCount, publishTargets } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, adBudget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -25,6 +27,7 @@ export async function PATCH(
       comments?: { text: string; imageUrl?: string }[];
       storyEnabled?: boolean; storyCount?: number;
       publishTargets?: PublishTarget[];
+      adPlacements?: AdPlacementConfig;
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
@@ -58,6 +61,14 @@ export async function PATCH(
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
     const adSelectionError = await validateAdSelection(templateId, adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
+    const parsedPlacements = templateId ? parseAdPlacementConfig(adPlacements) : null;
+    if (templateId) {
+      const placementError = validateAdPlacements(parsedPlacements, {
+        instagramOnly: targets.length === 1 && targets[0] === "instagram",
+        hasInstagram: Boolean(connection.instagramUserId),
+      });
+      if (placementError) return NextResponse.json({ error: placementError }, { status: 400 });
+    }
 
     const scheduled = await prisma.post.update({
       where: { id: params.id },
@@ -83,6 +94,7 @@ export async function PATCH(
         fbErrorMsg: null,
         igErrorMsg: null,
         adTemplateId: templateId ?? null,
+        adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(ctaHeadline ? { ctaHeadline } : {}),
         ...(adStatus ? { adPublishStatus: adStatus } : {}),
         // A normal re-schedule intentionally clears preparation mode.

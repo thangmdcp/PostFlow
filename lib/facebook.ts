@@ -9,6 +9,7 @@ import {
   templateBlueprintFromSettings,
   type AdTemplateBlueprint,
 } from "@/lib/adTemplateBlueprint";
+import { applyAdPlacements, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 
 // Lets the queue runner distinguish a broken template from a transient Meta
 // API failure. The former must be reported immediately instead of retried.
@@ -244,7 +245,7 @@ export async function getAdAccounts(
 }
 
 export type AdPostSource =
-  | { platform: "facebook"; fbPostId: string }
+  | { platform: "facebook"; fbPostId: string; instagramUserId?: string }
   | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string };
 
 export interface AdCreationState {
@@ -294,6 +295,7 @@ export async function cloneAdCampaign(
   gender?: string,
   adStatus: "ACTIVE" | "PAUSED" = "PAUSED",
   startTime?: Date,
+  placementOverride?: AdPlacementConfig,
   existing: AdCreationState = {},
   onProgress?: (progress: AdCreationProgress) => Promise<void>
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
@@ -316,27 +318,39 @@ export async function cloneAdCampaign(
     throw new AdTemplateConfigurationError("Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.");
   }
 
-  let targeting = sanitizeMetaTargeting(template.targeting);
-  if (source.platform === "instagram") {
-    // Keep template instagram_positions when present, but hard-limit delivery
-    // to Instagram and remove placement families belonging to other surfaces.
-    targeting = restrictTargetingToInstagram(targeting);
+  const needsInstagramIdentity = source.platform === "instagram"
+    || Boolean(placementOverride?.publisherPlatforms.some((platform) => platform === "instagram" || platform === "threads"));
+  const instagramIdentityId = source.instagramUserId;
+  if (needsInstagramIdentity) {
+    if (!instagramIdentityId) {
+      throw new AdTemplateConfigurationError("Placement Instagram/Threads yêu cầu Page đã liên kết Instagram Professional.");
+    }
     const instagramAccountsRes = await fetch(
       `${FB_API}/act_${adAccountId}/instagram_accounts?fields=id&access_token=${encodeURIComponent(accessToken)}`
     );
     const instagramAccounts = await instagramAccountsRes.json();
-    if (instagramAccounts.error) {
-      throw new Error(`[instagram ad access] ${JSON.stringify(instagramAccounts.error)}`);
-    }
-    const canAdvertiseIdentity = (instagramAccounts.data ?? []).some(
-      (account: { id?: string }) => account.id === source.instagramUserId
-    );
-    if (!canAdvertiseIdentity) {
+    if (instagramAccounts.error) throw new Error(`[instagram ad access] ${JSON.stringify(instagramAccounts.error)}`);
+    if (!(instagramAccounts.data ?? []).some((account: { id?: string }) => account.id === instagramIdentityId)) {
       throw new AdTemplateConfigurationError(
         "Tài khoản quảng cáo chưa được cấp quyền dùng tài khoản Instagram đã chọn. Hãy thêm Instagram vào Business Portfolio/Ad Account."
       );
     }
-  } else {
+  }
+
+  let targeting = sanitizeMetaTargeting(template.targeting);
+  if (placementOverride) {
+    const placementError = validateAdPlacements(placementOverride, {
+      instagramOnly: source.platform === "instagram",
+      hasInstagram: true,
+    });
+    if (placementError) throw new AdTemplateConfigurationError(placementError);
+    targeting = applyAdPlacements(targeting, placementOverride);
+  }
+  if (source.platform === "instagram") {
+    // Keep template instagram_positions when present, but hard-limit delivery
+    // to Instagram and remove placement families belonging to other surfaces.
+    targeting = restrictTargetingToInstagram(targeting);
+  } else if (!placementOverride) {
     // Preserve the legacy Facebook flow: omitting instagram_positions lets
     // Meta use the template/Advantage+ placement combination it already used.
     delete (targeting as Record<string, unknown>).instagram_positions;

@@ -7,6 +7,8 @@ import { AdParametersForm } from "@/components/AdParametersForm";
 import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
 import { AutoAdsAccountEditor, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { adsPanel } from "@/lib/ui-classes";
+import { AdPlacementSelector } from "@/components/AdPlacementSelector";
+import type { AdPlacementConfig } from "@/lib/adPlacements";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
 
@@ -26,6 +28,7 @@ export interface BatchAdConfig {
   // account is picked; see pickAccountAndBudget below.
   budgetMin: string; budgetMax: string; budgetStep: string;
   adStatus: "ACTIVE" | "PAUSED";
+  placements?: AdPlacementConfig;
 }
 
 export interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
@@ -84,9 +87,12 @@ interface AdsConfigPanelProps {
   onAddRow?: () => void;
   hideRunAdsToggle?: boolean;
   hideTemplateSelect?: boolean;
+  showPlacements?: boolean;
+  instagramOnly?: boolean;
+  hasInstagram?: boolean;
 }
 
-export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false }: AdsConfigPanelProps) {
+export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true }: AdsConfigPanelProps) {
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
@@ -157,6 +163,15 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
             gender={adConfig.gender} onGenderChange={v => onPatch({ gender: v })}
           />
         </div>
+      )}
+
+      {adConfig.runAds && showPlacements && (
+        <AdPlacementSelector
+          value={adConfig.placements}
+          onChange={(placements) => onPatch({ placements })}
+          instagramOnly={instagramOnly}
+          hasInstagram={hasInstagram}
+        />
       )}
     </div>
   );

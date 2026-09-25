@@ -4,6 +4,8 @@ import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
 import { validateAdSelection } from "@/lib/adSelection";
+import { Prisma } from "@prisma/client";
+import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 
 type QueuePublishBody = {
   pageId: string;
@@ -20,6 +22,7 @@ type QueuePublishBody = {
   storyEnabled?: boolean;
   storyCount?: number;
   publishTargets?: PublishTarget[];
+  adPlacements?: AdPlacementConfig;
 };
 
 // The browser only records the user's choices and asks the trusted Vercel
@@ -58,6 +61,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
     const adSelectionError = await validateAdSelection(body.templateId, body.adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
+    const parsedPlacements = body.templateId ? parseAdPlacementConfig(body.adPlacements) : null;
+    if (body.templateId) {
+      const placementError = validateAdPlacements(parsedPlacements, {
+        instagramOnly: publishTargets.length === 1 && publishTargets[0] === "instagram",
+        hasInstagram: Boolean(connection.instagramUserId),
+      });
+      if (placementError) return NextResponse.json({ error: placementError }, { status: 400 });
+    }
     const publishToFacebook = publishTargets.includes("facebook");
     const publishToInstagram = publishTargets.includes("instagram");
 
@@ -83,6 +94,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         ...(publishToFacebook && !post.fbPostId ? { fbPublishStatus: "pending", fbErrorMsg: null } : {}),
         ...(publishToInstagram && !post.igPostId ? { igPublishStatus: "pending", igErrorMsg: null } : {}),
         adTemplateId: body.templateId ?? null,
+        adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}),
         ...(body.adStatus ? { adPublishStatus: body.adStatus } : {}),
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),

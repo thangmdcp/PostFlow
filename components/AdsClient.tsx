@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Search, Save, Globe, EyeOff } from "lucide-react";
 import { CustomSelect } from "@/components/ui/CustomSelect";
 import { getDeepLinkDisplay } from "@/lib/deepLink";
+import { templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 
 // ─── Translation maps ───────────────────────────────────────────────────────
 const OBJECTIVE: Record<string, string> = {
@@ -47,7 +48,7 @@ const BILLING_EVENT: Record<string, string> = {
 };
 const PLATFORM: Record<string, string> = {
   facebook: "Facebook", instagram: "Instagram",
-  audience_network: "Audience Network", messenger: "Messenger",
+  audience_network: "Audience Network", messenger: "Messenger", threads: "Threads",
 };
 const FB_POSITION: Record<string, string> = {
   // Facebook
@@ -60,6 +61,9 @@ const FB_POSITION: Record<string, string> = {
   // Instagram
   stream: "Bảng tin", explore: "Khám phá", explore_home: "Trang chủ Khám phá",
   ig_search: "Tìm kiếm Instagram", reels_overlay: "Reels (overlay)",
+  messenger_home: "Hộp thư Messenger", sponsored_messages: "Tin nhắn được tài trợ",
+  classic: "Ứng dụng & website", rewarded_video: "Video có thưởng",
+  threads_stream: "Bảng tin Threads", profile_reels: "Reels cá nhân",
 };
 const DEVICE: Record<string, string> = {
   mobile: "Di động", desktop: "Máy tính",
@@ -126,6 +130,8 @@ interface Targeting {
   locales?: number[];
   publisher_platforms?: string[]; facebook_positions?: string[];
   instagram_positions?: string[]; device_platforms?: string[];
+  messenger_positions?: string[]; audience_network_positions?: string[];
+  threads_positions?: string[];
   flexible_spec?: FlexibleSpec[];
   exclusions?: FlexibleSpec;
   custom_audiences?: { id: string; name: string }[];
@@ -332,6 +338,9 @@ function AdsetDetail({ adset }: { adset: Adset }) {
     if (t.publisher_platforms?.length)   rows.push({ label: "Nền tảng",         value: t.publisher_platforms.map(p => tr(PLATFORM,   p)).join(", ") });
     if (t.facebook_positions?.length)    rows.push({ label: "Vị trí Facebook",  value: t.facebook_positions.map(p => tr(FB_POSITION, p)).join(", ") });
     if (t.instagram_positions?.length)   rows.push({ label: "Vị trí Instagram", value: t.instagram_positions.map(p => tr(FB_POSITION, p)).join(", ") });
+    if (t.messenger_positions?.length)   rows.push({ label: "Vị trí Messenger", value: t.messenger_positions.map(p => tr(FB_POSITION, p)).join(", ") });
+    if (t.audience_network_positions?.length) rows.push({ label: "Vị trí Audience Network", value: t.audience_network_positions.map(p => tr(FB_POSITION, p)).join(", ") });
+    if (t.threads_positions?.length) rows.push({ label: "Vị trí Threads", value: t.threads_positions.map(p => tr(FB_POSITION, p)).join(", ") });
     if (t.device_platforms?.length)      rows.push({ label: "Thiết bị",         value: t.device_platforms.map(p => tr(DEVICE, p)).join(", ") });
     const interests = t.flexible_spec?.flatMap(s => s.interests ?? []).map(i => i.name) ?? [];
     if (interests.length) rows.push({ label: "Sở thích", value: interests.join(", ") });
@@ -504,6 +513,9 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
           {templates.map(t => {
             const isOpen = expandedTemplate === t.id;
             const s = t.settings as Record<string, unknown>;
+            const targeting = templateBlueprintFromSettings(s)?.targeting;
+            const placementPlatforms = Array.isArray(targeting?.publisher_platforms) ? targeting.publisher_platforms.filter((item): item is string => typeof item === "string") : [];
+            const placementDevices = Array.isArray(targeting?.device_platforms) ? targeting.device_platforms.filter((item): item is string => typeof item === "string") : [];
             return (
               <div key={t.id} className="rounded-xl border shadow-sm overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-muted/20 transition-colors" onClick={() => setExpandedTemplate(isOpen ? null : t.id)}>
@@ -517,6 +529,10 @@ export function AdsClient({ adAccounts, templates: initialTemplates }: Props) {
                       <p className="text-sm font-semibold truncate">{t.templateName}</p>
                       <p className="text-[11px] text-muted-foreground truncate">{t.campaignName}</p>
                       <p className="text-[10px] text-muted-foreground truncate">Nguồn: {adAccounts.find((account) => account.accountId === t.adAccountId)?.name ?? t.adAccountId}</p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {placementPlatforms.length ? placementPlatforms.map((platform) => <span key={platform} className="rounded bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">{tr(PLATFORM, platform)}</span>) : <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Không có dữ liệu placement</span>}
+                        {placementDevices.map((device) => <span key={device} className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{tr(DEVICE, device)}</span>)}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

@@ -4,6 +4,7 @@ import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/
 import { randomStep, randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
 import { enqueueAds } from "@/lib/cloudflareQueue";
+import { parseAdPlacementConfig, type AdPlacementConfig } from "@/lib/adPlacements";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -66,6 +67,7 @@ export interface AutoAdsRunParams {
   budgetMin?: string; budgetMax?: string; budgetStep?: string; // explicit per-row budget — the batch table already rolled and displayed this value, so it must be the one actually used, not re-rolled from the TKQC account's own range
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
   adStartAt?: Date; // prepared campaigns are created before this time
+  adPlacements?: AdPlacementConfig;
 }
 
 export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
@@ -151,6 +153,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
     adStatus: (post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
     adStartAt: post.adStartAt ?? undefined,
+    adPlacements: parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
   };
   // Record the attempt count BEFORE calling out to Facebook, not just on
   // completion — if the serverless invocation dies mid-call, the row is
@@ -179,7 +182,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed/i.test(msg);
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = isMetaRateLimited(msg);
     // A quota response needs a much longer, individually-jittered retry. It
@@ -421,7 +424,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
           instagramUserId: p.instagramUserId!,
           destinationUrl: p.destinationUrl!,
         }
-      : { platform: "facebook", fbPostId: p.fbPostId! },
+      : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId },
     rawAdAccountId,
     adsAccessToken,
     dailyBudget,
@@ -432,6 +435,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     effGender,
     p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED",
     p.adStartAt,
+    p.adPlacements,
     {
       campaignId: postFull?.adCampaignId,
       adSetId: postFull?.adSetId,

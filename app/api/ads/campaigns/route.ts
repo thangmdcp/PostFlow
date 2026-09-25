@@ -36,7 +36,7 @@ export async function GET(req: Request) {
   const adsetFields = [
     "id", "name", "status", "effective_status", "campaign_id", "optimization_goal", "billing_event", "bid_strategy", "bid_amount",
     "daily_budget", "lifetime_budget", "budget_remaining", "destination_type", "pacing_type", "attribution_spec", "promoted_object", "start_time", "end_time",
-    "targeting{age_min,age_max,genders,geo_locations,locales,publisher_platforms,facebook_positions,instagram_positions,device_platforms,flexible_spec,exclusions,custom_audiences,excluded_custom_audiences,targeting_automation}",
+    "targeting{age_min,age_max,genders,geo_locations,locales,publisher_platforms,facebook_positions,instagram_positions,messenger_positions,audience_network_positions,threads_positions,device_platforms,flexible_spec,exclusions,custom_audiences,excluded_custom_audiences,targeting_automation}",
   ].join(",");
   const adsetsUrl = new URL(`${META_GRAPH_API}/${campaign.id}/adsets`);
   adsetsUrl.searchParams.set("fields", adsetFields);

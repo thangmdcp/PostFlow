@@ -26,6 +26,7 @@ import type { PublishTarget } from "@/lib/publishTargets";
 import { cloudinaryCommentPublicId, collectCommentImageUrls, replaceCommentImageUrls } from "@/lib/commentImages";
 import { dateToVnSchedule, scheduleValidation } from "@/lib/schedulePlan";
 import { templatePortability } from "@/lib/adTemplateBlueprint";
+import { EMPTY_AD_PLACEMENTS, parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
 
 export interface BatchPageRow {
   pageId: string;
@@ -88,7 +89,11 @@ function mergeSaved(defaults: BatchActionConfig, saved: Partial<BatchActionConfi
     ...saved,
     publishTargets: Array.isArray(saved.publishTargets) ? saved.publishTargets.filter(validTarget) : defaults.publishTargets,
     pageRows: Array.isArray(saved.pageRows) ? saved.pageRows : defaults.pageRows,
-    adConfig: { ...defaults.adConfig, ...(saved.adConfig ?? {}) },
+    adConfig: {
+      ...defaults.adConfig,
+      ...(saved.adConfig ?? {}),
+      placements: parseAdPlacementConfig(saved.adConfig?.placements) ?? defaults.adConfig.placements ?? EMPTY_AD_PLACEMENTS,
+    },
     accountRows: Array.isArray(saved.accountRows) ? saved.accountRows : defaults.accountRows,
     engagement: { ...defaults.engagement, ...(saved.engagement ?? {}) },
   };
@@ -151,6 +156,8 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   const needsInstagram = config.publishTargets.includes("instagram");
   const hasFacebook = config.publishTargets.includes("facebook");
   const runsAds = kind === "prepare" || config.runMode === "publish_and_ads";
+  const instagramOnlyAds = config.publishTargets.length === 1 && config.publishTargets[0] === "instagram";
+  const selectedPagesHaveInstagram = config.pageRows.length > 0 && config.pageRows.every((row) => Boolean(connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId));
   const eligibleConnections = useMemo(
     () => connections.filter((connection) => !needsInstagram || !!connection.instagramUserId),
     [connections, needsInstagram],
@@ -338,6 +345,10 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (runsAds && new Set(config.accountRows.map((row) => row.accountId)).size !== config.accountRows.length) return "Mỗi TKQC chỉ được chọn một lần.";
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
     if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom))) return "Kiểm tra lại dải độ tuổi Ads.";
+    if (runsAds) {
+      const placementError = validateAdPlacements(config.adConfig.placements, { instagramOnly: instagramOnlyAds, hasInstagram: selectedPagesHaveInstagram });
+      if (placementError) return placementError;
+    }
     if (kind === "prepare" && new Date(`${config.adLaunchAt}:00+07:00`).getTime() <= Date.now() + 60_000) return "Giờ bắt đầu Ads phải muộn hơn hiện tại ít nhất 1 phút.";
     if (kind === "schedule") {
       const scheduleError = scheduleValidation({ ids: ["preview"], mode: config.scheduleMode, baseTime: config.baseTime, manualTime: config.manualTime, stepMinutes: config.stepMinutes, postsPerDay: config.postsPerDay, endTime: config.endTime });
@@ -419,7 +430,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
             </div>
 
             <div className="space-y-5">
-              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect />}
+              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect showPlacements instagramOnly={instagramOnlyAds} hasInstagram={selectedPagesHaveInstagram} />}
               {runsAds && config.accountRows.length > 0 && <div className="space-y-2 rounded-xl border bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
                 <p className="font-semibold">Dự kiến phân Ads</p>
                 {config.accountRows.map((row) => {

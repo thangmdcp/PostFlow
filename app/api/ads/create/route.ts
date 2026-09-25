@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
+import { parseAdPlacementConfig } from "@/lib/adPlacements";
 
 export async function POST(req: Request) {
 
@@ -95,7 +96,7 @@ export async function POST(req: Request) {
       post.pageId,
       instagramOnly
         ? { platform: "instagram", igPostId: post.igPostId!, instagramUserId: fbConn.instagramUserId!, destinationUrl: affUrl }
-        : { platform: "facebook", fbPostId: post.fbPostId! },
+        : { platform: "facebook", fbPostId: post.fbPostId!, instagramUserId: fbConn.instagramUserId ?? undefined },
       rawAdAccountId,
       accessToken,
       dailyBudget ?? "100000",
@@ -106,6 +107,7 @@ export async function POST(req: Request) {
       gender,
       adStatus ?? "PAUSED",
       undefined,
+      parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
       {
         campaignId: post.adCampaignId,
         adSetId: post.adSetId,

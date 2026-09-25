@@ -1482,6 +1482,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         pageId,
         publishTargets: config.publishTargets,
         templateId,
+        ...(runsAds ? { adPlacements: config.adConfig.placements } : {}),
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
         ...(runsAds && postType === "dark" && params.ctaHeadline ? { ctaHeadline: params.ctaHeadline } : {}),
         ...(comments.length ? { comments } : {}),
