@@ -309,7 +309,35 @@ export async function ensureAdAssetAccess(
       {},
       { adAccountId: normalizedId },
     );
-    if (!(promotePages.data ?? []).some((page) => page.id === pageId)) {
+    let canPromotePage = (promotePages.data ?? []).some((page) => page.id === pageId);
+    // A Page newly shared as a partner asset can appear in the ad account's
+    // owning Business client_pages before Meta adds it to promote_pages.
+    // Treat that authoritative Business assignment as valid instead of
+    // blocking legitimate partner Pages indefinitely.
+    if (!canPromotePage) {
+      const account = await metaJson<{ business?: { id?: string } }>(
+        `${FB_API}/act_${normalizedId}?fields=business{id}&access_token=${encodeURIComponent(accessToken)}`,
+        {},
+        { adAccountId: normalizedId },
+      );
+      const businessId = account.business?.id;
+      if (businessId) {
+        const [ownedPages, clientPages] = await Promise.all([
+          metaJson<{ data?: Array<{ id?: string }> }>(
+            `${FB_API}/${businessId}/owned_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
+            {},
+            { adAccountId: normalizedId },
+          ),
+          metaJson<{ data?: Array<{ id?: string }> }>(
+            `${FB_API}/${businessId}/client_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
+            {},
+            { adAccountId: normalizedId },
+          ),
+        ]);
+        canPromotePage = [...(ownedPages.data ?? []), ...(clientPages.data ?? [])].some((page) => page.id === pageId);
+      }
+    }
+    if (!canPromotePage) {
       errorMsg = "Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.";
     }
     if (!errorMsg && instagramUserId) {
