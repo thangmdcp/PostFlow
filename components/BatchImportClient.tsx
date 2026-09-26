@@ -42,6 +42,7 @@ import {
 } from "@/lib/subIdPreset";
 import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAction";
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
+import { FetchStatusDetail } from "@/components/FetchStatusDetail";
 import {
   COMPOSER_DRAFT_KEY,
   batchDraftKey,
@@ -2256,10 +2257,14 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         <div className="space-y-1">
           <StatusBadge status={status} />
           <PlatformPublishStatus post={post} />
-          {status === "fetching" && post.errorMsg && (
+          {status === "fetching" && post.errorMsg && !post.fetchErrorCode && (
             <span className="block text-[9px] leading-tight text-blue-500">{post.errorMsg}</span>
           )}
-          {(status === "failed" || status === "partial") && post.errorMsg && (
+          <FetchStatusDetail status={status} errorMsg={post.errorMsg} fetchAttempt={post.fetchAttempt}
+            fetchNextAttemptAt={post.fetchNextAttemptAt} fetchProvider={post.fetchProvider}
+            fetchErrorCode={post.fetchErrorCode} fetchHttpStatus={post.fetchHttpStatus}
+            fetchDiagnostics={post.fetchDiagnostics} />
+          {(status === "failed" || status === "partial") && post.errorMsg && !post.fetchErrorCode && (
             <div className="flex items-center gap-1">
               <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
               <button onClick={async () => {

@@ -16,8 +16,8 @@ export interface FetchedPostFields {
 // best media (raw URLs only; the app's own Cloudinary upload happens at
 // publish time). AutoDown-sourced videos already come with a `temp/`
 // Cloudinary public_id, which routes cleanup/skip-reupload logic downstream.
-export async function fetchPostFields(sourceUrl: string): Promise<FetchedPostFields> {
-  const data = await fetchPostData(sourceUrl);
+export async function fetchPostFields(sourceUrl: string, options: { skipAutoDown?: boolean } = {}): Promise<FetchedPostFields> {
+  const data = await fetchPostData(sourceUrl, options);
   const caption = data.caption ?? "";
   const links = extractLinks(caption);
 
@@ -66,15 +66,9 @@ export async function fetchPostFields(sourceUrl: string): Promise<FetchedPostFie
 // RapidAPI may temporarily reject a burst of Facebook fallback requests with
 // 429. Retry only that transient failure with a small backoff; other errors
 // (private/deleted link, invalid media, etc.) should surface immediately.
-export async function fetchPostFieldsWithRetry(sourceUrl: string): Promise<FetchedPostFields> {
-  const delays = [5_000, 15_000];
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fetchPostFields(sourceUrl);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("429") || attempt >= delays.length) throw error;
-      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
-    }
-  }
+export async function fetchPostFieldsWithRetry(sourceUrl: string, options: { skipAutoDown?: boolean } = {}): Promise<FetchedPostFields> {
+  // Durable retry/backoff is owned by Cloudflare Queue + Post.fetchNextAttemptAt.
+  // Keeping sleeps inside a Vercel invocation wastes runtime and loses state if
+  // that invocation is terminated.
+  return fetchPostFields(sourceUrl, options);
 }

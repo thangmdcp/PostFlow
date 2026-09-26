@@ -1,5 +1,7 @@
-import { autodownExtract, autodownDownload } from "@/lib/autodown";
+import { autodownDownload } from "@/lib/autodown";
+import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
 import { prisma } from "@/lib/prisma";
+import { classifyRapidApiStatus, parseRetryAfter, sourceDiagnostic, SourceFetchError, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
 
 export interface RapidApiMedia {
   url: string;
@@ -44,7 +46,10 @@ async function getRapidApiKeys(): Promise<string[]> {
 // fetch — only throw once every key has been exhausted.
 async function withKeyRotation<T>(fn: (key: string) => Promise<T>): Promise<T> {
   const keys = await getRapidApiKeys();
-  if (keys.length === 0) throw new Error("Chưa cấu hình RAPIDAPI_KEY");
+  if (keys.length === 0) throw new SourceFetchError({
+    provider: "rapidapi", code: "RAPIDAPI_NOT_CONFIGURED",
+    message: "Chưa cấu hình RAPIDAPI_KEY.", retryable: false,
+  });
 
   let lastErr: unknown;
   for (const key of keys) {
@@ -52,20 +57,12 @@ async function withKeyRotation<T>(fn: (key: string) => Promise<T>): Promise<T> {
       return await fn(key);
     } catch (err) {
       lastErr = err;
-      const status = err instanceof RapidApiQuotaError ? err.status : undefined;
-      if (status === 429 || status === 403) continue;
+      const status = err instanceof SourceFetchError ? err.httpStatus : undefined;
+      if (status === 429 || status === 401 || status === 403) continue;
       throw err;
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("Tất cả RAPIDAPI_KEY đều hết lượt");
-}
-
-class RapidApiQuotaError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
 }
 
 // AutoDown is fast and can run concurrently. RapidAPI is the fallback only
@@ -84,49 +81,56 @@ async function throughRapidApiGate<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// AutoDown is the preferred path for public FB/TikTok videos (no watermark,
-// already hosted on Cloudinary). It only supports that one case, so any
-// failure or non-video result falls straight through to RapidAPI unchanged.
-async function fetchViaAutoDown(url: string): Promise<RapidApiPostData | null> {
-  const meta = await autodownExtract(url);
-  if (!meta || meta.type !== "video") return null;
-
+// AutoDown's /download already returns caption and stable Cloudinary media.
+// Calling /extract first made yt-dlp parse every Facebook Reel twice.
+async function fetchViaAutoDown(url: string): Promise<RapidApiPostData> {
   const downloaded = await autodownDownload(url);
-  if (!downloaded || !downloaded.media?.length) return null;
+  if (!downloaded?.media?.length) throw new SourceFetchError({
+    provider: "autodown", code: "AUTODOWN_EMPTY_MEDIA",
+    message: "AutoDown không trả về media.", retryable: true, httpStatus: 502, retryAfterSeconds: 30,
+  });
 
   const media: RapidApiMedia[] = downloaded.media.map((m) => ({
     url: m.url,
     type: m.type,
     publicId: m.public_id,
-    // AutoDown's /download response has no thumbnail field — carry over the
-    // one from /extract so the batch table can still show a preview image.
-    thumbnail: m.type === "video" ? meta.thumbnail || undefined : undefined,
+    thumbnail: m.type === "video" ? downloaded.thumbnail : undefined,
   }));
-  return { caption: downloaded.caption ?? meta.caption ?? "", media };
+  return { caption: downloaded.caption ?? "", media };
 }
 
 async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
-  return throughRapidApiGate(() => withKeyRotation(async (key) => fetchFacebookPostWithKey(url, key)));
+  await assertFetchProviderAvailable("rapidapi");
+  try {
+    const result = await throughRapidApiGate(() => withKeyRotation(async (key) => fetchFacebookPostWithKey(url, key)));
+    await recordFetchProviderSuccess("rapidapi");
+    return result;
+  } catch (cause) {
+    const error = cause instanceof SourceFetchError ? cause : networkSourceError(cause, "FB API");
+    await recordFetchProviderFailure(error);
+    throw error;
+  }
 }
 
 async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
-  const res = await fetch(
-    `https://facebook-scraper3.p.rapidapi.com/post?post_url=${encodeURIComponent(url)}`,
-    {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "x-rapidapi-key": apiKey,
-        "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
-      },
-      signal: AbortSignal.timeout(30_000),
-    }
-  );
-
-  if (res.status === 429 || res.status === 403) {
-    throw new RapidApiQuotaError(res.status, `FB API error: ${res.status} ${res.statusText}`);
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://facebook-scraper3.p.rapidapi.com/post?post_url=${encodeURIComponent(url)}`,
+      {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "x-rapidapi-key": apiKey,
+          "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
+        },
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+  } catch (cause) {
+    throw networkSourceError(cause, "FB API");
   }
-  if (!res.ok) throw new Error(`FB API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw rapidApiResponseError(res, "FB API");
 
   const data = await res.json();
   const post = (data?.results ?? (Array.isArray(data) ? data[0] : data)) as Record<string, unknown>;
@@ -163,13 +167,22 @@ async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<Ra
 }
 
 async function fetchGenericPost(url: string): Promise<RapidApiPostData> {
-  return throughRapidApiGate(() => withKeyRotation(async (key) => fetchGenericPostWithKey(url, key)));
+  await assertFetchProviderAvailable("rapidapi");
+  try {
+    const result = await throughRapidApiGate(() => withKeyRotation(async (key) => fetchGenericPostWithKey(url, key)));
+    await recordFetchProviderSuccess("rapidapi");
+    return result;
+  } catch (cause) {
+    const error = cause instanceof SourceFetchError ? cause : networkSourceError(cause, "RapidAPI");
+    await recordFetchProviderFailure(error);
+    throw error;
+  }
 }
 
 async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<RapidApiPostData> {
-  const res = await fetch(
-    "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink",
-    {
+  let res: Response;
+  try {
+    res = await fetch("https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -178,13 +191,11 @@ async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<Rap
       },
       body: JSON.stringify({ url }),
       signal: AbortSignal.timeout(30_000),
-    }
-  );
-
-  if (res.status === 429 || res.status === 403) {
-    throw new RapidApiQuotaError(res.status, `RapidAPI error: ${res.status} ${res.statusText}`);
+    });
+  } catch (cause) {
+    throw networkSourceError(cause, "RapidAPI");
   }
-  if (!res.ok) throw new Error(`RapidAPI error: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw rapidApiResponseError(res, "RapidAPI");
 
   const data = await res.json();
 
@@ -209,14 +220,53 @@ async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<Rap
   return { title: data.title as string | undefined, caption, media };
 }
 
-export async function fetchPostData(url: string): Promise<RapidApiPostData> {
+export async function fetchPostData(url: string, options: { skipAutoDown?: boolean } = {}): Promise<RapidApiPostData> {
   const isFb = isFacebookUrl(url);
-  if (isFb || isTikTokUrl(url)) {
-    const viaAutoDown = await fetchViaAutoDown(url);
-    if (viaAutoDown) return viaAutoDown;
+  let autodownDiagnostic: SourceFetchDiagnostic | null = null;
+  if (!options.skipAutoDown && (isFb || isTikTokUrl(url))) {
+    try {
+      return await fetchViaAutoDown(url);
+    } catch (error) {
+      autodownDiagnostic = sourceDiagnostic(error);
+    }
   }
-  if (isFb) {
-    return fetchFacebookPost(url);
+  try {
+    return isFb ? await fetchFacebookPost(url) : await fetchGenericPost(url);
+  } catch (cause) {
+    if (!(cause instanceof SourceFetchError) || !autodownDiagnostic) throw cause;
+    throw new SourceFetchError({
+      provider: cause.provider,
+      code: cause.code,
+      message: cause.message,
+      httpStatus: cause.httpStatus,
+      retryable: cause.retryable,
+      retryAfterSeconds: cause.retryAfterSeconds,
+      diagnostics: [autodownDiagnostic, ...cause.diagnostics],
+    });
   }
-  return fetchGenericPost(url);
+}
+
+function rapidApiResponseError(response: Response, label: string): SourceFetchError {
+  const status = response.status;
+  const { code, retryable } = classifyRapidApiStatus(status);
+  return new SourceFetchError({
+    provider: "rapidapi",
+    code,
+    message: `${label} trả HTTP ${status} ${response.statusText}`.trim(),
+    httpStatus: status,
+    retryable,
+    retryAfterSeconds: parseRetryAfter(response.headers.get("retry-after")),
+  });
+}
+
+function networkSourceError(cause: unknown, label: string): SourceFetchError {
+  const timeout = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
+  return new SourceFetchError({
+    provider: "rapidapi",
+    code: timeout ? "RAPIDAPI_TIMEOUT" : "RAPIDAPI_NETWORK_ERROR",
+    message: timeout ? `${label} phản hồi quá thời gian cho phép.` : `Không kết nối được ${label}.`,
+    httpStatus: timeout ? 504 : 503,
+    retryable: true,
+    retryAfterSeconds: 30,
+  });
 }

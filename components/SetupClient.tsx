@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS "Post" (
   "pageId" TEXT,
   "scheduledAt" TIMESTAMP(3),
   "status" TEXT NOT NULL DEFAULT 'fetching',
+  "fetchAttempt" INTEGER DEFAULT 0,
+  "fetchNextAttemptAt" TIMESTAMP(3),
+  "fetchProvider" TEXT,
+  "fetchErrorCode" TEXT,
+  "fetchHttpStatus" INTEGER,
+  "fetchLeaseUntil" TIMESTAMP(3),
+  "fetchDiagnostics" JSONB,
   "fbPostId" TEXT,
   "fbPostUrl" TEXT,
   "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE,
@@ -95,6 +102,13 @@ ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adDestinationUrl" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adSetId" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adCreativeId" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adId" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchAttempt" INTEGER DEFAULT 0;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchNextAttemptAt" TIMESTAMP(3);
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchProvider" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchErrorCode" TEXT;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchHttpStatus" INTEGER;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchLeaseUntil" TIMESTAMP(3);
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchDiagnostics" JSONB;
 UPDATE "Post" SET "fbPublishStatus"='done' WHERE "fbPostId" IS NOT NULL AND "fbPublishStatus" IS NULL;
 UPDATE "Post" SET "adPlatform"='facebook' WHERE "adPlatform" IS NULL;
 
@@ -107,6 +121,18 @@ CREATE TABLE IF NOT EXISTS "CampaignTemplate" (
   "settings" JSONB NOT NULL DEFAULT '{}',
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS "FetchProviderState" (
+  "provider" TEXT PRIMARY KEY,
+  "consecutiveFailures" INTEGER NOT NULL DEFAULT 0,
+  "failureWindowStartedAt" TIMESTAMP(3),
+  "blockedUntil" TIMESTAMP(3),
+  "lastErrorCode" TEXT,
+  "lastHttpStatus" INTEGER,
+  "lastSuccessAt" TIMESTAMP(3),
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "FetchProviderState_blockedUntil_idx" ON "FetchProviderState"("blockedUntil");
 
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$ BEGIN NEW."updatedAt" = CURRENT_TIMESTAMP; RETURN NEW; END; $$ language 'plpgsql';

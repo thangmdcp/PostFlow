@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { processFetchPost } from "@/lib/fetchPostJob";
 import { enqueueFetch, enqueuePublish } from "@/lib/cloudflareQueue";
@@ -22,6 +23,15 @@ export async function POST(
       where: { id: params.id },
       data: {
         status: "queued", errorMsg: null,
+        ...(!retryPublish ? {
+          fetchAttempt: 0,
+          fetchNextAttemptAt: null,
+          fetchProvider: null,
+          fetchErrorCode: null,
+          fetchHttpStatus: null,
+          fetchLeaseUntil: null,
+          fetchDiagnostics: Prisma.JsonNull,
+        } : {}),
         ...(retryPublish && post.publishToFacebook && !post.fbPostId ? { fbPublishStatus: "pending", fbErrorMsg: null } : {}),
         ...(retryPublish && post.publishToInstagram && !post.igPostId ? { igPublishStatus: "pending", igErrorMsg: null } : {}),
       },

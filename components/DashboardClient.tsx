@@ -22,6 +22,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
+import { FetchStatusDetail } from "@/components/FetchStatusDetail";
 import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
@@ -1216,7 +1217,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <StatusBadge status={post.status} />
                         <PlatformPublishStatus post={post} />
-                        {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.adStatus === "failed" ? metaErrorDisplay(post.errorMsg).label : post.errorMsg}</p>}
+                        <FetchStatusDetail status={post.status} errorMsg={post.errorMsg} fetchAttempt={post.fetchAttempt}
+                          fetchNextAttemptAt={post.fetchNextAttemptAt} fetchProvider={post.fetchProvider}
+                          fetchErrorCode={post.fetchErrorCode} fetchHttpStatus={post.fetchHttpStatus}
+                          fetchDiagnostics={post.fetchDiagnostics} />
+                        {post.errorMsg && !post.fetchErrorCode && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.adStatus === "failed" ? metaErrorDisplay(post.errorMsg).label : post.errorMsg}</p>}
                       </td>
                     )}
 

@@ -32,6 +32,13 @@ model Post {
   pageId         String?
   scheduledAt    DateTime?
   status         String          @default("fetching")
+  fetchAttempt       Int?      @default(0)
+  fetchNextAttemptAt DateTime?
+  fetchProvider      String?
+  fetchErrorCode     String?
+  fetchHttpStatus    Int?
+  fetchLeaseUntil    DateTime?
+  fetchDiagnostics   Json?
   fbPostId       String?
   fbObjectStoryId String?
   fbPostUrl      String?
@@ -148,6 +155,19 @@ model MetaThrottleState {
   updatedAt          DateTime  @updatedAt
 
   @@index([scopeType, scopeId])
+  @@index([blockedUntil])
+}
+
+model FetchProviderState {
+  provider               String    @id
+  consecutiveFailures    Int       @default(0)
+  failureWindowStartedAt DateTime?
+  blockedUntil           DateTime?
+  lastErrorCode          String?
+  lastHttpStatus         Int?
+  lastSuccessAt          DateTime?
+  updatedAt              DateTime  @updatedAt
+
   @@index([blockedUntil])
 }
 

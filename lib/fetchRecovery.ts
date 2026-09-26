@@ -1,48 +1,58 @@
 import { prisma } from "@/lib/prisma";
 import { enqueueFetch } from "@/lib/cloudflareQueue";
 
-const UNCLAIMED_ERROR = "Worker chưa nhận job trong 90 giây. Hãy bấm Thử lại.";
-const RECOVERING_MESSAGE = "Đang khôi phục job…";
+const RECOVERING_MESSAGE = "Đang khôi phục Fetch Worker…";
+const DELIVERY_GRACE_MS = 5 * 60_000;
 
 /**
- * Make a single, durable recovery attempt for fetch jobs which never reached
- * a consumer. This is safe to call from both batch polling and the minute
- * cron: status transitions act as the claim and prevent duplicate enqueueing.
+ * Re-enqueue only jobs whose processing lease expired or whose due queue job
+ * has not been claimed for five minutes. Duplicate delivery is harmless: the
+ * conditional lease claim in processFetchPost allows only one provider call.
  */
 export async function recoverFetchJobs(batchId?: string): Promise<number> {
   const scope = batchId ? { batchId } : {};
-  const staleBefore = new Date(Date.now() - 90_000);
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - DELIVERY_GRACE_MS);
 
-  await prisma.post.updateMany({
-    where: { ...scope, status: "queued", errorMsg: null, updatedAt: { lt: staleBefore } },
-    data: { status: "failed", errorMsg: UNCLAIMED_ERROR },
-  });
-  await prisma.post.updateMany({
-    where: { ...scope, status: "queued", errorMsg: RECOVERING_MESSAGE, updatedAt: { lt: staleBefore } },
-    data: { status: "failed", errorMsg: "Worker vẫn chưa nhận job sau khi tự khôi phục. Hãy thử lại." },
-  });
-
-  const recoverable = await prisma.post.findMany({
-    where: { ...scope, status: "failed", errorMsg: UNCLAIMED_ERROR },
+  const expiredLeases = await prisma.post.findMany({
+    where: {
+      ...scope,
+      status: "fetching",
+      OR: [
+        { fetchLeaseUntil: { lte: now } },
+        { fetchLeaseUntil: null, updatedAt: { lt: staleBefore } },
+      ],
+    },
     select: { id: true },
     take: 50,
   });
-  if (!recoverable.length) return 0;
-
-  const ids = recoverable.map((post) => post.id);
-  const claim = await prisma.post.updateMany({
-    where: { id: { in: ids }, status: "failed", errorMsg: UNCLAIMED_ERROR },
-    data: { status: "queued", errorMsg: RECOVERING_MESSAGE },
+  const expiredIds = expiredLeases.map((post) => post.id);
+  if (expiredIds.length) await prisma.post.updateMany({
+    where: { id: { in: expiredIds }, status: "fetching" },
+    data: {
+      status: "queued",
+      errorMsg: RECOVERING_MESSAGE,
+      fetchLeaseUntil: null,
+      fetchNextAttemptAt: now,
+    },
   });
-  if (claim.count === 0) return 0;
 
-  const queued = await Promise.all(ids.map((id) => enqueueFetch(id)));
-  const failedIds = ids.filter((_, index) => !queued[index]);
-  if (failedIds.length) {
-    await prisma.post.updateMany({
-      where: { id: { in: failedIds }, status: "queued", errorMsg: RECOVERING_MESSAGE },
-      data: { status: "failed", errorMsg: "Không thể đưa job vào Queue. Hãy thử lại." },
-    });
-  }
-  return ids.length - failedIds.length;
+  const recoverable = await prisma.post.findMany({
+    where: {
+      ...scope,
+      status: "queued",
+      updatedAt: { lt: staleBefore },
+      OR: [{ fetchNextAttemptAt: null }, { fetchNextAttemptAt: { lte: now } }],
+    },
+    select: { id: true },
+    take: 50,
+  });
+  const ids = [...new Set([...expiredIds, ...recoverable.map((post) => post.id)])];
+  if (!ids.length) return 0;
+  await prisma.post.updateMany({
+    where: { id: { in: ids }, status: "queued" },
+    data: { errorMsg: RECOVERING_MESSAGE },
+  });
+  const results = await Promise.all(ids.map((id) => enqueueFetch(id)));
+  return results.filter(Boolean).length;
 }
