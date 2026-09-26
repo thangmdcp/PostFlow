@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueueAds } from "@/lib/cloudflareQueue";
 import { validateAdSelection } from "@/lib/adSelection";
+import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 
 export async function POST(request: Request) {
   const secret = process.env.CRON_SECRET?.trim();
@@ -27,6 +28,12 @@ export async function POST(request: Request) {
   const results = [];
   for (let index = 0; index < posts.length; index++) {
     const post = posts[index];
+    try {
+      await preflightPostAdPermission(post, true);
+    } catch (error) {
+      results.push({ postId: post.id, queued: false, reason: error instanceof Error ? error.message : "permission_check_failed" });
+      continue;
+    }
     const claim = await prisma.post.updateMany({
       where: { id: post.id, adId: null, adStatus: { in: ["pending", "failed"] } },
       data: { adStatus: "queued", adNextAttemptAt: null, errorMsg: null },

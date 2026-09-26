@@ -1,5 +1,6 @@
 import { META_GRAPH_API } from "@/lib/meta";
 import { isRetryableInstagramApiError } from "@/lib/instagramRetry";
+import { metaRequestJson, MetaApiError } from "@/lib/metaApiClient";
 
 export { isRetryableInstagramApiError } from "@/lib/instagramRetry";
 
@@ -32,21 +33,17 @@ export class InstagramPublishError extends Error {
   }
 }
 
-async function graphRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  let response: Response;
+async function graphRequest<T>(url: string, init?: RequestInit, instagramUserId?: string): Promise<T> {
   try {
-    response = await fetch(url, init);
+    return (await metaRequestJson<T>(url, init, { instagramUserId })).data;
   } catch (error) {
+    if (error instanceof MetaApiError) {
+      const retryable = error.category === "rate_limit" || error.category === "transient" ||
+        isRetryableInstagramApiError(error.code, error.message);
+      throw new InstagramPublishError(error.message, retryable);
+    }
     throw new InstagramPublishError(error instanceof Error ? error.message : "Không kết nối được Instagram API", true);
   }
-  const json = await response.json().catch(() => ({})) as T & { error?: { message?: string; code?: number; is_transient?: boolean } };
-  if (!response.ok || json.error) {
-    const message = json.error?.message ?? `Instagram API ${response.status}`;
-    const retryable = response.status >= 500 || response.status === 429 || Boolean(json.error?.is_transient) ||
-      isRetryableInstagramApiError(json.error?.code, message);
-    throw new InstagramPublishError(message, retryable);
-  }
-  return json;
 }
 
 async function createContainer(userId: string, token: string, body: Record<string, unknown>): Promise<string> {
@@ -54,15 +51,17 @@ async function createContainer(userId: string, token: string, body: Record<strin
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...body, access_token: token }),
-  });
+  }, userId);
   if (!json.id) throw new InstagramPublishError("Instagram không trả về media container");
   return json.id;
 }
 
-async function waitForContainer(containerId: string, token: string): Promise<void> {
+async function waitForContainer(containerId: string, token: string, instagramUserId: string): Promise<void> {
   for (let attempt = 0; attempt < 12; attempt++) {
     const json = await graphRequest<{ status_code?: string; status?: string }>(
-      `${META_GRAPH_API}/${containerId}?fields=status_code,status&access_token=${encodeURIComponent(token)}`
+      `${META_GRAPH_API}/${containerId}?fields=status_code,status&access_token=${encodeURIComponent(token)}`,
+      undefined,
+      instagramUserId,
     );
     if (json.status_code === "FINISHED") return;
     if (json.status_code === "PUBLISHED") {
@@ -102,7 +101,7 @@ async function createPublishContainer(input: InstagramPublishInput): Promise<str
       image_url: imageUrl, is_carousel_item: true,
     })
   ));
-  await Promise.all(children.map((child) => waitForContainer(child, input.accessToken)));
+  await Promise.all(children.map((child) => waitForContainer(child, input.accessToken, input.instagramUserId)));
   return createContainer(input.instagramUserId, input.accessToken, {
     media_type: "CAROUSEL", children, caption: input.caption,
   });
@@ -112,17 +111,19 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
   if (!input.mediaUrls.length) throw new InstagramPublishError("Instagram yêu cầu bài có ảnh hoặc video");
   const containerId = input.existingContainerId ?? await createPublishContainer(input);
   if (!input.existingContainerId) await input.onContainerCreated?.(containerId);
-  await waitForContainer(containerId, input.accessToken);
+  await waitForContainer(containerId, input.accessToken, input.instagramUserId);
   const published = await graphRequest<{ id: string }>(`${META_GRAPH_API}/${input.instagramUserId}/media_publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ creation_id: containerId, access_token: input.accessToken }),
-  });
+  }, input.instagramUserId);
   await input.onMediaPublished?.(published.id);
   let permalink = "";
   try {
     const media = await graphRequest<{ permalink?: string }>(
-      `${META_GRAPH_API}/${published.id}?fields=permalink&access_token=${encodeURIComponent(input.accessToken)}`
+      `${META_GRAPH_API}/${published.id}?fields=permalink&access_token=${encodeURIComponent(input.accessToken)}`,
+      undefined,
+      input.instagramUserId,
     );
     permalink = media.permalink ?? "";
   } catch {

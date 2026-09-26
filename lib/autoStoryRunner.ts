@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { publishStoryToPage } from "@/lib/facebook";
 import { enqueueStory } from "@/lib/cloudflareQueue";
+import { MetaApiError } from "@/lib/metaApiClient";
 
 // Story delivery is delayed and retried by Cloudflare Queue. Supabase keeps
 // status/history only; no Vercel timer or cron sweep owns this work.
@@ -64,9 +65,16 @@ export async function topUpPageStories(pageId: string, storyCount: number, prefe
   }));
 }
 
-export async function attemptStory(postId: string): Promise<{ retry: boolean }> {
+export async function attemptStory(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const existing = await prisma.post.findUnique({ where: { id: postId } });
   if (!existing || existing.storyStatus === "done" || existing.storyStatus === "failed") return { retry: false };
+  if (existing.storyStatus === "creating") {
+    if (existing.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };
+    await prisma.post.updateMany({
+      where: { id: postId, storyStatus: "creating", updatedAt: { lte: new Date(Date.now() - 10 * 60_000) } },
+      data: { storyStatus: "pending" },
+    });
+  }
   const attemptNumber = (existing.storyAttempt ?? 0) + 1;
   // Bump the attempt counter BEFORE calling Facebook — same crash-loop
   // safety pattern as attemptAutoAds/attemptComment.
@@ -92,6 +100,23 @@ export async function attemptStory(postId: string): Promise<{ retry: boolean }> 
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-story failed";
     console.error(`[auto-story] post ${postId} attempt ${attemptNumber} failed:`, msg);
+
+    if (err instanceof MetaApiError && err.category === "rate_limit") {
+      const retryAfterSeconds = Math.max(60, err.retryAfterSeconds ?? 300);
+      await prisma.post.update({
+        where: { id: postId },
+        data: { storyStatus: "pending", storyAttempt: existing.storyAttempt, storyNextAttemptAt: new Date(Date.now() + retryAfterSeconds * 1000), errorMsg: `[quota] ${msg}` },
+      }).catch(() => {});
+      return { retry: true, retryAfterSeconds };
+    }
+
+    if (err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category)) {
+      await prisma.post.update({
+        where: { id: postId },
+        data: { storyStatus: "failed", storyNextAttemptAt: null, errorMsg: `[story] ${msg}` },
+      }).catch(() => {});
+      return { retry: false };
+    }
 
     if (attemptNumber < MAX_ATTEMPTS) {
       await prisma.post.update({

@@ -1,4 +1,5 @@
 import { META_GRAPH_API, META_GRAPH_API_VERSION } from "@/lib/meta";
+import { metaRequestJson } from "@/lib/metaApiClient";
 import { createSignedOAuthState, decryptExpiringSecret, encryptExpiringSecret, verifySignedOAuthState } from "@/lib/facebookOAuthSecurity";
 
 export const FACEBOOK_OAUTH_STATE_COOKIE = "postflow_fb_oauth_state";
@@ -61,10 +62,7 @@ export function decryptFacebookOAuthSession(value: string | undefined) {
 }
 
 async function graphJson<T>(url: URL): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error(data.error?.message || `Meta API lỗi ${response.status}`);
-  return data as T;
+  return (await metaRequestJson<T>(url.toString(), { cache: "no-store" })).data;
 }
 
 export async function exchangeFacebookCode(code: string, redirectUri: string) {

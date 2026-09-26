@@ -9,6 +9,8 @@ interface QueueMessage { body: QueueJob; ack(): void; retry(options?: { delaySec
 interface QueueBatch { messages: QueueMessage[]; }
 interface Env {
   POSTFLOW_PUBLISH_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
+  POSTFLOW_ADS_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
+  POSTFLOW_ENGAGEMENT_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_FETCH_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_QUEUE_SECRET: string;
   POSTFLOW_API_URL: string;
@@ -34,7 +36,13 @@ export default {
       (body.type === "fetch" && !!body.postId);
     if (!valid) return Response.json({ error: "Invalid queue job" }, { status: 400 });
     const { delaySeconds, ...job } = body;
-    const queue = job.type === "fetch" ? env.POSTFLOW_FETCH_QUEUE : env.POSTFLOW_PUBLISH_QUEUE;
+    const queue = job.type === "fetch"
+      ? env.POSTFLOW_FETCH_QUEUE
+      : job.type === "ads"
+        ? env.POSTFLOW_ADS_QUEUE
+        : job.type === "comment" || job.type === "story"
+          ? env.POSTFLOW_ENGAGEMENT_QUEUE
+          : env.POSTFLOW_PUBLISH_QUEUE;
     await queue.send(job, { delaySeconds: Math.max(0, Math.min(86_400, Math.floor(delaySeconds ?? 0))) });
     return Response.json({ queued: true }, { status: 202 });
   },

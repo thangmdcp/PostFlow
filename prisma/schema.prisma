@@ -33,6 +33,7 @@ model Post {
   scheduledAt    DateTime?
   status         String          @default("fetching")
   fbPostId       String?
+  fbObjectStoryId String?
   fbPostUrl      String?
   publishToFacebook  Boolean   @default(true)
   publishToInstagram Boolean   @default(false)
@@ -123,7 +124,45 @@ model FbAdAccount {
   accountId     String   @unique
   name          String
   accessToken   String
+  currency      String?
+  currencyUpdatedAt DateTime?
   createdAt     DateTime @default(now())
+}
+
+model MetaThrottleState {
+  id                 String    @id @default(cuid())
+  scopeKey           String    @unique
+  scopeType          String
+  scopeId            String
+  callCount          Int       @default(0)
+  totalCpuTime       Int       @default(0)
+  totalTime          Int       @default(0)
+  accessTier         String?
+  estimatedRecoveryAt DateTime?
+  blockedUntil       DateTime?
+  nextAvailableAt    DateTime?
+  lastErrorCode      Int?
+  lastErrorSubcode   Int?
+  lastFbtraceId      String?
+  lastErrorMessage   String?
+  updatedAt          DateTime  @updatedAt
+
+  @@index([scopeType, scopeId])
+  @@index([blockedUntil])
+}
+
+model MetaPermissionCache {
+  cacheKey        String   @id
+  adAccountId     String
+  pageId          String
+  instagramUserId String?
+  allowed         Boolean
+  errorMsg        String?
+  checkedAt       DateTime @default(now())
+  expiresAt       DateTime
+
+  @@index([adAccountId, pageId])
+  @@index([expiresAt])
 }
 
 model CampaignTemplate {

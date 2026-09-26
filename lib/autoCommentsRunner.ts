@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getFacebookComments, postComment } from "@/lib/facebook";
 import { enqueueComment } from "@/lib/cloudflareQueue";
+import { MetaApiError } from "@/lib/metaApiClient";
 
 // Each comment on a post posts 2 minutes after the previous one (or after
 // publish, for the first) — comment 1 at +2m, comment 2 at +4m, etc. — see
@@ -79,7 +80,7 @@ export async function scheduleCommentJobs(postId: string): Promise<void> {
 
 // Called only by the Queue consumer endpoint. A non-OK response makes the
 // Worker retry this same message after its configured delay.
-export async function attemptComment(commentRowId: string): Promise<{ retry: boolean }> {
+export async function attemptComment(commentRowId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   // Record the attempt count BEFORE calling out to Facebook, not just on
   // completion — if the serverless invocation dies mid-call (timeout, cold
   // start crash), the row is left stuck on "creating" with the OLD attempt
@@ -88,34 +89,47 @@ export async function attemptComment(commentRowId: string): Promise<{ retry: boo
   // row hits MAX_ATTEMPTS and gets marked failed instead of looping.
   const existing = await prisma.postComment.findUnique({ where: { id: commentRowId }, include: { post: true } });
   if (!existing || existing.status === "done" || existing.status === "failed") return { retry: false };
+  if (existing.status === "creating") {
+    if (existing.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };
+    await prisma.postComment.updateMany({
+      where: { id: commentRowId, status: "creating", updatedAt: { lte: new Date(Date.now() - 10 * 60_000) } },
+      data: { status: "pending" },
+    });
+  }
   const attemptNumber = (existing.attempt ?? 0) + 1;
-  const row = await prisma.postComment.update({ where: { id: commentRowId }, data: { status: "creating", attempt: attemptNumber } }).catch(() => null);
-  if (!row) return { retry: true };
+  const claim = await prisma.postComment.updateMany({
+    where: { id: commentRowId, OR: [{ status: "pending" }, { status: null }] },
+    data: { status: "creating", attempt: attemptNumber },
+  }).catch(() => ({ count: 0 }));
+  if (!claim.count) return { retry: false };
+  const row = await prisma.postComment.findUnique({ where: { id: commentRowId } });
+  if (!row) return { retry: false };
 
   try {
     if (!existing.post.fbPostId || !existing.post.pageId) throw new Error("Bài chưa có fbPostId/pageId");
     const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: existing.post.pageId } });
     if (!fbConn) throw new Error("Không tìm thấy kết nối Facebook Page");
 
-    // Facebook may have accepted the previous request while the worker timed
-    // out, so never blindly resend. Count Page-owned comments against the
-    // target, and also match this row's text to avoid a duplicate retry.
-    const [facebookComments, targetCount] = await Promise.all([
-      getFacebookComments(existing.post.fbPostId, fbConn.accessToken),
-      prisma.postComment.count({ where: { postId: existing.postId } }),
-    ]);
-    const pageComments = facebookComments.filter((comment) => comment.from?.id === existing.post.pageId);
-    const identicalCommentExists = pageComments.some((comment) => normalizeComment(comment.message ?? "") === normalizeComment(row.text));
-    if (identicalCommentExists || pageComments.length >= targetCount) {
-      const reason = identicalCommentExists
-        ? "[comment] Đã có bình luận cùng nội dung từ Page trên Facebook."
-        : `[comment] Page đã có ${pageComments.length}/${targetCount} bình luận, không đăng trùng.`;
-      await prisma.postComment.update({
-        where: { id: commentRowId },
-        data: { status: "skipped", attempt: attemptNumber, nextAttemptAt: null, errorMsg: reason },
-      });
-      console.log(`[auto-comment] post ${row.postId}: skipped duplicate/existing Page comment`);
-      return { retry: false };
+    // The first attempt is protected by the atomic claim above, so a costly
+    // comments crawl is only needed after an uncertain timeout/retry.
+    if (attemptNumber > 1) {
+      const [facebookComments, targetCount] = await Promise.all([
+        getFacebookComments(existing.post.fbPostId, fbConn.accessToken),
+        prisma.postComment.count({ where: { postId: existing.postId } }),
+      ]);
+      const pageComments = facebookComments.filter((comment) => comment.from?.id === existing.post.pageId);
+      const identicalCommentExists = pageComments.some((comment) => normalizeComment(comment.message ?? "") === normalizeComment(row.text));
+      if (identicalCommentExists || pageComments.length >= targetCount) {
+        const reason = identicalCommentExists
+          ? "[comment] Đã có bình luận cùng nội dung từ Page trên Facebook."
+          : `[comment] Page đã có ${pageComments.length}/${targetCount} bình luận, không đăng trùng.`;
+        await prisma.postComment.update({
+          where: { id: commentRowId },
+          data: { status: "skipped", attempt: attemptNumber, nextAttemptAt: null, errorMsg: reason },
+        });
+        console.log(`[auto-comment] post ${row.postId}: skipped duplicate/existing Page comment`);
+        return { retry: false };
+      }
     }
 
     const imageUrl = await availableCommentImage(row.imageUrl);
@@ -133,7 +147,17 @@ export async function attemptComment(commentRowId: string): Promise<{ retry: boo
     const msg = err instanceof Error ? err.message : "auto-comment failed";
     console.error(`[auto-comment] comment row ${commentRowId} attempt ${attemptNumber} failed:`, msg);
 
-    if (attemptNumber < MAX_ATTEMPTS) {
+    if (err instanceof MetaApiError && err.category === "rate_limit") {
+      const retryAfterSeconds = Math.max(60, err.retryAfterSeconds ?? 300);
+      const nextAttemptAt = new Date(Date.now() + retryAfterSeconds * 1000);
+      await prisma.postComment.update({
+        where: { id: commentRowId },
+        data: { status: "pending", nextAttemptAt, attempt: existing.attempt ?? 0, errorMsg: `[quota] ${msg}` },
+      }).catch(() => {});
+      return { retry: true, retryAfterSeconds };
+    }
+    const permanent = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
+    if (!permanent && attemptNumber < MAX_ATTEMPTS) {
       const nextAttemptAt = new Date(Date.now() + COMMENT_INTERVAL_MS);
       await prisma.postComment.update({
         where: { id: commentRowId },

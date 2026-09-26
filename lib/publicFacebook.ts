@@ -17,5 +17,7 @@ export const publicFbAdAccountSelect = {
   id: true,
   accountId: true,
   name: true,
+  currency: true,
+  currencyUpdatedAt: true,
   createdAt: true,
 } as const;

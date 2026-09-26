@@ -34,7 +34,14 @@ import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 import { BatchActionDialog, type BatchActionConfig, type BatchEngagementConfig } from "@/components/BatchActionDialog";
 import { SubIdPresetPicker } from "@/components/SubIdPresetPicker";
+import {
+  advanceSubIdPresetConfig,
+  buildSubIdExportPlan,
+  formatSubIdValue,
+  type SubIdPresetConfigItem,
+} from "@/lib/subIdPreset";
 import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAction";
+import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
 import {
   COMPOSER_DRAFT_KEY,
   batchDraftKey,
@@ -198,8 +205,9 @@ function loadSavedAdsConfig(): BatchAdConfig {
 }
 
 // ── Batch Custom Links export/import (sub_id1..5) ───────────────────────────
-interface SubIdConfig { text: string; auto: boolean; }
+type SubIdConfig = SubIdPresetConfigItem;
 const SUB_ID_CONFIG_KEY = "postflow_batch_subids_v1";
+const ACTIVE_SUB_ID_PRESET_KEY = "postflow_active_subid_preset_v1";
 const DEFAULT_SUB_ID_CONFIG: SubIdConfig[] = Array.from({ length: 5 }, () => ({ text: "", auto: false }));
 
 function loadSubIdConfig(): SubIdConfig[] {
@@ -224,7 +232,6 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     return localStorage.getItem(LAST_BATCH_KEY);
   });
   const [loading, setLoading] = useState(false);
-  const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const { show, ToastComponent } = useToast();
 
   useEffect(() => {
@@ -836,10 +843,22 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   // ── Sub_id export/import (Batch Custom Links) ───────────────────────────────
   const [subIdConfig, setSubIdConfig] = useState<SubIdConfig[]>(() => loadSubIdConfig());
+  const [activeSubIdPresetId, setActiveSubIdPresetId] = useState<string | null>(() => {
+    try { return localStorage.getItem(ACTIVE_SUB_ID_PRESET_KEY); } catch { return null; }
+  });
+  const [committedSubIdPreset, setCommittedSubIdPreset] = useState<{ id: string; config: SubIdConfig[] } | null>(null);
+  const [canAutoAdvanceSubIdPreset, setCanAutoAdvanceSubIdPreset] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [justImportedLinkIds, setJustImportedLinkIds] = useState<Set<string>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
   useEffect(() => { localStorage.setItem(SUB_ID_CONFIG_KEY, JSON.stringify(subIdConfig)); }, [subIdConfig]);
+  useEffect(() => {
+    try {
+      if (activeSubIdPresetId) localStorage.setItem(ACTIVE_SUB_ID_PRESET_KEY, activeSubIdPresetId);
+      else localStorage.removeItem(ACTIVE_SUB_ID_PRESET_KEY);
+    } catch { /* storage unavailable */ }
+  }, [activeSubIdPresetId]);
 
   // ── Column state ──────────────────────────────────────────────────────────────
   const defaultWidths = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultWidth])) as Record<ColKey, number>;
@@ -1159,45 +1178,47 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   // number and increment per post (bai1 → bai2 → … → bai10, bai11). Otherwise
   // fall back to appending "_<postNumber>" as before.
   function formatSubId(cfg: SubIdConfig, postNumber: number): string {
-    if (!cfg.auto) return cfg.text;
-    const m = cfg.text.match(/^(.*?)(\d+)$/);
-    if (m) {
-      const [, prefix, numStr] = m;
-      return `${prefix}${parseInt(numStr, 10) + (postNumber - 1)}`;
-    }
-    return `${cfg.text}_${postNumber}`;
+    return formatSubIdValue(cfg, postNumber);
   }
 
-  function buildExportRows(): { competitorUrl: string; subs: string[] }[] {
-    const rows: { competitorUrl: string; subs: string[] }[] = [];
-    let linkNumber = 1;
-    batch.posts.forEach((post) => {
-      [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-        // A Sub_id belongs to an exported affiliate LINK, not to a post.
-        // This makes bai1…bai5 for five links even when those links happen
-        // to be in the same post.
-        const subs = subIdConfig.map(cfg => formatSubId(cfg, linkNumber));
-        rows.push({ competitorUrl: link.competitorUrl, subs });
-        linkNumber++;
-      });
-    });
-    return rows;
-  }
-
-  function handleExport() {
-    const rows = buildExportRows();
+  async function handleExport() {
+    const { rows, consumedPostCount } = buildSubIdExportPlan(subIdConfig, batch.posts);
     if (!rows.length) { onToast("Batch chưa có link nào để xuất", "error"); return; }
-    const header = ["Liên kết gốc", "Sub_id1", "Sub_id2", "Sub_id3", "Sub_id4", "Sub_id5"];
-    const aoa = [header, ...rows.map(r => [r.competitorUrl, ...r.subs])];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    XLSX.writeFile(wb, "Batch Custom Links.xlsx");
-    onToast(`Đã xuất ${rows.length} link`, "success");
-    // Move auto fields to the NEXT value, ready for the next export.
-    // Example: bai1 + 5 links exports bai1…bai5, then becomes bai6.
-    const nextLinkNumber = rows.length + 1;
-    setSubIdConfig(prev => prev.map(cfg => cfg.auto ? { ...cfg, text: formatSubId(cfg, nextLinkNumber) } : cfg));
+    setExporting(true);
+    let fileExported = false;
+    try {
+      const header = ["Liên kết gốc", "Sub_id1", "Sub_id2", "Sub_id3", "Sub_id4", "Sub_id5"];
+      const aoa = [header, ...rows.map(r => [r.competitorUrl, ...r.subs])];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      XLSX.writeFile(wb, "Batch Custom Links.xlsx");
+      fileExported = true;
+
+      const nextConfig = advanceSubIdPresetConfig(subIdConfig, consumedPostCount);
+      setSubIdConfig(nextConfig);
+
+      if (activeSubIdPresetId && canAutoAdvanceSubIdPreset) {
+        const response = await fetch(`/api/subid-presets/${activeSubIdPresetId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ config: nextConfig }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(data?.error || "Không thể lưu tiến trình vào preset SubID");
+        setCommittedSubIdPreset({ id: activeSubIdPresetId, config: nextConfig });
+        onToast(`Đã xuất ${rows.length} link và lưu tiến trình ${consumedPostCount} bài vào preset`, "success");
+      } else if (activeSubIdPresetId) {
+        onToast(`Đã xuất ${rows.length} link; preset có chỉnh sửa thủ công nên chưa tự lưu`, "info");
+      } else {
+        onToast(`Đã xuất ${rows.length} link từ ${consumedPostCount} bài`, "success");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể xuất hoặc lưu tiến trình SubID";
+      onToast(fileExported ? `Đã xuất file nhưng ${message.toLocaleLowerCase("vi")}` : message, "error");
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function handleImportFile(file: File) {
@@ -1255,17 +1276,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const colFail   = findCol(["li do that bai", "ly do that bai", "failure reason", "error message"]);
       if (!colOrigin || !colMyUrl) { onToast("File thiếu cột link gốc hoặc link chuyển đổi/aff", "error"); return; }
 
-      // Pool follows the exact same per-LINK order as the export. A number of
+      // Pool follows the same per-POST numbering as the export. A number of
       // affiliate tools rewrite harmless URL formatting (trailing slash,
       // escaped ampersand, host casing), so strict string comparison alone is
       // not reliable enough for an exported file coming back in.
       const pool: { linkId: string; competitorUrl: string; campaignName: string }[] = [];
-      let linkNumber = 1;
+      let postNumber = 1;
       batch.posts.forEach((post) => {
+        if (!post.extractedLinks.length) return;
         [...post.extractedLinks].sort((a, b) => a.order - b.order).forEach(link => {
-          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName: subIdConfig.map(cfg => formatSubId(cfg, linkNumber)).join("-") });
-          linkNumber++;
+          pool.push({ linkId: link.id, competitorUrl: link.competitorUrl, campaignName: subIdConfig.map(cfg => formatSubId(cfg, postNumber)).join("-") });
         });
+        postNumber++;
       });
       const used = new Set<string>();
 
@@ -1630,7 +1652,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
         <div className="flex items-center gap-2 shrink-0">
-          <SubIdPresetPicker value={subIdConfig} onChange={setSubIdConfig} />
+          <SubIdPresetPicker
+            value={subIdConfig}
+            onChange={setSubIdConfig}
+            activeId={activeSubIdPresetId}
+            onActiveIdChange={setActiveSubIdPresetId}
+            committedPreset={committedSubIdPreset}
+            onAutoAdvanceChange={setCanAutoAdvanceSubIdPreset}
+          />
           {subIdConfig.map((cfg, i) => (
             <div key={i} className="flex items-center gap-0.5 shrink-0" title={cfg.auto ? "Tự động tăng số theo từng bài — bấm để ghim cố định" : "Đã ghim cố định cho mọi bài — bấm để chuyển sang tự động tăng số"}>
               <input type="text" value={cfg.text}
@@ -1760,10 +1789,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             )}
           </div>
 
-          <button onClick={handleExport}
+          <button onClick={() => void handleExport()} disabled={exporting}
             title="Xuất file Batch Custom Links.xlsx (link gốc + sub_id) để chạy qua công cụ tạo link aff"
-            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0">
-            <FileDown size={13} /> Xuất file
+            className="flex items-center gap-1.5 rounded-lg border bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors shrink-0">
+            {exporting ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />} Xuất file
           </button>
           <input ref={importFileRef} type="file" accept=".csv,.xlsx" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
@@ -2014,18 +2043,19 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
   }
 
   if (adStatus === "failed") {
-    const isMetaRateLimit = /request limit reached|rate limit/i.test(errorMsg ?? "");
+    const display = metaErrorDisplay(errorMsg);
     return (
       <div className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-500 whitespace-nowrap max-w-full"
         title={errorMsg ?? undefined}>
-        <span className="truncate">{isMetaRateLimit ? "Meta giới hạn request" : `Lỗi ${adsLabel} (lần ${adAttempt ?? 0})`}</span>
+        <span className="truncate">{display.kind === "other" ? `${display.label} (lần ${adAttempt ?? 0})` : display.label}</span>
       </div>
     );
   }
 
   if (adStatus === "pending" && adNextAttemptAt) {
     const isRetry = (adAttempt ?? 0) > 0;
-    const isMetaRateLimit = /request limit reached|rate limit/i.test(errorMsg ?? "");
+    const display = metaErrorDisplay(errorMsg);
+    const isMetaRateLimit = display.kind === "quota";
     const maxAttempts = 3;
     const pendingLabel = isMetaRateLimit
       ? "Meta đang hồi quota"

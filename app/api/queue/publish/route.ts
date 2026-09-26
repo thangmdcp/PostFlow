@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { publishDuePost } from "@/lib/publishDuePost";
+import { reserveMetaJob, scopesForPost } from "@/lib/metaThrottle";
 
 export const maxDuration = 90;
 
@@ -20,6 +21,14 @@ export async function POST(request: Request) {
   let post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post) return NextResponse.json({ status: "missing" });
   if (post.status === "done") return NextResponse.json({ status: "done" });
+  const instagramUserId = post.publishToInstagram && post.pageId
+    ? (await prisma.fbConnection.findUnique({ where: { pageId: post.pageId }, select: { instagramUserId: true } }))?.instagramUserId
+    : null;
+  const gate = await reserveMetaJob("publish", scopesForPost(post.pageId, null, instagramUserId), postId);
+  if (!gate.allowed) {
+    await prisma.post.update({ where: { id: postId }, data: { status: "queued", errorMsg: `[quota] ${gate.reason ?? "Chờ Meta hồi quota"}` } });
+    return NextResponse.json({ error: gate.reason ?? "Chờ Meta hồi quota", deferredReason: "quota", retryAfterSeconds: gate.retryAfterSeconds }, { status: 503 });
+  }
 
   // A serverless invocation may be interrupted after claiming the row. Allow
   // the Queue's later retry to recover a claim that has been stuck for 10 min.

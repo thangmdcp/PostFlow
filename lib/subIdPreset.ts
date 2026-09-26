@@ -34,3 +34,51 @@ export function sameSubIdPresetConfig(left: SubIdPresetConfigItem[], right: SubI
 export function subIdPresetPreview(config: SubIdPresetConfigItem[]): string {
   return config.map((item) => item.text.trim() || "—").join(" · ");
 }
+
+export function formatSubIdValue(config: SubIdPresetConfigItem, postNumber: number): string {
+  if (!config.auto) return config.text;
+  const match = config.text.match(/^(.*?)(\d+)$/);
+  if (match) {
+    const [, prefix, number] = match;
+    return `${prefix}${Number.parseInt(number, 10) + (postNumber - 1)}`;
+  }
+  return `${config.text}_${postNumber}`;
+}
+
+export function advanceSubIdPresetConfig(
+  config: SubIdPresetConfigItem[],
+  consumedPostCount: number,
+): SubIdPresetConfigItem[] {
+  if (consumedPostCount <= 0) return config.map((item) => ({ ...item }));
+  return config.map((item) => item.auto
+    ? { ...item, text: formatSubIdValue(item, consumedPostCount + 1) }
+    : { ...item });
+}
+
+export interface SubIdExportPost {
+  extractedLinks: { competitorUrl: string; order: number }[];
+}
+
+export interface SubIdExportRow {
+  competitorUrl: string;
+  subs: string[];
+}
+
+export function buildSubIdExportPlan(
+  config: SubIdPresetConfigItem[],
+  posts: SubIdExportPost[],
+): { rows: SubIdExportRow[]; consumedPostCount: number } {
+  const rows: SubIdExportRow[] = [];
+  let consumedPostCount = 0;
+
+  for (const post of posts) {
+    const links = [...post.extractedLinks].sort((left, right) => left.order - right.order);
+    if (!links.length) continue;
+    const postNumber = consumedPostCount + 1;
+    const subs = config.map((item) => formatSubIdValue(item, postNumber));
+    for (const link of links) rows.push({ competitorUrl: link.competitorUrl, subs: [...subs] });
+    consumedPostCount++;
+  }
+
+  return { rows, consumedPostCount };
+}

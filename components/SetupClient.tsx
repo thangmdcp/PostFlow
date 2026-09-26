@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useToast } from "@/components/ui/toast";
 import { Eye, EyeOff, CheckCircle2, AlertCircle, Copy, Check, ExternalLink } from "lucide-react";
+import { MetaApiStatusPanel } from "@/components/MetaApiStatusPanel";
 
 const SUPABASE_SQL = `CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -340,6 +341,8 @@ export function SetupClient() {
 
       <h1 className="text-xl font-bold mb-1">Cài đặt</h1>
       <p className="text-sm text-muted-foreground mb-6">Điền Database và Cloudinary → Lưu → Restart. App sẽ tự bổ sung các bảng/cột mới khi khởi động.</p>
+
+      {loaded && dbFilled && <MetaApiStatusPanel />}
 
       {/* DB warning */}
       {loaded && !dbFilled && (

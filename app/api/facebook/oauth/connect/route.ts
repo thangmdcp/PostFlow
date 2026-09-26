@@ -26,6 +26,14 @@ export async function POST(request: NextRequest) {
         const accountId = account!.id.startsWith("act_") ? account!.id : `act_${account!.account_id}`;
         return prisma.fbAdAccount.upsert({ where: { accountId }, update: { name: account!.name, accessToken: token }, create: { accountId, name: account!.name, accessToken: token } });
       }),
+      prisma.metaPermissionCache.deleteMany({
+        where: {
+          OR: [
+            ...(pageIds.length ? [{ pageId: { in: pageIds } }] : []),
+            ...(adAccountIds.length ? [{ adAccountId: { in: adAccountIds.map((id) => id.replace(/^act_/, "")) } }] : []),
+          ],
+        },
+      }),
     ]);
     const response = NextResponse.json({ ok: true, pages: pages.length, adAccounts: ads.length });
     response.cookies.set(FACEBOOK_OAUTH_SESSION_COOKIE, "", { path: "/api/facebook/oauth", maxAge: 0 });

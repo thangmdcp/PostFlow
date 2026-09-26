@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueueAds } from "@/lib/cloudflareQueue";
 import { validateAdSelection } from "@/lib/adSelection";
+import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
+import { MetaApiError } from "@/lib/metaApiClient";
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const body = await request.json().catch(() => ({})) as { adAccountId?: string; templateId?: string; delaySeconds?: number };
@@ -14,6 +16,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
   }
   const selectionError = await validateAdSelection(post.adTemplateId ?? undefined, post.adAccountUsed ?? undefined);
   if (selectionError) return NextResponse.json({ error: selectionError }, { status: 400 });
+  try {
+    await preflightPostAdPermission(post, true);
+  } catch (error) {
+    const status = error instanceof MetaApiError && ["rate_limit", "transient"].includes(error.category) ? 503 : 409;
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Không kiểm tra được quyền quảng cáo",
+      ...(error instanceof MetaApiError ? { code: error.code, subcode: error.subcode, fbtrace_id: error.fbtraceId, retryAfterSeconds: error.retryAfterSeconds } : {}),
+    }, { status });
+  }
 
   const claim = await prisma.post.updateMany({
     where: { id: post.id, adId: null, adStatus: { in: ["pending", "failed"] } },

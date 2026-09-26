@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  advanceSubIdPresetConfig,
+  buildSubIdExportPlan,
+  formatSubIdValue,
   normalizeSubIdPresetName,
   parseSubIdPresetConfig,
   sameSubIdPresetConfig,
@@ -31,4 +34,49 @@ test("compares full preset and renders a compact preview", () => {
   assert.equal(sameSubIdPresetConfig(valid, valid.map((item) => ({ ...item }))), true);
   assert.equal(sameSubIdPresetConfig(valid, valid.map((item, index) => index === 1 ? { ...item, auto: false } : item)), false);
   assert.equal(subIdPresetPreview(valid), "cong · bai55 · — · — · —");
+});
+
+test("formats automatic SubIDs and keeps pinned fields unchanged", () => {
+  assert.equal(formatSubIdValue({ text: "bai1", auto: true }, 21), "bai21");
+  assert.equal(formatSubIdValue({ text: "dola", auto: false }, 21), "dola");
+  assert.equal(formatSubIdValue({ text: "code", auto: true }, 3), "code_3");
+});
+
+test("exports one SubID number per post even when a post has many links", () => {
+  const config = [
+    { text: "dola", auto: false },
+    { text: "bai1", auto: true },
+    { text: "", auto: false },
+    { text: "", auto: false },
+    { text: "", auto: false },
+  ];
+  const plan = buildSubIdExportPlan(config, [
+    { extractedLinks: [
+      { competitorUrl: "https://example.com/b", order: 2 },
+      { competitorUrl: "https://example.com/a", order: 1 },
+    ] },
+    { extractedLinks: [] },
+    { extractedLinks: [{ competitorUrl: "https://example.com/c", order: 1 }] },
+  ]);
+
+  assert.equal(plan.consumedPostCount, 2);
+  assert.deepEqual(plan.rows.map((row) => [row.competitorUrl, row.subs[0], row.subs[1]]), [
+    ["https://example.com/a", "dola", "bai1"],
+    ["https://example.com/b", "dola", "bai1"],
+    ["https://example.com/c", "dola", "bai2"],
+  ]);
+  assert.deepEqual(advanceSubIdPresetConfig(config, plan.consumedPostCount).slice(0, 2), [
+    { text: "dola", auto: false },
+    { text: "bai3", auto: true },
+  ]);
+});
+
+test("advances a 20-post preset cursor from bai1 to bai21", () => {
+  assert.deepEqual(advanceSubIdPresetConfig([
+    { text: "dola", auto: false },
+    { text: "bai1", auto: true },
+  ], 20), [
+    { text: "dola", auto: false },
+    { text: "bai21", auto: true },
+  ]);
 });

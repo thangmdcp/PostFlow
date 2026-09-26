@@ -20,14 +20,17 @@ interface SubIdPreset {
 interface Props {
   value: SubIdPresetConfigItem[];
   onChange: (config: SubIdPresetConfigItem[]) => void;
+  activeId: string | null;
+  onActiveIdChange: (id: string | null) => void;
+  committedPreset: { id: string; config: SubIdPresetConfigItem[] } | null;
+  onAutoAdvanceChange: (enabled: boolean) => void;
 }
 
 type EditMode = "new" | "rename" | null;
 
-export function SubIdPresetPicker({ value, onChange }: Props) {
+export function SubIdPresetPicker({ value, onChange, activeId, onActiveIdChange, committedPreset, onAutoAdvanceChange }: Props) {
   const { show, ToastComponent } = useToast();
   const [presets, setPresets] = useState<SubIdPreset[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<EditMode>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,6 +61,17 @@ export function SubIdPresetPicker({ value, onChange }: Props) {
   }, [show]);
 
   useEffect(() => {
+    if (!committedPreset) return;
+    setPresets((current) => current.map((preset) => preset.id === committedPreset.id
+      ? { ...preset, config: committedPreset.config.map((item) => ({ ...item })) }
+      : preset));
+  }, [committedPreset]);
+
+  useEffect(() => {
+    if (!loading && activeId && !presets.some((preset) => preset.id === activeId)) onActiveIdChange(null);
+  }, [activeId, loading, onActiveIdChange, presets]);
+
+  useEffect(() => {
     if (!mode) return;
     const close = (event: MouseEvent) => {
       if (!editorRef.current?.contains(event.target as Node)) setMode(null);
@@ -71,11 +85,19 @@ export function SubIdPresetPicker({ value, onChange }: Props) {
   const activePreset = presets.find((preset) => preset.id === selectedId);
   const dirty = Boolean(activePreset && !sameSubIdPresetConfig(activePreset.config, value));
 
+  useEffect(() => {
+    if (!activeId && matchingPreset) onActiveIdChange(matchingPreset.id);
+  }, [activeId, matchingPreset, onActiveIdChange]);
+
+  useEffect(() => {
+    onAutoAdvanceChange(Boolean(activePreset && !dirty));
+  }, [activePreset, dirty, onAutoAdvanceChange]);
+
   function selectPreset(id: string) {
     const preset = presets.find((item) => item.id === id);
     if (!preset) return;
     onChange(preset.config.map((item) => ({ ...item })));
-    setActiveId(preset.id);
+    onActiveIdChange(preset.id);
     setMode(null);
   }
 
@@ -92,7 +114,7 @@ export function SubIdPresetPicker({ value, onChange }: Props) {
     try {
       const preset = await request("/api/subid-presets", { method: "POST", body: JSON.stringify({ name, config: value }) }) as SubIdPreset;
       setPresets((current) => [preset, ...current]);
-      setActiveId(preset.id);
+      onActiveIdChange(preset.id);
       setName("");
       setMode(null);
       show("Đã lưu bộ SubID", "success");
@@ -133,7 +155,7 @@ export function SubIdPresetPicker({ value, onChange }: Props) {
     try {
       await request(`/api/subid-presets/${activePreset.id}`, { method: "DELETE" });
       setPresets((current) => current.filter((item) => item.id !== activePreset.id));
-      setActiveId(null);
+      onActiveIdChange(null);
       setMode(null);
       show("Đã xóa bộ SubID", "success");
     } catch (error) {

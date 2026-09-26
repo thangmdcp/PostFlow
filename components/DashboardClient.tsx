@@ -21,6 +21,7 @@ import { PageMultiSelect } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
+import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
 import { applyEvenWeights, rebalanceWeights } from "@/lib/accountWeights";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
 import { FullSettingsPresetPanel } from "@/components/FullSettingsPresetPanel";
@@ -780,6 +781,25 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     else show("Retry thất bại", "error");
   }
 
+  async function retryAds(post: PostWithLinks) {
+    if (!post.adAccountUsed || !post.adTemplateId) {
+      show("Bài thiếu snapshot TKQC/template; hãy cấu hình lại Ads.", "error");
+      return;
+    }
+    const response = await fetch(`/api/posts/${post.id}/retry-ads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ adAccountId: post.adAccountUsed, templateId: post.adTemplateId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      show(payload.error || "Không thể kiểm tra quyền và retry Ads", "error");
+      return;
+    }
+    setLocalPosts((rows) => rows.map((row) => row.id === post.id ? { ...row, adStatus: "queued", errorMsg: null, adNextAttemptAt: null } : row));
+    show("Quyền hợp lệ. Đã xếp lại riêng Ads, không đăng lại bài.", "success");
+  }
+
   // ── Bulk delete ──────────────────────────────────────────────────────────────
   async function bulkDelete() {
     if (!hasSelection || !confirm(`Xoá ${checkedPosts.length} bài đã chọn?`)) return;
@@ -1196,7 +1216,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <StatusBadge status={post.status} />
                         <PlatformPublishStatus post={post} />
-                        {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.errorMsg}</p>}
+                        {post.errorMsg && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.adStatus === "failed" ? metaErrorDisplay(post.errorMsg).label : post.errorMsg}</p>}
                       </td>
                     )}
 
@@ -1241,14 +1261,19 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         <div className="flex items-center gap-1">
                           {post.status === "done" && (
-                            (post.adId || (post.adCampaignId && post.adPlatform !== "instagram"))
+                            (post.adId || post.adStatus === "done")
                               ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
                                   <Megaphone size={10} />{post.adPlatform === "instagram" ? "Ads Instagram" : "Ads"} ✓
                                 </span>
-                              : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
-                                  onClick={() => openAdsDrawer([post.id])}>
-                                  <Megaphone size={11} />Ads
-                                </Button>
+                              : post.adStatus === "failed"
+                                ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap text-amber-700"
+                                    onClick={() => void retryAds(post)}>
+                                    <RefreshCw size={11} />Kiểm tra quyền & retry Ads
+                                  </Button>
+                                : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"
+                                    onClick={() => openAdsDrawer([post.id])}>
+                                    <Megaphone size={11} />Ads
+                                  </Button>
                           )}
                           {post.status === "pending" && (
                             <Button variant="outline" size="sm" className="h-7 gap-1 text-xs whitespace-nowrap"

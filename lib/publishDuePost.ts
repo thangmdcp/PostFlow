@@ -8,12 +8,14 @@ import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodo
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
+import { MetaApiError } from "@/lib/metaApiClient";
 
 export interface PublishDuePostResult {
   id: string;
   status: string;
   error?: string;
   retryable?: boolean;
+  retryAfterSeconds?: number;
   adsScheduled?: string;
 }
 
@@ -31,6 +33,7 @@ export async function publishDuePost(
   let fbError: Error | null = null;
   let igError: Error | null = null;
   let retryable = false;
+  let retryAfterSeconds: number | undefined;
   let fbPublishedNow = false;
   let fbPostId = post.fbPostId ?? "";
   let mediaUrl = post.stableMediaUrl ?? undefined;
@@ -104,8 +107,12 @@ export async function publishDuePost(
         } });
       } catch (error) {
         fbError = error instanceof Error ? error : new Error(String(error));
-        retryable = true;
-        await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "failed", fbErrorMsg: fbError.message } });
+        const category = error instanceof MetaApiError ? error.category : "unknown";
+        retryable ||= category === "rate_limit" || category === "transient" || category === "unknown";
+        if (error instanceof MetaApiError && error.retryAfterSeconds) retryAfterSeconds = error.retryAfterSeconds;
+        const message = category === "rate_limit" ? `[quota] ${fbError.message}` : fbError.message;
+        fbError = new Error(message);
+        await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "failed", fbErrorMsg: message } });
       }
     } else if (post.publishToFacebook && post.fbPostId && post.fbPublishStatus !== "done") {
       await prisma.post.update({ where: { id: post.id }, data: { fbPublishStatus: "done", fbErrorMsg: null } });
@@ -217,10 +224,13 @@ export async function publishDuePost(
       }
     }
 
-    return { id: post.id, status, ...(errorMsg ? { error: errorMsg } : {}), retryable, ...(adsScheduledNow ? { adsScheduled: "true" } : {}) };
+    return { id: post.id, status, ...(errorMsg ? { error: errorMsg } : {}), retryable, ...(retryAfterSeconds ? { retryAfterSeconds } : {}), ...(adsScheduledNow ? { adsScheduled: "true" } : {}) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await prisma.post.update({ where: { id: inputPost.id }, data: { status: "failed", errorMsg: message } }).catch(() => {});
-    return { id: inputPost.id, status: "failed", error: message, retryable: true };
+    const category = error instanceof MetaApiError ? error.category : "unknown";
+    const retryable = category === "rate_limit" || category === "transient" || category === "unknown";
+    const storedMessage = category === "rate_limit" ? `[quota] ${message}` : message;
+    await prisma.post.update({ where: { id: inputPost.id }, data: { status: "failed", errorMsg: storedMessage } }).catch(() => {});
+    return { id: inputPost.id, status: "failed", error: storedMessage, retryable, ...(error instanceof MetaApiError && error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}) };
   }
 }
