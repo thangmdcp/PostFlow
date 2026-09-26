@@ -1099,6 +1099,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     return true;
   });
   const scheduleTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
+  const retryAdsTargets = batch.posts.filter((post) =>
+    checkedIds.has(post.id)
+    && post.adStatus === "failed"
+    && !post.adId
+    && !!post.adAccountUsed
+    && !!post.adTemplateId
+    && (!!post.fbPostId || !!post.igPostId)
+  );
   const affiliateBlockedTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed") && (
     post.extractedLinks.some((link) => !link.myUrl) || post.extractedLinks.some((link) => post.finalCaption?.includes(link.competitorUrl))
   ));
@@ -1450,6 +1458,44 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setCheckedIds(new Set());
   }
 
+  async function handleBulkRetryAds() {
+    if (!retryAdsTargets.length) {
+      onToast("Chọn ít nhất một bài đang lỗi Ads", "error");
+      return;
+    }
+    setBulkRunning(true);
+    const succeeded: string[] = [];
+    const errors: string[] = [];
+    // Run preflight sequentially so a large selection cannot create a burst of
+    // permission-check calls before the server-side queue gets a chance to
+    // apply its Page/TKQC quota gates.
+    for (const post of retryAdsTargets) {
+      try {
+        const response = await fetch(`/api/posts/${post.id}/retry-ads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adAccountId: post.adAccountUsed,
+            templateId: post.adTemplateId,
+          }),
+        });
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        succeeded.push(post.id);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : "Không thể retry Ads");
+      }
+    }
+    setCheckedIds((current) => new Set([...current].filter((id) => !succeeded.includes(id))));
+    setBulkRunning(false);
+    await mutateBatch().catch(() => undefined);
+    if (errors.length) {
+      onToast(`Đã xếp lại ${succeeded.length}/${retryAdsTargets.length} Ads · ${errors[0]}`, "error");
+    } else {
+      onToast(`Đã kiểm tra quyền và xếp lại riêng ${succeeded.length} Ads`, "success");
+    }
+  }
+
   async function executeBatchAction(kind: BatchActionKind, config: BatchActionConfig): Promise<boolean> {
     const targets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
     if (!targets.length) { onToast("Chọn ít nhất một bài sẵn sàng", "error"); return false; }
@@ -1689,6 +1735,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             title="Chọn nền tảng, Page và đăng bài; có thể bật Ads trong bước tiếp theo"
             className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Đăng ngay
+          </button>
+          <button onClick={handleBulkRetryAds} disabled={bulkRunning || retryAdsTargets.length === 0}
+            title="Kiểm tra lại quyền và retry riêng Ads của các bài đã chọn; không đăng lại bài nguồn"
+            className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Retry Ads
           </button>
           <button onClick={handleBulkDelete} disabled={bulkRunning || checkedIds.size === 0} title="Xoá các dòng đã chọn"
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -2098,6 +2149,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   const [fbPostUrl] = useState(post.fbPostUrl ?? "");
   const [status, setStatus] = useState(post.status);
   const [showCaption, setShowCaption] = useState(false);
+  const [retryingAds, setRetryingAds] = useState(false);
 
   useEffect(() => { setStatus(post.status); }, [post.status]);
   useEffect(() => { setLinks(post.extractedLinks); }, [post.extractedLinks]);
@@ -2126,6 +2178,29 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       setTimeout(() => setSaved(s => ({ ...s, [linkId]: false })), 2000);
     } catch { onToast("Lưu link thất bại", "error"); }
     finally { setSaving(s => ({ ...s, [linkId]: false })); }
+  }
+
+  async function retryAdsOnly() {
+    if (!post.adAccountUsed || !post.adTemplateId) {
+      onToast("Bài chưa có snapshot TKQC/template để retry Ads", "error");
+      return;
+    }
+    setRetryingAds(true);
+    try {
+      const response = await fetch(`/api/posts/${post.id}/retry-ads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adAccountId: post.adAccountUsed, templateId: post.adTemplateId }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Không thể retry Ads");
+      onToast("Đã kiểm tra quyền và xếp lại riêng Ads", "success");
+      if (post.batchId) await globalMutate(`/api/batches/${post.batchId}`);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Không thể retry Ads", "error");
+    } finally {
+      setRetryingAds(false);
+    }
   }
 
   const rowBg = status === "done"    ? "bg-emerald-50/40 dark:bg-emerald-950/10"
@@ -2198,6 +2273,13 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             </div>
           )}
           <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} adPlatform={post.adPlatform} />
+          {post.adStatus === "failed" && !post.adId && post.adAccountUsed && post.adTemplateId && (post.fbPostId || post.igPostId) && (
+            <button type="button" onClick={retryAdsOnly} disabled={retryingAds}
+              title="Kiểm tra lại quyền rồi retry riêng Ads; không đăng lại bài nguồn"
+              className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50">
+              {retryingAds ? <Loader2 size={8} className="animate-spin" /> : <RefreshCw size={8} />} Retry Ads
+            </button>
+          )}
         </div>
       )}
 
