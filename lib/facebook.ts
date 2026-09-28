@@ -409,7 +409,7 @@ export async function cloneAdCampaign(
   if (needsInstagramIdentity && !instagramIdentityId) {
     throw new AdTemplateConfigurationError("Placement Instagram/Threads yêu cầu Page đã liên kết Instagram Professional.");
   }
-  const creationAccessToken = await ensureAdAssetAccess(
+  const creativeAccessToken = await ensureAdAssetAccess(
     adAccountId,
     pageId,
     needsInstagramIdentity ? instagramIdentityId : undefined,
@@ -467,7 +467,7 @@ export async function cloneAdCampaign(
     status: adStatus,
     special_ad_categories: template.specialAdCategories,
     buying_type: "AUCTION",
-    access_token: creationAccessToken,
+    access_token: accessToken,
   };
   // With CBO, bid_strategy belongs on the campaign — setting it on the ad set
   // instead makes FB fall back to a bid-cap strategy that then demands a
@@ -501,7 +501,7 @@ export async function cloneAdCampaign(
       billing_event: template.billingEvent,
       optimization_goal: template.optimizationGoal,
       status: adStatus,
-      access_token: creationAccessToken,
+      access_token: accessToken,
     };
     if (!useCBO) {
       adSetBody.daily_budget = dailyBudgetMinor;
@@ -553,12 +553,12 @@ export async function cloneAdCampaign(
               instagramUserId: source.instagramUserId,
               igPostId: source.igPostId,
               destinationUrl: source.destinationUrl,
-              accessToken: creationAccessToken,
+              accessToken: creativeAccessToken,
             })
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
               objectStoryId,
-              accessToken: creationAccessToken,
+              accessToken: creativeAccessToken,
             });
       const creative = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/adcreatives`, {
           method: "POST",
@@ -579,7 +579,7 @@ export async function cloneAdCampaign(
           adset_id: adSetId,
           creative: { creative_id: creativeId },
           status: adStatus,
-          access_token: creationAccessToken,
+          access_token: accessToken,
         }),
       }, { adAccountId });
       adId = ad.id;
