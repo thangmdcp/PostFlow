@@ -13,7 +13,7 @@ import { applyAdPlacements, validateAdPlacements, type AdPlacementConfig } from 
 import { metaRequestJson, MetaApiError } from "@/lib/metaApiClient";
 import type { MetaRequestContext } from "@/lib/metaUsage";
 import { prisma } from "@/lib/prisma";
-import { AdSourceNotReadyError } from "@/lib/adSourceReadiness";
+import { AdSourceNotReadyError, facebookObjectStoryIdCandidate } from "@/lib/adSourceReadiness";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -490,6 +490,30 @@ export async function cloneAdCampaign(
     if (source.platform === "facebook") {
       const fbPostId = source.fbPostId;
       if (!objectStoryId && fbPostId.includes("_")) objectStoryId = fbPostId;
+      // Reels frequently do not appear in `published_posts` even though the
+      // canonical Page story is already addressable. Resolve the deterministic
+      // PageID_ReelID object first; it is both cheaper and more reliable than
+      // paging the Page feed. Keep published_posts below as a compatibility
+      // fallback for older photo/video post shapes.
+      if (!objectStoryId && !fbPostId.includes("_")) {
+        const lookupToken = pageAccessToken ?? accessToken;
+        const candidate = facebookObjectStoryIdCandidate(pageId, fbPostId);
+        try {
+          const directStory = await metaJson<{ id?: string }>(
+            `${FB_API}/${candidate}?fields=id&access_token=${encodeURIComponent(lookupToken)}`,
+            {},
+            { pageId },
+          );
+          if (directStory.id) objectStoryId = directStory.id;
+        } catch (error) {
+          // Auth, quota and upstream failures must retain their structured
+          // classification. A normal "object not found yet" response may
+          // still be recoverable through the legacy published_posts lookup.
+          if (error instanceof MetaApiError && ["rate_limit", "permission", "token", "transient"].includes(error.category)) {
+            throw error;
+          }
+        }
+      }
       if (!objectStoryId && !fbPostId.includes("_")) {
         const lookupToken = pageAccessToken ?? accessToken;
         const postsUrl = `${FB_API}/${pageId}/published_posts?fields=id,attachments{target{id}}&limit=25&access_token=${lookupToken}`;

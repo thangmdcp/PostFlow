@@ -1,5 +1,9 @@
 export const SOURCE_READY_RETRY_DELAYS_MS = [30_000, 120_000, 300_000, 600_000, 900_000] as const;
 
+export function facebookObjectStoryIdCandidate(pageId: string, fbPostId: string): string {
+  return fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
+}
+
 export class AdSourceNotReadyError extends Error {
   readonly code = "AD_SOURCE_NOT_READY";
 
