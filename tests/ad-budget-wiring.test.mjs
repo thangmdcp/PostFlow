@@ -49,6 +49,13 @@ test("a Meta currency change invalidates both cap and random range", async () =>
   assert.match(policy, /SET "budgetCurrency"=NULL,"budgetMinMinor"=NULL,"budgetMaxMinor"=NULL,"budgetStepMinor"=NULL/);
 });
 
+test("currency refresh projects a supported advisory-lock value and stays fresh for 24 hours", async () => {
+  const policy = await read("lib/adBudgetPolicy.ts");
+  assert.match(policy, /const POLICY_FRESH_MS = 24 \* 60 \* 60_000/);
+  assert.match(policy, /SELECT 1 AS \"locked\" FROM pg_advisory_xact_lock/);
+  assert.doesNotMatch(policy, /`SELECT pg_advisory_xact_lock\(/);
+});
+
 test("a 20-post allocation keeps immutable account, currency and minor-unit snapshots", () => {
   const postIds = Array.from({ length: 20 }, (_, index) => `post-${index + 1}`);
   const allocation = buildBatchActionAllocation(

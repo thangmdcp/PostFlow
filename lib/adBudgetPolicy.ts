@@ -4,7 +4,7 @@ import { META_GRAPH_API } from "@/lib/meta";
 import { metaRequestJson } from "@/lib/metaApiClient";
 import { prisma } from "@/lib/prisma";
 
-const POLICY_FRESH_MS = 60 * 60_000;
+const POLICY_FRESH_MS = 24 * 60 * 60_000;
 const refreshes = new Map<string, Promise<FbAdAccount>>();
 
 export type BudgetPolicyErrorCode =
@@ -86,7 +86,10 @@ async function refreshAccountMetadata(account: FbAdAccount, forceRequested: bool
     // This transaction-scoped lock also coalesces refreshes across separate
     // serverless instances. The in-memory Map below handles the cheap,
     // same-process case.
-    await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, normalized);
+    // Selecting pg_advisory_xact_lock() directly exposes PostgreSQL's `void`
+    // result to Prisma, which it cannot deserialize. Keep the function in the
+    // FROM clause and project a supported scalar instead.
+    await tx.$queryRawUnsafe(`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext($1)::bigint)`, normalized);
     const latest = await tx.fbAdAccount.findUnique({ where: { id: account.id } });
     if (!latest) throw new BudgetPolicyError("AD_ACCOUNT_NOT_FOUND", `Không tìm thấy tài khoản quảng cáo ${normalized}.`, 404);
     const latestVerifiedAt = (latest.currencyVerifiedAt ?? latest.currencyUpdatedAt)?.getTime() ?? 0;
