@@ -48,6 +48,12 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
     account.currency && account.maxDailyBudgetMinor ? minorToMajor(account.maxDailyBudgetMinor, account.currency) : "",
   ])));
   const [policyBusy, setPolicyBusy] = useState<string | null>(null);
+  const [bulkVerifying, setBulkVerifying] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkVerifyErrors, setBulkVerifyErrors] = useState<Record<string, { code?: string; error: string }>>({});
+  const [budgetSelections, setBudgetSelections] = useState<Set<string>>(new Set());
+  const [groupCaps, setGroupCaps] = useState<Record<string, string>>({});
+  const [bulkConfirmBusy, setBulkConfirmBusy] = useState<string | null>(null);
 
   const { show, ToastComponent } = useToast();
 
@@ -186,6 +192,11 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Không xác minh được currency");
       setSavedAds((items) => items.map((item) => item.id === account.id ? data : item));
+      setBulkVerifyErrors((items) => {
+        const next = { ...items };
+        delete next[account.id];
+        return next;
+      });
       setCapDrafts((items) => ({ ...items, [account.id]: data.maxDailyBudget ?? "" }));
       show(`Đã xác minh ${data.currency} cho ${account.name}`, "success");
     } catch (error) {
@@ -230,6 +241,126 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
       setPolicyBusy(null);
     }
   }
+
+  function mergeBudgetAccounts(accounts: PublicFbAdAccount[]) {
+    const replacements = new Map(accounts.map((account) => [account.id, account]));
+    setSavedAds((items) => items.map((item) => replacements.get(item.id) ?? item));
+    setCapDrafts((items) => {
+      const next = { ...items };
+      for (const account of accounts) {
+        next[account.id] = account.currency && account.maxDailyBudgetMinor
+          ? minorToMajor(account.maxDailyBudgetMinor, account.currency)
+          : "";
+      }
+      return next;
+    });
+  }
+
+  async function verifyAllBudgetPolicies() {
+    if (bulkVerifying || !savedAds.length) return;
+    setBulkVerifying(true);
+    setBulkVerifyErrors({});
+    setBulkProgress({ done: 0, total: savedAds.length });
+    let succeeded = 0;
+    let failed = 0;
+    try {
+      // Sequential groups keep the browser progress visible while the server
+      // processes at most three Meta requests concurrently per group.
+      for (let index = 0; index < savedAds.length; index += 3) {
+        const chunk = savedAds.slice(index, index + 3);
+        const response = await fetch("/api/ad-accounts/budget-policy/verify-bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accountIds: chunk.map((account) => account.id) }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          failed += chunk.length;
+          setBulkVerifyErrors((items) => ({
+            ...items,
+            ...Object.fromEntries(chunk.map((account) => [account.id, { error: data.error || "Không xác minh được TKQC." }])),
+          }));
+        } else {
+          const verified = data.results.filter((result: { ok: boolean }) => result.ok).map((result: { account: PublicFbAdAccount }) => result.account);
+          mergeBudgetAccounts(verified);
+          succeeded += verified.length;
+          failed += data.results.length - verified.length;
+          setBulkVerifyErrors((items) => ({
+            ...items,
+            ...Object.fromEntries(data.results.filter((result: { ok: boolean }) => !result.ok).map((result: { id: string; code?: string; error: string }) => [result.id, { code: result.code, error: result.error }])),
+          }));
+        }
+        setBulkProgress({ done: Math.min(index + chunk.length, savedAds.length), total: savedAds.length });
+      }
+      show(failed ? `Đã xác minh ${succeeded}/${savedAds.length} TKQC · ${failed} tài khoản cần xử lý` : `Đã xác minh đủ ${succeeded}/${savedAds.length} TKQC`, failed ? "error" : "success");
+    } catch (error) {
+      show(error instanceof Error ? error.message : "Không xác minh được TKQC", "error");
+    } finally {
+      setBulkVerifying(false);
+    }
+  }
+
+  function toggleBudgetAccount(id: string) {
+    setBudgetSelections((items) => {
+      const next = new Set(items);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleCurrencyGroup(accounts: PublicFbAdAccount[]) {
+    const eligibleIds = accounts.filter((account) => account.accountStatus === 1).map((account) => account.id);
+    setBudgetSelections((items) => {
+      const next = new Set(items);
+      const allSelected = eligibleIds.length > 0 && eligibleIds.every((id) => next.has(id));
+      for (const id of eligibleIds) allSelected ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  async function applyGroupCap(currency: string, accounts: PublicFbAdAccount[]) {
+    const accountIds = accounts.filter((account) => budgetSelections.has(account.id) && account.accountStatus === 1).map((account) => account.id);
+    if (!accountIds.length) { show(`Chọn ít nhất một TKQC ${currency}.`, "error"); return; }
+    const maxDailyBudget = groupCaps[currency]?.trim();
+    if (!maxDailyBudget) { show(`Nhập trần ngân sách chung cho ${currency}.`, "error"); return; }
+    const approved = window.confirm([
+      `Áp dụng trần cho ${accountIds.length} TKQC ${currency}`,
+      `Trần chung: ${maxDailyBudget} ${currency}`,
+      "Chỉ các tài khoản đang được tick mới thay đổi.",
+      "PostFlow không quy đổi tỷ giá.",
+    ].join("\n"));
+    if (!approved) return;
+    setBulkConfirmBusy(currency);
+    try {
+      const response = await fetch("/api/ad-accounts/budget-policy/confirm-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountIds, currency, maxDailyBudget }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Không áp dụng được trần ngân sách.");
+      mergeBudgetAccounts(data.accounts);
+      setBudgetSelections((items) => {
+        const next = new Set(items);
+        for (const id of accountIds) next.delete(id);
+        return next;
+      });
+      show(`Đã áp dụng trần ${maxDailyBudget} ${currency} cho ${data.updated} TKQC`, "success");
+    } catch (error) {
+      show(error instanceof Error ? error.message : "Không áp dụng được trần ngân sách", "error");
+    } finally {
+      setBulkConfirmBusy(null);
+    }
+  }
+
+  const currencyGroups = savedAds.reduce<Record<string, PublicFbAdAccount[]>>((groups, account) => {
+    if (!account.currency || !account.currencyVerifiedAt || !account.minDailyBudgetMinor || account.accountStatus !== 1) return groups;
+    (groups[account.currency] ??= []).push(account);
+    return groups;
+  }, {});
+  const needsBudgetAttention = savedAds.filter((account) =>
+    !account.currency || !account.currencyVerifiedAt || !account.minDailyBudgetMinor || account.accountStatus !== 1 || bulkVerifyErrors[account.id]
+  );
 
   return (
     <div className="w-full space-y-5">
@@ -415,54 +546,122 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
           </div>
           {savedAds.length > 0 && (
             <div className="rounded-lg border overflow-hidden">
-              <div className="px-3 py-2 bg-muted/50 border-b text-xs font-semibold">An toàn currency và ngân sách</div>
-              <div className="divide-y">
-                {savedAds.map((account) => {
-                  const confirmed = hasConfirmedBudgetPolicy(account);
-                  const exponent = account.currency ? currencyMinorUnitExponent(account.currency) : 0;
-                  const minimum = account.currency && account.minDailyBudgetMinor
-                    ? minorToMajor(account.minDailyBudgetMinor, account.currency)
-                    : null;
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/50 px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-semibold">An toàn currency và ngân sách</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">Xác minh một lần, sau đó đặt trần chung cho các TKQC cùng loại tiền.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {bulkProgress && <span className="text-[10px] font-medium text-muted-foreground">{bulkProgress.done}/{bulkProgress.total}</span>}
+                  <button type="button" onClick={verifyAllBudgetPolicies} disabled={bulkVerifying || Boolean(policyBusy)}
+                    className="flex items-center gap-1.5 rounded-md border bg-background px-3 py-2 text-xs font-semibold hover:bg-muted disabled:opacity-50">
+                    {bulkVerifying && <Loader2 size={13} className="animate-spin" />}
+                    {bulkVerifying ? "Đang xác minh..." : "Xác minh tất cả TKQC"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3 p-3">
+                {Object.entries(currencyGroups).sort(([a], [b]) => a.localeCompare(b)).map(([currency, accounts]) => {
+                  const eligible = accounts.filter((account) => account.accountStatus === 1);
+                  const allSelected = eligible.length > 0 && eligible.every((account) => budgetSelections.has(account.id));
+                  const minimumMinor = accounts.reduce((highest, account) => {
+                    const value = BigInt(account.minDailyBudgetMinor ?? "0");
+                    return value > highest ? value : highest;
+                  }, BigInt(0)).toString();
+                  const minimum = minorToMajor(minimumMinor, currency);
+                  const exponent = currencyMinorUnitExponent(currency);
                   return (
-                    <div key={account.id} className="p-3 space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold truncate">{account.name} · {account.currency ?? "Chưa xác minh"}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono">{account.accountId}</p>
-                        </div>
-                        <span className={`text-[10px] rounded-full px-2 py-1 font-medium ${confirmed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                          {confirmed ? "Đã xác nhận" : "Đang khóa tạo ads"}
-                        </span>
+                    <section key={currency} className="overflow-hidden rounded-lg border">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-3 py-2">
+                        <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold">
+                          <input type="checkbox" checked={allSelected} onChange={() => toggleCurrencyGroup(accounts)} disabled={!eligible.length || Boolean(bulkConfirmBusy)} className="h-4 w-4 accent-primary" />
+                          {currency} · {accounts.length} TKQC
+                        </label>
+                        <span className="text-[10px] text-muted-foreground">Tối thiểu chung: {minimum} {currency}</span>
                       </div>
-                      <div className="flex flex-wrap items-end gap-2">
-                        <div className="min-w-[180px] flex-1">
-                          <label className="text-[10px] text-muted-foreground">Trần ngân sách/ngày {account.currency ? `(${account.currency})` : ""}</label>
-                          <input
-                            type="number"
-                            min={minimum ?? undefined}
-                            step={exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`}
-                            value={capDrafts[account.id] ?? ""}
-                            onChange={(event) => setCapDrafts((items) => ({ ...items, [account.id]: event.target.value }))}
-                            disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id}
-                            className="mt-1 w-full rounded-md border bg-background px-2.5 py-2 text-xs"
-                            placeholder={minimum ? `Tối thiểu ${minimum}` : "Xác minh Meta trước"}
-                          />
+                      <div className="divide-y">
+                        {accounts.map((account) => {
+                          const confirmed = hasConfirmedBudgetPolicy(account);
+                          const currentCap = account.maxDailyBudgetMinor ? minorToMajor(account.maxDailyBudgetMinor, currency) : null;
+                          return (
+                            <label key={account.id} className={`flex items-center justify-between gap-3 px-3 py-2 ${account.accountStatus === 1 ? "cursor-pointer hover:bg-muted/20" : "opacity-60"}`}>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <input type="checkbox" checked={budgetSelections.has(account.id)} onChange={() => toggleBudgetAccount(account.id)} disabled={account.accountStatus !== 1 || Boolean(bulkConfirmBusy)} className="h-4 w-4 shrink-0 accent-primary" />
+                                <span className="min-w-0">
+                                  <span className="block truncate text-xs font-medium">{account.name}</span>
+                                  <span className="block truncate font-mono text-[10px] text-muted-foreground">{account.accountId}</span>
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-right">
+                                <span className={`block text-[10px] font-medium ${confirmed ? "text-emerald-600" : "text-amber-600"}`}>{confirmed ? `Trần ${currentCap} ${currency}` : "Chưa đặt trần"}</span>
+                                {account.activeBudgetWarning && <span className="block max-w-[360px] text-[10px] text-red-600">{account.activeBudgetWarning}</span>}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap items-end gap-2 border-t bg-muted/20 p-3">
+                        <div className="min-w-[220px] flex-1">
+                          <label className="text-[10px] text-muted-foreground">Trần chung/ngày ({currency})</label>
+                          <input type="number" min={minimum} step={exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`}
+                            value={groupCaps[currency] ?? ""} onChange={(event) => setGroupCaps((items) => ({ ...items, [currency]: event.target.value }))}
+                            disabled={bulkConfirmBusy === currency} placeholder={`Tối thiểu ${minimum}`}
+                            className="mt-1 w-full rounded-md border bg-background px-2.5 py-2 text-xs" />
                         </div>
-                        <button type="button" onClick={() => refreshBudgetPolicy(account)} disabled={policyBusy === account.id}
-                          className="rounded-md border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
-                          {policyBusy === account.id ? "Đang kiểm tra..." : "Xác minh Meta"}
-                        </button>
-                        <button type="button" onClick={() => confirmBudgetPolicy(account)} disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id}
-                          className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium disabled:opacity-50">
-                          Xác nhận trần
+                        <button type="button" onClick={() => applyGroupCap(currency, accounts)} disabled={Boolean(bulkConfirmBusy) || !accounts.some((account) => budgetSelections.has(account.id))}
+                          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">
+                          {bulkConfirmBusy === currency && <Loader2 size={13} className="animate-spin" />}
+                          Áp dụng cho đã chọn
                         </button>
                       </div>
-                      {minimum && <p className="text-[10px] text-muted-foreground">Mức tối thiểu Meta: {minimum} {account.currency}. Không quy đổi tỷ giá.</p>}
-                      {account.accountStatus !== 1 && <p className="text-[10px] font-medium text-red-600">TKQC chưa ở trạng thái hoạt động trên Meta; tạo Ads đang bị khóa.</p>}
-                      {account.activeBudgetWarning && <p className="text-[10px] font-medium text-red-600">{account.activeBudgetWarning}</p>}
-                    </div>
+                    </section>
                   );
                 })}
+
+                {needsBudgetAttention.length > 0 && (
+                  <section className="overflow-hidden rounded-lg border border-amber-200">
+                    <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">Cần xử lý · {needsBudgetAttention.length} TKQC</div>
+                    <div className="divide-y">
+                      {needsBudgetAttention.map((account) => (
+                        <div key={account.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium">{account.name} · {account.currency ?? "Chưa xác minh"}</p>
+                            <p className="truncate font-mono text-[10px] text-muted-foreground">{account.accountId}</p>
+                            <p className="text-[10px] font-medium text-red-600">{bulkVerifyErrors[account.id]?.error ?? (account.accountStatus !== 1 ? "TKQC chưa ở trạng thái hoạt động trên Meta." : "Cần xác minh lại với Meta.")}</p>
+                          </div>
+                          <button type="button" onClick={() => refreshBudgetPolicy(account)} disabled={policyBusy === account.id || bulkVerifying}
+                            className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50">
+                            {policyBusy === account.id ? "Đang kiểm tra..." : "Thử lại"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <details className="rounded-lg border">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium">Thao tác riêng từng TKQC</summary>
+                  <div className="divide-y border-t">
+                    {savedAds.map((account) => {
+                      const minimum = account.currency && account.minDailyBudgetMinor ? minorToMajor(account.minDailyBudgetMinor, account.currency) : null;
+                      const exponent = account.currency ? currencyMinorUnitExponent(account.currency) : 0;
+                      return (
+                        <div key={account.id} className="flex flex-wrap items-end gap-2 p-3">
+                          <div className="min-w-[190px] flex-1">
+                            <p className="truncate text-xs font-medium">{account.name} · {account.currency ?? "Chưa xác minh"}</p>
+                            <input type="number" min={minimum ?? undefined} step={exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`}
+                              value={capDrafts[account.id] ?? ""} onChange={(event) => setCapDrafts((items) => ({ ...items, [account.id]: event.target.value }))}
+                              disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id} placeholder={minimum ? `Tối thiểu ${minimum}` : "Xác minh Meta trước"}
+                              className="mt-1 w-full rounded-md border bg-background px-2.5 py-2 text-xs" />
+                          </div>
+                          <button type="button" onClick={() => refreshBudgetPolicy(account)} disabled={policyBusy === account.id || bulkVerifying} className="rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50">Xác minh</button>
+                          <button type="button" onClick={() => confirmBudgetPolicy(account)} disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id} className="rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50">Xác nhận riêng</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
               </div>
             </div>
           )}

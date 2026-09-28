@@ -1,8 +1,9 @@
 import type { FbAdAccount } from "@prisma/client";
-import { majorToMinor, minorToMajor, normalizeCurrency } from "@/lib/adMoney";
+import { AdMoneyError, majorToMinor, minorToMajor, normalizeCurrency } from "@/lib/adMoney";
 import { META_GRAPH_API } from "@/lib/meta";
 import { metaRequestJson } from "@/lib/metaApiClient";
 import { prisma } from "@/lib/prisma";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 const POLICY_FRESH_MS = 24 * 60 * 60_000;
 const refreshes = new Map<string, Promise<FbAdAccount>>();
@@ -386,8 +387,11 @@ export async function confirmAdAccountBudgetPolicy(input: {
   accountId: string;
   currency: string;
   maxDailyBudget: string;
-}): Promise<FbAdAccount> {
-  let account = await getVerifiedAdAccountPolicy(input.accountId, { forceRefresh: true, requireCap: false });
+}, options: { forceRefresh?: boolean } = {}): Promise<FbAdAccount> {
+  let account = await getVerifiedAdAccountPolicy(input.accountId, {
+    forceRefresh: options.forceRefresh ?? true,
+    requireCap: false,
+  });
   let currency: string;
   try {
     currency = normalizeCurrency(input.currency);
@@ -429,6 +433,79 @@ export async function confirmAdAccountBudgetPolicy(input: {
     activeBudgetWarning: Boolean(activeBudgetWarning),
   });
   return account;
+}
+
+export async function confirmAdAccountBudgetPoliciesBulk(input: {
+  accountIds: string[];
+  currency: string;
+  maxDailyBudget: string;
+}): Promise<FbAdAccount[]> {
+  const ids = [...new Set(input.accountIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!ids.length) throw new BudgetPolicyError("AD_ACCOUNT_NOT_FOUND", "Chọn ít nhất một TKQC.", 400);
+
+  let currency: string;
+  let maxDailyBudgetMinor: string;
+  try {
+    currency = normalizeCurrency(input.currency);
+    maxDailyBudgetMinor = majorToMinor(input.maxDailyBudget, currency);
+  } catch (error) {
+    throw new BudgetPolicyError(
+      error instanceof AdMoneyError && error.code === "UNSUPPORTED_CURRENCY" ? "AD_ACCOUNT_CURRENCY_UNSUPPORTED" : "BUDGET_INVALID",
+      error instanceof Error ? error.message : "Trần ngân sách không hợp lệ.",
+    );
+  }
+
+  const saved = await prisma.fbAdAccount.findMany({ where: { id: { in: ids } } });
+  if (saved.length !== ids.length) {
+    throw new BudgetPolicyError("AD_ACCOUNT_NOT_FOUND", "Có TKQC không tồn tại hoặc đã bị xóa.", 404);
+  }
+
+  // The bulk verification action has normally refreshed these rows already.
+  // A stale row is refreshed here, but a fresh row never causes a duplicate
+  // Meta metadata call.
+  const verified = await mapWithConcurrency(saved, 3, (account) => getVerifiedAdAccountPolicy(
+    account.accountId,
+    { requireCap: false },
+  ));
+  for (const account of verified) {
+    if (account.currency !== currency) {
+      throw new BudgetPolicyError(
+        "BUDGET_CURRENCY_MISMATCH",
+        `${account.name} dùng ${account.currency ?? "currency chưa xác minh"}, không phải ${currency}.`,
+      );
+    }
+    if (!account.minDailyBudgetMinor || BigInt(maxDailyBudgetMinor) < BigInt(account.minDailyBudgetMinor)) {
+      throw new BudgetPolicyError(
+        "BUDGET_BELOW_META_MIN",
+        `Trần phải từ ${minorToMajor(account.minDailyBudgetMinor ?? "0", currency)} ${currency} trở lên cho ${account.name}.`,
+      );
+    }
+  }
+
+  const confirmedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    const update = await tx.fbAdAccount.updateMany({
+      where: { id: { in: ids } },
+      data: {
+        maxDailyBudgetMinor,
+        budgetPolicyCurrency: currency,
+        budgetPolicyConfirmedAt: confirmedAt,
+      },
+    });
+    if (update.count !== ids.length) {
+      throw new BudgetPolicyError("AD_ACCOUNT_NOT_FOUND", "Danh sách TKQC đã thay đổi; chưa áp dụng trần.", 409);
+    }
+  });
+
+  const updated = await prisma.fbAdAccount.findMany({ where: { id: { in: ids } } });
+  await mapWithConcurrency(updated, 2, async (account) => {
+    const activeBudgetWarning = await auditActiveBudgets(account);
+    await prisma.fbAdAccount.update({
+      where: { id: account.id },
+      data: { activeBudgetWarning, activeBudgetCheckedAt: new Date() },
+    });
+  });
+  return prisma.fbAdAccount.findMany({ where: { id: { in: ids } } });
 }
 
 type PublicBudgetPolicyAccount = Pick<FbAdAccount,
