@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Post, ExtractedLink, PostComment } from "@prisma/client";
 import { hasConfirmedBudgetPolicy, type PublicFbConnection as FbConnection, type PublicFbAdAccount as FbAdAccount } from "@/lib/publicFacebook";
+import { PageAvatar } from "@/components/PageAvatar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { formatDate, truncate } from "@/lib/utils";
@@ -1212,8 +1213,9 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
                     {col.key === "page" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
-                        <span className="text-xs text-slate-600 dark:text-slate-400 truncate block" title={pageName}>
-                          {pageName}
+                        <span className="flex min-w-0 items-center gap-2" title={pageName}>
+                          {conn && <PageAvatar page={conn} className="h-7 w-7" />}
+                          <span className="truncate text-xs text-slate-600 dark:text-slate-400">{pageName}</span>
                         </span>
                       </td>
                     )}

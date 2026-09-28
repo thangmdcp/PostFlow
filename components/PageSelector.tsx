@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Bookmark, Pencil, Trash2, X, Check, Plus, Loader2, Users } from "lucide-react";
 import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { useToast } from "@/components/ui/toast";
+import { PageAvatar } from "@/components/PageAvatar";
 
 interface PagePreset { id: string; name: string; pageIds: string[] }
 
@@ -53,6 +54,7 @@ export function PageMultiSelect({ connections, selected, onChange }: PageMultiSe
                 onChange={() => toggle(c.pageId)}
                 className="rounded accent-blue-600"
               />
+              <PageAvatar page={c} className="h-7 w-7" />
               <span className="min-w-0">
                 <span className="text-sm truncate block">{c.pageName}</span>
                 <span className={`text-[10px] ${c.instagramUserId ? "text-pink-600" : "text-slate-400"}`}>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { hasConfirmedBudgetPolicy, type PublicFbConnection, type PublicFbAdAccount } from "@/lib/publicFacebook";
+import { PageAvatar } from "@/components/PageAvatar";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, CheckCircle2, Facebook, ChevronDown, ShieldCheck } from "lucide-react";
 import { currencyMinorUnitExponent, minorToMajor } from "@/lib/adMoney";
@@ -503,8 +504,9 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
                 ) : connections.map(c => (
                   <label key={c.id} className={`flex items-center gap-2.5 px-3 py-2.5 cursor-pointer hover:bg-muted/30 ${deletePages.has(c.id) ? "bg-destructive/5" : ""}`}>
                     <input type="checkbox" checked={deletePages.has(c.id)} onChange={() => toggleDeletePage(c.id)} className="h-4 w-4 accent-destructive shrink-0" />
-                    <div className="min-w-0 flex items-center gap-1.5">
+                    <div className="min-w-0 flex items-center gap-2">
                       <CheckCircle2 size={12} className={`${connectionHealth?.pages[c.pageId] === false ? "text-amber-600" : "text-green-600"} shrink-0`} />
+                      <PageAvatar page={c} className="h-8 w-8" />
                       <div className="min-w-0">
                         <p className="text-xs font-medium truncate">{c.pageName}</p>
                         <p className="text-[10px] text-muted-foreground font-mono truncate">{c.pageId}</p>

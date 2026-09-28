@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search } from "lucide-react";
+import { PageAvatar } from "@/components/PageAvatar";
 
-export interface SelectOption { value: string; label: string; disabled?: boolean }
+export interface SelectOption { value: string; label: string; disabled?: boolean; pageAvatar?: { id: string; pageName: string } }
 
 interface CustomSelectProps {
   value: string;
@@ -92,13 +93,13 @@ export function CustomSelect({ value, onChange, options, placeholder = "-- Chọ
     <div ref={menuRef} role="listbox" tabIndex={-1} onKeyDown={onKeyDown} className="fixed z-[200] overflow-hidden rounded-xl border bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" style={{ left: position.left, top: position.above ? undefined : position.top, bottom: position.above ? window.innerHeight - position.top : undefined, width: position.width, maxHeight: position.maxHeight }}>
       {searchable && <div className="sticky top-0 border-b bg-white p-2 dark:border-slate-700 dark:bg-slate-900"><div className="flex items-center gap-2 rounded-lg border bg-slate-50 px-2.5 dark:bg-slate-800"><Search size={13} className="text-slate-400" /><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} onKeyDown={onKeyDown} placeholder="Tìm kiếm..." className="min-w-0 flex-1 bg-transparent py-2 text-xs outline-none" /></div></div>}
       <div className="overscroll-contain p-1" style={{ maxHeight: position.maxHeight - (searchable ? 53 : 0), overflowY: "auto" }}>
-        {filtered.length ? filtered.map((option, index) => <button key={option.value} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${option.disabled ? "cursor-not-allowed text-slate-300 dark:text-slate-600" : index === active ? "bg-slate-100 dark:bg-slate-800" : "text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"} ${option.value === value ? "font-semibold text-blue-700 dark:text-blue-300" : ""}`}><Check size={12} className={option.value === value ? "text-blue-600" : "invisible"} /><span className="truncate">{option.label}</span></button>) : <p className="px-3 py-5 text-center text-xs text-slate-400">Không tìm thấy</p>}
+        {filtered.length ? filtered.map((option, index) => <button key={option.value} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${option.disabled ? "cursor-not-allowed text-slate-300 dark:text-slate-600" : index === active ? "bg-slate-100 dark:bg-slate-800" : "text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"} ${option.value === value ? "font-semibold text-blue-700 dark:text-blue-300" : ""}`}><Check size={12} className={option.value === value ? "text-blue-600" : "invisible"} />{option.pageAvatar && <PageAvatar page={option.pageAvatar} className="h-6 w-6" />}<span className="truncate">{option.label}</span></button>) : <p className="px-3 py-5 text-center text-xs text-slate-400">Không tìm thấy</p>}
       </div>
     </div>, document.body
   ) : null;
 
   return <div className={className ?? ""}>
-    <button ref={triggerRef} type="button" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} onKeyDown={(event) => { if (!open && (event.key === "Enter" || event.key === " " || event.key === "ArrowDown")) { event.preventDefault(); setOpen(true); } }} onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-2.5 py-2 text-xs text-slate-700 transition-colors hover:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><span className={`truncate ${selected ? "" : "text-slate-400"}`}>{selected?.label ?? placeholder}</span><ChevronDown size={12} className={`shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} /></button>
+    <button ref={triggerRef} type="button" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} onKeyDown={(event) => { if (!open && (event.key === "Enter" || event.key === " " || event.key === "ArrowDown")) { event.preventDefault(); setOpen(true); } }} onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-2.5 py-2 text-xs text-slate-700 transition-colors hover:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><span className="flex min-w-0 items-center gap-2">{selected?.pageAvatar && <PageAvatar page={selected.pageAvatar} className="h-6 w-6" />}<span className={`truncate ${selected ? "" : "text-slate-400"}`}>{selected?.label ?? placeholder}</span></span><ChevronDown size={12} className={`shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} /></button>
     {menu}
   </div>;
 }

@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate, type KeyedMutator } from "swr";
 import * as XLSX from "xlsx";
 import type { Post, ExtractedLink, PostComment } from "@prisma/client";
 import { hasConfirmedBudgetPolicy, type PublicFbConnection as FbConnection, type PublicFbAdAccount } from "@/lib/publicFacebook";
+import { PageAvatar } from "@/components/PageAvatar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -2242,7 +2243,8 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   // already-committed value shown to the user. Only fall back to the local
   // pre-assigned pick for rows that haven't been scheduled/published yet.
   const effectivePageId = post.pageId || rowPageId || "";
-  const pageName = connections.find(c => c.pageId === effectivePageId)?.pageName ?? effectivePageId ?? "";
+  const pageConnection = connections.find(c => c.pageId === effectivePageId);
+  const pageName = pageConnection?.pageName ?? effectivePageId ?? "";
   const effectiveAccountId = post.adAccountUsed || rowAccountId || "";
   const accountName = adAccounts.find(a => a.accountId === effectiveAccountId)?.name ?? effectiveAccountId;
 
@@ -2381,7 +2383,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
 
       {col.key === "page" && cell("page",
         pageName
-          ? <span className="text-xs text-slate-600 dark:text-slate-400 truncate block">{pageName}</span>
+          ? <span className="flex min-w-0 items-center gap-2">{pageConnection && <PageAvatar page={pageConnection} className="h-7 w-7" />}<span className="truncate text-xs text-slate-600 dark:text-slate-400">{pageName}</span></span>
           : <span className="text-slate-300 text-xs">–</span>
       )}
 
