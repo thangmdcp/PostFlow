@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, Check, ChevronDown, Clock, Loader2, Plus, Send, Trash2, X } from "lucide-react";
-import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
+import { hasConfirmedBudgetPolicy, type PublicFbAdAccount, type PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
 import { BatchPresetBar } from "@/components/BatchPresetBar";
 import { CommentSettingsPanel, type CommentEntry } from "@/components/CommentSettingsPanel";
@@ -27,6 +27,7 @@ import { cloudinaryCommentPublicId, collectCommentImageUrls, replaceCommentImage
 import { dateToVnSchedule, scheduleValidation } from "@/lib/schedulePlan";
 import { templatePortability } from "@/lib/adTemplateBlueprint";
 import { EMPTY_AD_PLACEMENTS, parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
+import { currencyMajorInputStep } from "@/lib/adMoney";
 
 export interface BatchPageRow {
   pageId: string;
@@ -68,7 +69,7 @@ interface Props {
   count: number;
   connections: FbConnection[];
   templates: CampaignTemplate[];
-  adAccounts: { accountId: string; name: string }[];
+  adAccounts: PublicFbAdAccount[];
   defaults: BatchActionConfig;
   onClose: () => void;
   onConfirm: (config: BatchActionConfig) => Promise<boolean>;
@@ -114,7 +115,7 @@ function reusablePreset(config: BatchActionConfig) {
     publishTargets: config.publishTargets,
     pageRows: config.pageRows,
     adConfig: config.adConfig,
-    accountRows: config.accountRows.map(({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep }) => ({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep })),
+    accountRows: config.accountRows.map(({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep, budgetCurrency }) => ({ accountId, templateId, weight, budgetMin, budgetMax, budgetStep, budgetCurrency })),
     scheduleMode: config.scheduleMode,
     endTime: config.endTime,
     stepMinutes: config.stepMinutes,
@@ -279,16 +280,17 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
 
   function addAccountRow() {
     setConfig((current) => {
-      const free = adAccounts.find((account) => !current.accountRows.some((row) => row.accountId === account.accountId));
+      const free = adAccounts.find((account) => hasConfirmedBudgetPolicy(account) && !current.accountRows.some((row) => row.accountId === account.accountId));
       if (!free) return current;
       return {
         ...current,
         accountRows: applyEvenWeights([...current.accountRows, {
           accountId: free.accountId,
           weight: 0,
-          budgetMin: current.adConfig.budgetMin,
-          budgetMax: current.adConfig.budgetMax,
-          budgetStep: current.adConfig.budgetStep,
+          budgetMin: "",
+          budgetMax: "",
+          budgetStep: free.currency ? currencyMajorInputStep(free.currency) : "",
+          budgetCurrency: free.currency ?? undefined,
           templateId: templates[0]?.campaignId ?? "",
         }]),
       };
@@ -343,6 +345,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     })) return "Template cũ thiếu snapshot Ad Set; hãy quét và lưu lại trước khi dùng cho TKQC khác.";
     if (runsAds && !weightsAreValid(config.accountRows.map((row) => ({ id: row.accountId, weight: row.weight })))) return "Tỷ lệ TKQC phải có tổng đúng 100%.";
     if (runsAds && new Set(config.accountRows.map((row) => row.accountId)).size !== config.accountRows.length) return "Mỗi TKQC chỉ được chọn một lần.";
+    if (runsAds && config.accountRows.some((row) => !row.budgetCurrency)) return "Mỗi TKQC phải xác nhận currency và trần ngân sách trước.";
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
     if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom))) return "Kiểm tra lại dải độ tuổi Ads.";
     if (runsAds) {

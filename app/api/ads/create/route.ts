@@ -3,15 +3,16 @@ import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { parseAdPlacementConfig } from "@/lib/adPlacements";
+import { BudgetPolicyError, validateBudgetForAccount } from "@/lib/adBudgetPolicy";
 
 export async function POST(req: Request) {
 
   try {
-    const { postId, templateCampaignId, adAccountId, dailyBudget, ageMin, ageMax, gender, adStatus } = (await req.json()) as {
+    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus } = (await req.json()) as {
       postId: string;
       templateCampaignId: string;
       adAccountId?: string;
-      dailyBudget?: string;
+      budget?: { amount?: string; currency?: string };
       ageMin?: number;
       ageMax?: number;
       gender?: string;
@@ -79,8 +80,16 @@ export async function POST(req: Request) {
 
     // facebook.ts prepends act_ internally, so strip it here if present
     const rawAdAccountId = resolvedAdAccountId.replace(/^act_/, "");
+    if (!budget?.amount || !budget.currency) {
+      return NextResponse.json({ error: "Ngân sách phải kèm currency của TKQC.", code: "BUDGET_INVALID" }, { status: 400 });
+    }
+    const verifiedBudget = await validateBudgetForAccount({
+      accountId: resolvedAdAccountId,
+      amount: budget.amount,
+      currency: budget.currency,
+    });
 
-    // Extract utm_content from first affiliate link as campaign name (like FB Ads tool)
+    // Extract utm_content from the first affiliate link as the campaign name.
     const affUrl = post.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
     if (instagramOnly && !affUrl) {
       return NextResponse.json({ error: "Quảng cáo Instagram cần ít nhất một link affiliate" }, { status: 400 });
@@ -99,7 +108,7 @@ export async function POST(req: Request) {
         : { platform: "facebook", fbPostId: post.fbPostId!, instagramUserId: fbConn.instagramUserId ?? undefined },
       rawAdAccountId,
       accessToken,
-      dailyBudget ?? "100000",
+      verifiedBudget.amountMinor,
       fbConn.accessToken,
       campaignName || undefined,
       ageMin,
@@ -129,24 +138,29 @@ export async function POST(req: Request) {
 
     // Save campaign ID + ad params back to post so dashboard can show them
     await prisma.$executeRawUnsafe(
-      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adAgeMin" = $8, "adAgeMax" = $9, "adGender" = $10, "adStatus" = 'done', "adAccountUsed" = $11, "errorMsg" = NULL, "adNextAttemptAt" = NULL WHERE "id" = $12`,
+      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adBudgetMinor" = $8, "adBudgetCurrency" = $9, "adAgeMin" = $10, "adAgeMax" = $11, "adGender" = $12, "adStatus" = 'done', "adAccountUsed" = $13, "errorMsg" = NULL, "adNextAttemptAt" = NULL WHERE "id" = $14`,
       result.campaignId,
       result.adSetId,
       result.creativeId,
       result.adId,
       instagramOnly ? "instagram" : "facebook",
       instagramOnly ? affUrl : null,
-      dailyBudget ?? "100000",
+      verifiedBudget.amountMajor,
+      verifiedBudget.amountMinor,
+      verifiedBudget.currency,
       ageMin ?? null,
       ageMax ?? null,
       gender ?? "",
       resolvedAdAccountId,
-      postId
+      postId,
     );
 
     return NextResponse.json(result);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: err instanceof AdTemplateConfigurationError ? 400 : 500 });
+    return NextResponse.json(
+      { error: msg, ...(err instanceof BudgetPolicyError ? { code: err.code } : {}) },
+      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError ? 400 : 500 },
+    );
   }
 }

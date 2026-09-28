@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import useSWR, { mutate as globalMutate, type KeyedMutator } from "swr";
 import * as XLSX from "xlsx";
 import type { Post, ExtractedLink, PostComment } from "@prisma/client";
-import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
+import { hasConfirmedBudgetPolicy, type PublicFbConnection as FbConnection, type PublicFbAdAccount } from "@/lib/publicFacebook";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,7 +15,7 @@ import {
   Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X, Filter,
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
-import { randomInteger, randomStep } from "@/lib/adSettings";
+import { randomInteger } from "@/lib/adSettings";
 import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import type { ScheduleMode } from "@/lib/schedulePlan";
 import { buildScheduleTimes } from "@/lib/schedulePlan";
@@ -42,6 +42,7 @@ import {
 } from "@/lib/subIdPreset";
 import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAction";
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
+import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { FetchStatusDetail } from "@/components/FetchStatusDetail";
 import {
   COMPOSER_DRAFT_KEY,
@@ -194,7 +195,7 @@ const ADS_CONFIG_KEY = "postflow_batch_ads_v1";
 const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65",
-  gender: "", budgetMin: "100000", budgetMax: "200000", budgetStep: "10000",
+  gender: "", budgetMin: "", budgetMax: "", budgetStep: "",
   adStatus: "PAUSED",
 };
 
@@ -253,7 +254,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   // ── Lifted ads config (persists across batches via localStorage) ──────────────
   const [adConfig, setAdConfig] = useState<BatchAdConfig>(DEFAULT_ADS_CONFIG);
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
-  const [adAccounts, setAdAccounts] = useState<{ accountId: string; name: string }[]>([]);
+  const [adAccounts, setAdAccounts] = useState<PublicFbAdAccount[]>([]);
   const [accountRows, setAccountRows] = useState<AutoAdsAccountRowLike[]>([]);
   // TKQC rows are the same "Cài đặt Ads" source everywhere — every panel
   // (pre-batch, in-batch drawer) edits this one list, which writes straight
@@ -261,7 +262,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   function persistAccountRow(row: AutoAdsAccountRowLike, onSaved?: (id: string) => void) {
     fetch("/api/auto-ads-accounts", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep }),
+      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep, budgetCurrency: row.budgetCurrency }),
     }).then(r => r.ok ? r.json() : null).then(saved => { if (saved?.id) onSaved?.(saved.id); }).catch(() => {});
   }
   // Adding/removing a row re-splits % evenly across all rows (1→100%,
@@ -285,10 +286,11 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     });
   }
   function addAccountRow() {
-    const firstFree = adAccounts.find(a => !accountRows.some(r => r.accountId === a.accountId));
+    const firstFree = adAccounts.find(a => hasConfirmedBudgetPolicy(a) && !accountRows.some(r => r.accountId === a.accountId));
     const newRow: AutoAdsAccountRowLike = {
-      accountId: firstFree?.accountId ?? adAccounts[0]?.accountId ?? "",
-      weight: 0, budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep,
+      accountId: firstFree?.accountId ?? "",
+      weight: 0, budgetMin: "", budgetMax: "", budgetStep: firstFree?.currency ? currencyMajorInputStep(firstFree.currency) : "",
+      budgetCurrency: firstFree?.currency ?? undefined,
     };
     const next = applyEvenWeights([...accountRows, newRow]);
     setAccountRows(next);
@@ -518,7 +520,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       commentSharedImageUrls: defaultCommentSharedImageUrls, commentRandomCount: defaultCommentRandomCount,
       accountRows: accountRows.map(r => ({
         accountId: r.accountId, weight: r.weight,
-        budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep,
+        budgetMin: r.budgetMin, budgetMax: r.budgetMax, budgetStep: r.budgetStep, budgetCurrency: r.budgetCurrency,
       })),
     };
   }
@@ -722,7 +724,7 @@ interface BatchViewProps {
   connections: FbConnection[];
   adConfig: BatchAdConfig;
   templates: CampaignTemplate[];
-  adAccounts: { accountId: string; name: string }[];
+  adAccounts: PublicFbAdAccount[];
   accountRows: AutoAdsAccountRowLike[];
   defaultPageIds: string[];
   defaultScheduleMode: ScheduleMode;
@@ -1042,21 +1044,22 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     return Object.fromEntries(ids.map((id, index) => [id, allocation[index] ?? ""]));
   }
 
-  function allocateAccounts(ids: string[], fallbackBudget: { budgetMin: string; budgetMax: string; budgetStep: string }): Record<string, { accountId: string; budget: number }> {
+  function allocateAccounts(ids: string[]): Record<string, { accountId: string; budget: number }> {
     if (bulkAccountId) {
       const row = localAccountRows.find((account) => account.accountId === bulkAccountId);
       return Object.fromEntries(ids.map((id) => [id, {
         accountId: bulkAccountId,
-        budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+        budget: row?.budgetCurrency ? Number(randomMajorStep(row.budgetMin, row.budgetMax, row.budgetStep, row.budgetCurrency)) : 0,
       }]));
     }
-    const allocation = allocateWeighted(localAccountRows.map((account) => ({ id: account.accountId, weight: account.weight })), ids.length);
+    const validRows = localAccountRows.filter((row) => row.budgetCurrency && Number(row.budgetMin) > 0 && Number(row.budgetMax) >= Number(row.budgetMin));
+    const allocation = allocateWeighted(validRows.map((account) => ({ id: account.accountId, weight: account.weight })), ids.length);
     return Object.fromEntries(ids.map((id, index) => {
       const accountId = allocation[index] ?? "";
-      const row = localAccountRows.find((account) => account.accountId === accountId);
+      const row = validRows.find((account) => account.accountId === accountId);
       return [id, {
         accountId,
-        budget: randomStep(Number(row?.budgetMin ?? fallbackBudget.budgetMin), Number(row?.budgetMax ?? fallbackBudget.budgetMax), Number(row?.budgetStep ?? fallbackBudget.budgetStep)),
+        budget: row?.budgetCurrency ? Number(randomMajorStep(row.budgetMin, row.budgetMax, row.budgetStep, row.budgetCurrency)) : 0,
       }];
     }));
   }
@@ -1066,10 +1069,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   // both the initial auto-fill and the "Áp dụng" bulk-edit button call.
   const applyDefaultsToRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
-    const fallbackBudget = { budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep };
     // Account + budget are picked together — budget must come from whichever
     // account actually gets used, never a global range rolled beforehand.
-    const picks = allocateAccounts(ids, fallbackBudget);
+    const picks = allocateAccounts(ids);
     const pages = allocatePages(ids);
     setRowAdParams(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = { ...genRowParams(adConfig), budget: picks[id].budget }; }); return n; });
     setRowPageId(prev => ({ ...prev, ...pages }));
@@ -1141,21 +1143,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const targets = [...checkedIds];
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     if (randomFields.size === 0) { onToast("Chọn ít nhất 1 thông số để random", "error"); return; }
-    const fallbackBudget = { budgetMin: adConfig.budgetMin, budgetMax: adConfig.budgetMax, budgetStep: adConfig.budgetStep };
     if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget") || randomFields.has("cta")) {
       setRowAdParams(prev => {
         const n = { ...prev };
         targets.forEach(id => {
-          const cur = n[id] ?? { ...genRowParams(adConfig), budget: pickAccountAndBudget(localAccountRows, fallbackBudget).budget };
+          const cur = n[id] ?? { ...genRowParams(adConfig), budget: pickAccountAndBudget(localAccountRows).budget };
           const fresh = genRowParams(adConfig);
           // Re-rolling budget uses the row's CURRENT account's own range —
           // switching accounts is the separate "account" random field below.
           const account = localAccountRows.find(r => r.accountId === rowAccountId[id]);
-          const freshBudget = randomStep(
-            Number(account?.budgetMin ?? fallbackBudget.budgetMin),
-            Number(account?.budgetMax ?? fallbackBudget.budgetMax),
-            Number(account?.budgetStep ?? fallbackBudget.budgetStep)
-          );
+          const freshBudget = account?.budgetCurrency
+            ? Number(randomMajorStep(account.budgetMin, account.budgetMax, account.budgetStep, account.budgetCurrency))
+            : cur.budget;
           n[id] = {
             ageMin: randomFields.has("age") ? fresh.ageMin : cur.ageMin,
             ageMax: randomFields.has("age") ? fresh.ageMax : cur.ageMax,
@@ -1175,7 +1174,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       // account's own range — keeping the old account's budget number
       // attached to a different account is exactly the mismatch bug this
       // whole account/budget pairing was built to avoid.
-      const newPicks = allocateAccounts(targets, fallbackBudget);
+      const newPicks = allocateAccounts(targets);
       setRowAccountId(prev => { const n = { ...prev }; targets.forEach(id => { n[id] = newPicks[id].accountId; }); return n; });
       setRowAdParams(prev => { const n = { ...prev }; targets.forEach(id => { if (n[id]) n[id] = { ...n[id], budget: newPicks[id].budget }; }); return n; });
     }
@@ -1425,6 +1424,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const outcomes = await Promise.all(targets.map(async (id) => {
       const pageId = rowPageId[id] || pickPage();
       const rp = rowAdParams[id] ?? genRowParams(adConfig);
+      const selectedAccount = localAccountRows.find((row) => row.accountId === rowAccountId[id]);
       const rowOvr = rowOverrides[id] ?? adConfig.overridePublish;
       const runAdsForRow = rowRunAds[id] ?? adConfig.runAds;
       const res = await fetch(`/api/posts/${id}/queue-publish`, {
@@ -1439,7 +1439,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             ageMinFrom: String(rp.ageMin), ageMinTo: String(rp.ageMin),
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
             gender: rp.gender,
-            budgetMin: String(rp.budget), budgetMax: String(rp.budget), budgetStep: "1",
+            budget: { amount: String(rp.budget), currency: selectedAccount?.budgetCurrency },
             adStatus: adConfig.adStatus,
             ...(rowAccountId[id] ? { adAccountId: rowAccountId[id] } : {}),
           } : {}),
@@ -1520,11 +1520,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
       const account = config.accountRows.find((row) => row.accountId === accountId);
       rolledParams[id] = {
         ...genRowParams(config.adConfig),
-        budget: randomStep(
-          Number(account?.budgetMin ?? config.adConfig.budgetMin),
-          Number(account?.budgetMax ?? config.adConfig.budgetMax),
-          Number(account?.budgetStep ?? config.adConfig.budgetStep),
-        ),
+          budget: account?.budgetCurrency
+            ? Number(randomMajorStep(account.budgetMin, account.budgetMax, account.budgetStep, account.budgetCurrency))
+          : 0,
       };
     });
 
@@ -1569,7 +1567,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
                 ageMinFrom: String(params.ageMin), ageMinTo: String(params.ageMin),
                 ageMaxFrom: String(params.ageMax), ageMaxTo: String(params.ageMax),
                 gender: params.gender,
-                budgetMin: String(params.budget), budgetMax: String(params.budget), budgetStep: "1",
+                budget: { amount: String(params.budget), currency: account?.budgetCurrency },
                 adStatus: config.adConfig.adStatus,
               } : {}),
             }),
@@ -1590,7 +1588,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             scheduledAt: publishAt.toISOString(),
             ...(runsAds ? {
               adStatus: config.adConfig.adStatus,
-              adAgeMin: params.ageMin, adAgeMax: params.ageMax, adGender: params.gender, adBudget: String(params.budget),
+              adAgeMin: params.ageMin, adAgeMax: params.ageMax, adGender: params.gender,
+              budget: { amount: String(params.budget), currency: account?.budgetCurrency },
             } : {}),
             ...(adStartAt ? { adStartAt } : {}),
           }),
@@ -2029,7 +2028,7 @@ interface PostRowProps {
   runAds: boolean;
   rowPageId: string;
   rowAccountId: string;
-  adAccounts: { accountId: string; name: string }[];
+  adAccounts: PublicFbAdAccount[];
   colVisible: Record<ColKey, boolean>;
   colWidths: Record<ColKey, number>;
   visibleCols: { key: ColKey; label: string; defaultWidth: number; minWidth: number; defaultVisible: boolean }[];
@@ -2216,8 +2215,13 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   // above does for the page column, otherwise this cell can show a stale/
   // different number than what Dashboard shows for the same post after publish.
   const effectiveBudget = post.adBudget ?? (rowAdParams ? String(rowAdParams.budget) : undefined);
+  const effectiveBudgetCurrency = post.adBudgetCurrency
+    ?? adAccounts.find((account) => account.accountId.replace(/^act_/, "") === (post.adAccountUsed || rowAccountId).replace(/^act_/, ""))?.currency
+    ?? null;
   const ageDisplay = rowAdParams ? `${rowAdParams.ageMin} – ${rowAdParams.ageMax}` : "–";
-  const budgetDisplay = effectiveBudget ? Number(effectiveBudget).toLocaleString("vi-VN") : "–";
+  const budgetDisplay = effectiveBudget
+    ? effectiveBudgetCurrency ? formatMajorCurrency(effectiveBudget, effectiveBudgetCurrency) : `${effectiveBudget} · chưa rõ currency`
+    : "–";
   const genderDisplay = rowAdParams ? (genderMap[rowAdParams.gender] ?? "Tất cả") : "–";
 
   const displayCaption = post.finalCaption ?? post.rawCaption ?? "";

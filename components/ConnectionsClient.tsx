@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PublicFbConnection, PublicFbAdAccount } from "@/lib/publicFacebook";
+import { hasConfirmedBudgetPolicy, type PublicFbConnection, type PublicFbAdAccount } from "@/lib/publicFacebook";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, Trash2, CheckCircle2, Facebook, ChevronDown, ShieldCheck } from "lucide-react";
+import { currencyMinorUnitExponent, minorToMajor } from "@/lib/adMoney";
 
 interface FbPage {
   id: string;
@@ -42,6 +43,11 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
   const [deletePages, setDeletePages] = useState<Set<string>>(new Set());
   const [deleteAds, setDeleteAds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [capDrafts, setCapDrafts] = useState<Record<string, string>>(() => Object.fromEntries(initialAds.map((account) => [
+    account.id,
+    account.currency && account.maxDailyBudgetMinor ? minorToMajor(account.maxDailyBudgetMinor, account.currency) : "",
+  ])));
+  const [policyBusy, setPolicyBusy] = useState<string | null>(null);
 
   const { show, ToastComponent } = useToast();
 
@@ -173,6 +179,58 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
 
   const totalDelete = deletePages.size + deleteAds.size;
 
+  async function refreshBudgetPolicy(account: PublicFbAdAccount) {
+    setPolicyBusy(account.id);
+    try {
+      const response = await fetch(`/api/ad-accounts/${account.id}/budget-policy`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Không xác minh được currency");
+      setSavedAds((items) => items.map((item) => item.id === account.id ? data : item));
+      setCapDrafts((items) => ({ ...items, [account.id]: data.maxDailyBudget ?? "" }));
+      show(`Đã xác minh ${data.currency} cho ${account.name}`, "success");
+    } catch (error) {
+      show(error instanceof Error ? error.message : "Không xác minh được currency", "error");
+    } finally {
+      setPolicyBusy(null);
+    }
+  }
+
+  async function confirmBudgetPolicy(account: PublicFbAdAccount) {
+    if (!account.currency) { show("Hãy xác minh currency từ Meta trước.", "error"); return; }
+    const maxDailyBudget = capDrafts[account.id]?.trim();
+    if (!maxDailyBudget) { show("Nhập trần ngân sách ngày.", "error"); return; }
+    const minimum = account.minDailyBudgetMinor
+      ? minorToMajor(account.minDailyBudgetMinor, account.currency)
+      : "chưa xác định";
+    const approved = window.confirm([
+      "Xác nhận khóa ngân sách TKQC",
+      `Tên: ${account.name}`,
+      `ID: ${account.accountId}`,
+      `Currency Meta: ${account.currency}`,
+      `Tối thiểu Meta: ${minimum} ${account.currency}`,
+      `Trần bạn nhập: ${maxDailyBudget} ${account.currency}`,
+      "PostFlow không quy đổi tỷ giá.",
+    ].join("\n"));
+    if (!approved) return;
+    setPolicyBusy(account.id);
+    try {
+      const response = await fetch(`/api/ad-accounts/${account.id}/budget-policy`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currency: account.currency, maxDailyBudget }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Không xác nhận được trần ngân sách");
+      setSavedAds((items) => items.map((item) => item.id === account.id ? data : item));
+      setCapDrafts((items) => ({ ...items, [account.id]: data.maxDailyBudget ?? maxDailyBudget }));
+      show(`Đã khóa trần ${maxDailyBudget} ${account.currency} cho ${account.name}`, "success");
+    } catch (error) {
+      show(error instanceof Error ? error.message : "Không xác nhận được trần ngân sách", "error");
+    } finally {
+      setPolicyBusy(null);
+    }
+  }
+
   return (
     <div className="w-full space-y-5">
       {ToastComponent}
@@ -213,7 +271,7 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
         </button>
         {advancedOpen && <div className="space-y-2 border-t p-3">
         <label className="text-sm font-medium">Access Token</label>
-        <p className="text-xs text-muted-foreground">Token cần các quyền: pages_show_list, pages_read_engagement, pages_manage_posts, instagram_basic, instagram_content_publish.</p>
+        <p className="text-xs text-muted-foreground">Token cần các quyền: pages_show_list, pages_read_engagement, pages_manage_posts, instagram_basic, instagram_content_publish, ads_read.</p>
         <div className="flex gap-2">
           <input
             type="password"
@@ -355,6 +413,59 @@ export function ConnectionsClient({ connections: initial, savedAdAccounts: initi
               </div>
             </div>
           </div>
+          {savedAds.length > 0 && (
+            <div className="rounded-lg border overflow-hidden">
+              <div className="px-3 py-2 bg-muted/50 border-b text-xs font-semibold">An toàn currency và ngân sách</div>
+              <div className="divide-y">
+                {savedAds.map((account) => {
+                  const confirmed = hasConfirmedBudgetPolicy(account);
+                  const exponent = account.currency ? currencyMinorUnitExponent(account.currency) : 0;
+                  const minimum = account.currency && account.minDailyBudgetMinor
+                    ? minorToMajor(account.minDailyBudgetMinor, account.currency)
+                    : null;
+                  return (
+                    <div key={account.id} className="p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold truncate">{account.name} · {account.currency ?? "Chưa xác minh"}</p>
+                          <p className="text-[10px] text-muted-foreground font-mono">{account.accountId}</p>
+                        </div>
+                        <span className={`text-[10px] rounded-full px-2 py-1 font-medium ${confirmed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                          {confirmed ? "Đã xác nhận" : "Đang khóa tạo ads"}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="min-w-[180px] flex-1">
+                          <label className="text-[10px] text-muted-foreground">Trần ngân sách/ngày {account.currency ? `(${account.currency})` : ""}</label>
+                          <input
+                            type="number"
+                            min={minimum ?? undefined}
+                            step={exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`}
+                            value={capDrafts[account.id] ?? ""}
+                            onChange={(event) => setCapDrafts((items) => ({ ...items, [account.id]: event.target.value }))}
+                            disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id}
+                            className="mt-1 w-full rounded-md border bg-background px-2.5 py-2 text-xs"
+                            placeholder={minimum ? `Tối thiểu ${minimum}` : "Xác minh Meta trước"}
+                          />
+                        </div>
+                        <button type="button" onClick={() => refreshBudgetPolicy(account)} disabled={policyBusy === account.id}
+                          className="rounded-md border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+                          {policyBusy === account.id ? "Đang kiểm tra..." : "Xác minh Meta"}
+                        </button>
+                        <button type="button" onClick={() => confirmBudgetPolicy(account)} disabled={!account.currency || account.accountStatus !== 1 || policyBusy === account.id}
+                          className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium disabled:opacity-50">
+                          Xác nhận trần
+                        </button>
+                      </div>
+                      {minimum && <p className="text-[10px] text-muted-foreground">Mức tối thiểu Meta: {minimum} {account.currency}. Không quy đổi tỷ giá.</p>}
+                      {account.accountStatus !== 1 && <p className="text-[10px] font-medium text-red-600">TKQC chưa ở trạng thái hoạt động trên Meta; tạo Ads đang bị khóa.</p>}
+                      {account.activeBudgetWarning && <p className="text-[10px] font-medium text-red-600">{account.activeBudgetWarning}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { enqueueAds } from "@/lib/cloudflareQueue";
 import { validateAdSelection } from "@/lib/adSelection";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
+import { getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 
 export async function POST(request: Request) {
   const secret = process.env.CRON_SECRET?.trim();
@@ -20,7 +21,8 @@ export async function POST(request: Request) {
   if (posts.length !== postIds.length) return NextResponse.json({ error: "Một số Post không tồn tại" }, { status: 409 });
   const invalid = posts.filter((post) =>
     (!post.fbPostId && !post.igPostId) || post.adId || post.adStatus === "done" ||
-    post.adAccountUsed !== body.adAccountId || post.adTemplateId !== body.templateId
+    post.adAccountUsed !== body.adAccountId || post.adTemplateId !== body.templateId ||
+    !post.adBudgetMinor || !post.adBudgetCurrency
   );
   if (invalid.length) return NextResponse.json({ error: "Có Post không đủ điều kiện retry", postIds: invalid.map((post) => post.id) }, { status: 409 });
 
@@ -29,6 +31,12 @@ export async function POST(request: Request) {
   for (let index = 0; index < posts.length; index++) {
     const post = posts[index];
     try {
+      const account = await getVerifiedAdAccountPolicy(post.adAccountUsed!);
+      validateMinorBudgetForAccount({
+        account,
+        amountMinor: post.adBudgetMinor!,
+        currency: post.adBudgetCurrency!,
+      });
       await preflightPostAdPermission(post, true);
     } catch (error) {
       results.push({ postId: post.id, queued: false, reason: error instanceof Error ? error.message : "permission_check_failed" });

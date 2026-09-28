@@ -190,7 +190,8 @@ export async function publishDuePost(
           ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
           ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
           ...(post.adGender != null ? { gender: post.adGender } : {}),
-          ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
+          ...(post.adBudgetMinor != null ? { budgetMinor: post.adBudgetMinor } : {}),
+          ...(post.adBudgetCurrency != null ? { budgetCurrency: post.adBudgetCurrency } : {}),
         });
         adsScheduledNow = true;
       } catch (error) {

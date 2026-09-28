@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Post, ExtractedLink, PostComment } from "@prisma/client";
-import type { PublicFbConnection as FbConnection, PublicFbAdAccount as FbAdAccount } from "@/lib/publicFacebook";
+import { hasConfirmedBudgetPolicy, type PublicFbConnection as FbConnection, type PublicFbAdAccount as FbAdAccount } from "@/lib/publicFacebook";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { formatDate, truncate } from "@/lib/utils";
@@ -16,7 +16,7 @@ import {
   SlidersHorizontal, Search, Filter,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
-import { randomInteger, randomStep } from "@/lib/adSettings";
+import { randomInteger } from "@/lib/adSettings";
 import { PageMultiSelect } from "@/components/PageSelector";
 import { EmptyState } from "@/components/EmptyState";
 import { AdsConfigPanel, type BatchAdConfig, type CampaignTemplate } from "@/components/AdsConfigPanel";
@@ -35,6 +35,7 @@ import { adsPanel } from "@/lib/ui-classes";
 import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
+import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
@@ -42,7 +43,7 @@ type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostCom
 const EMPTY_AD_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65", gender: "",
-  budgetMin: "100000", budgetMax: "200000", budgetStep: "10000", adStatus: "PAUSED",
+  budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED",
 };
 
 // Same "Cài đặt Ads" server config (/api/app-config, batch* + comment* keys) that
@@ -160,9 +161,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Ads drawer (single-post or bulk "Tạo ads", editable before applying) ────
-  const [adAccountsFull, setAdAccountsFull] = useState<{ accountId: string; name: string }[]>(
-    adAccounts.map((a) => ({ accountId: a.accountId, name: a.name }))
-  );
+  const [adAccountsFull, setAdAccountsFull] = useState<FbAdAccount[]>(adAccounts);
   const [adsDrawerOpen, setAdsDrawerOpen] = useState(false);
   // Opened via the toolbar's standalone "Cài đặt" button — same drawer body
   // as "Tạo ads" (adsDrawerOpen), but not tied to any selected posts; the
@@ -285,7 +284,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         const row = drawerAccountRows.find((r) => r.accountId === accountId);
         const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
         const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
-        const budget = randomStep(Number(row?.budgetMin ?? drawerAdConfig.budgetMin), Number(row?.budgetMax ?? drawerAdConfig.budgetMax), Number(row?.budgetStep ?? drawerAdConfig.budgetStep));
+        const budget = row?.budgetCurrency ? Number(randomMajorStep(row.budgetMin, row.budgetMax, row.budgetStep, row.budgetCurrency)) : 0;
         const comments = resolveDrawerCommentJobs(p);
         return fetch(`/api/posts/${p.id}/schedule`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -293,7 +292,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             pageId: p.pageId, scheduledAt: p.scheduledAt,
             templateId: drawerAdConfig.runAds ? drawerAdConfig.templateId : undefined,
             adStatus: drawerAdConfig.adStatus,
-            ...(drawerAdConfig.runAds ? { adAccountId: accountId, adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender, adBudget: String(budget) } : {}),
+            ...(drawerAdConfig.runAds ? {
+              adAccountId: accountId, adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender,
+              budget: { amount: String(budget), currency: row?.budgetCurrency },
+            } : {}),
             ...(comments.length ? { comments } : {}),
             storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
           }),
@@ -306,7 +308,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   function persistDrawerAccountRow(row: AutoAdsAccountRowLike) {
     fetch("/api/auto-ads-accounts", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep }),
+      body: JSON.stringify({ accountId: row.accountId, weight: row.weight, budgetMin: row.budgetMin, budgetMax: row.budgetMax, budgetStep: row.budgetStep, budgetCurrency: row.budgetCurrency }),
     }).catch(() => {});
   }
 
@@ -354,10 +356,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     });
   }
   function addDrawerRow() {
-    const firstFree = adAccountsFull.find((a) => !drawerAccountRows.some((r) => r.accountId === a.accountId));
+    const firstFree = adAccountsFull.find((a) => hasConfirmedBudgetPolicy(a) && !drawerAccountRows.some((r) => r.accountId === a.accountId));
     const newRow: AutoAdsAccountRowLike = {
-      accountId: firstFree?.accountId ?? adAccountsFull[0]?.accountId ?? "",
-      weight: 0, budgetMin: drawerAdConfig.budgetMin, budgetMax: drawerAdConfig.budgetMax, budgetStep: drawerAdConfig.budgetStep,
+      accountId: firstFree?.accountId ?? "",
+      weight: 0, budgetMin: "", budgetMax: "", budgetStep: firstFree?.currency ? currencyMajorInputStep(firstFree.currency) : "",
+      budgetCurrency: firstFree?.currency ?? undefined,
     };
     const next = applyEvenWeights([...drawerAccountRows, newRow]);
     setDrawerAccountRows(next);
@@ -500,9 +503,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       try {
         const accountId = accountIds[index] ?? "";
         const row = drawerAccountRows.find((r) => r.accountId === accountId);
+        if (drawerAdConfig.runAds && !row?.budgetCurrency) throw new Error(`TKQC ${accountId || "chưa chọn"} chưa xác nhận currency/trần.`);
         const ageMin = randomInteger(Number(drawerAdConfig.ageMinFrom), Number(drawerAdConfig.ageMinTo));
         const ageMax = randomInteger(Math.max(Number(drawerAdConfig.ageMaxFrom), ageMin + 1), Number(drawerAdConfig.ageMaxTo));
-        const budget = randomStep(Number(row?.budgetMin ?? drawerAdConfig.budgetMin), Number(row?.budgetMax ?? drawerAdConfig.budgetMax), Number(row?.budgetStep ?? drawerAdConfig.budgetStep));
+        const budget = row?.budgetCurrency ? Number(randomMajorStep(row.budgetMin, row.budgetMax, row.budgetStep, row.budgetCurrency)) : 0;
         const comments = resolveDrawerCommentJobs(p);
 
         if (p.status === "pending") {
@@ -515,7 +519,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               ageMinFrom: String(ageMin), ageMinTo: String(ageMin),
               ageMaxFrom: String(ageMax), ageMaxTo: String(ageMax),
               gender: drawerAdConfig.gender,
-              budgetMin: String(budget), budgetMax: String(budget), budgetStep: "1",
+              budget: { amount: String(budget), currency: row?.budgetCurrency },
               adAccountId: accountId,
               adStatus: drawerAdConfig.adStatus,
               comments: comments.length ? comments : undefined,
@@ -540,7 +544,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 postId: p.id,
                 templateCampaignId: drawerAdConfig.templateId,
                 adAccountId: accountId,
-                dailyBudget: String(budget), ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus,
+                budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus,
               }),
             });
             stepOk = res.ok;
@@ -1023,7 +1027,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         </div>
       </div>
 
-      {/* Table — FB Ads Manager style */}
+          {/* Ads management table */}
       <div className="flex-1 min-h-0 flex gap-4">
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
       {filtered.length === 0 ? (
@@ -1089,6 +1093,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 const rawGender = (post as PostWithLinks & { adGender?: string | null }).adGender;
                 const genderLabel = rawGender === "1" ? "Nam" : rawGender === "2" ? "Nữ" : "Tất cả";
                 const budget = (post as PostWithLinks & { adBudget?: string }).adBudget;
+                const budgetCurrency = post.adBudgetCurrency ?? adAccounts.find((a) => a.accountId === post.adAccountUsed)?.currency ?? null;
                 const ageMin = (post as PostWithLinks & { adAgeMin?: number }).adAgeMin;
                 const ageMax = (post as PostWithLinks & { adAgeMax?: number }).adAgeMax;
                 const accountName = adAccounts.find((a) => a.accountId === post.adAccountUsed)?.name;
@@ -1143,7 +1148,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
                         {budget ? (
                           <span className="text-xs font-medium text-slate-700 dark:text-slate-300 tabular-nums">
-                            đ {Number(budget).toLocaleString("vi-VN")}
+                            {budgetCurrency ? formatMajorCurrency(budget, budgetCurrency) : `${budget} · chưa rõ currency`}
                           </span>
                         ) : <span className="text-xs text-slate-300 dark:text-slate-600">—</span>}
                       </td>

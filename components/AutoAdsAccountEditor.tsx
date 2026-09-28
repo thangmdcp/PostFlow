@@ -2,6 +2,7 @@
 
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { CustomSelect } from "@/components/ui/CustomSelect";
+import { currencyMinorUnitExponent, formatMajorCurrency } from "@/lib/adMoney";
 
 export interface AutoAdsAccountRowLike {
   accountId: string;
@@ -10,11 +11,23 @@ export interface AutoAdsAccountRowLike {
   budgetMin: string;
   budgetMax: string;
   budgetStep: string;
+  budgetCurrency?: string;
+  budgetMinMinor?: string | null;
+  budgetMaxMinor?: string | null;
+  budgetStepMinor?: string | null;
   assignedCount?: number;
   dirty?: boolean;
 }
 
-export interface AdAccountLike { accountId: string; name: string; }
+export interface AdAccountLike {
+  accountId: string;
+  name: string;
+  currency?: string | null;
+  maxDailyBudgetMinor?: string | null;
+  budgetPolicyCurrency?: string | null;
+  budgetPolicyConfirmedAt?: Date | string | null;
+  accountStatus?: number | null;
+}
 export interface AccountTemplateLike { campaignId: string; templateName: string; adAccountId?: string; settings?: { postType?: string }; }
 
 interface EditableProps {
@@ -38,6 +51,12 @@ interface ReadOnlyProps {
 
 export type AutoAdsAccountEditorProps = EditableProps | ReadOnlyProps;
 
+function moneyInputStep(currency?: string): string {
+  if (!currency) return "1";
+  const exponent = currencyMinorUnitExponent(currency);
+  return exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`;
+}
+
 export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
   const inp = "rounded-lg border bg-white dark:bg-slate-800 px-2.5 py-[5px] text-xs focus:outline-none focus:ring-2 focus:ring-violet-500";
   const { rows, adAccounts } = props;
@@ -57,7 +76,7 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
                 <span className="text-violet-600 font-semibold shrink-0 ml-2">{row.weight}%</span>
               </div>
               <p className="text-[10px] text-slate-400">
-                {Number(row.budgetMin).toLocaleString("vi-VN")}–{Number(row.budgetMax).toLocaleString("vi-VN")} /{Number(row.budgetStep).toLocaleString("vi-VN")}
+                {row.budgetCurrency ? `${formatMajorCurrency(row.budgetMin, row.budgetCurrency)}–${formatMajorCurrency(row.budgetMax, row.budgetCurrency)}` : "Chưa xác nhận currency"}
               </p>
             </div>
           );
@@ -98,8 +117,26 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
           {rows.map((row, idx) => (
             <div key={idx} className={["rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 space-y-2", row.dirty ? "border-violet-300" : ""].join(" ")}>
               <div className="flex items-center gap-2">
-                <CustomSelect className="flex-1 min-w-0" value={row.accountId} onChange={v => onPatchRow(idx, { accountId: v })}
-                  options={adAccounts.map(a => ({ value: a.accountId, label: a.name, disabled: rows.some((other, otherIndex) => otherIndex !== idx && other.accountId === a.accountId) }))} />
+                <CustomSelect className="flex-1 min-w-0" value={row.accountId} onChange={v => {
+                  const account = adAccounts.find((item) => item.accountId === v);
+                  const currency = account?.currency ?? undefined;
+                  const exponent = currency ? currencyMinorUnitExponent(currency) : 0;
+                  onPatchRow(idx, {
+                    accountId: v,
+                    budgetCurrency: currency,
+                    budgetMin: "",
+                    budgetMax: "",
+                    budgetStep: exponent === 0 ? "1" : `0.${"0".repeat(exponent - 1)}1`,
+                  });
+                }}
+                  options={adAccounts.map(a => {
+                    const confirmed = Boolean(a.accountStatus === 1 && a.currency && a.maxDailyBudgetMinor && a.budgetPolicyConfirmedAt && a.budgetPolicyCurrency === a.currency);
+                    return {
+                      value: a.accountId,
+                      label: `${a.name} · ${a.currency ?? "chưa xác minh"}${confirmed ? "" : " · chưa xác nhận trần"}`,
+                      disabled: !confirmed || rows.some((other, otherIndex) => otherIndex !== idx && other.accountId === a.accountId),
+                    };
+                  })} />
                 <div className="flex items-center gap-1 shrink-0">
                   <input type="number" min={1} max={100} value={row.weight} onChange={e => onPatchRow(idx, { weight: Number(e.target.value) })}
                     className={inp + " w-14 text-center"} />
@@ -116,18 +153,21 @@ export function AutoAdsAccountEditor(props: AutoAdsAccountEditorProps) {
                   label: `${template.templateName} (${template.settings?.postType === "dark" ? "Chạy ẩn" : "Công khai"}) · nguồn ${adAccounts.find((account) => account.accountId === template.adAccountId)?.name ?? template.adAccountId ?? "không rõ"}`,
                 }))} />}
               <div className="space-y-1">
+                <p className={`text-[10px] font-medium ${row.budgetCurrency ? "text-emerald-600" : "text-red-500"}`}>
+                  {row.budgetCurrency ? `Đơn vị: ${row.budgetCurrency} · không quy đổi tỷ giá` : "TKQC chưa xác nhận currency/trần ngân sách"}
+                </p>
                 <div className="grid grid-cols-3 gap-1">
                   <div>
                     <p className="text-[9px] text-slate-400 mb-0.5 text-center">Min</p>
-                    <input type="number" value={row.budgetMin} onChange={e => onPatchRow(idx, { budgetMin: e.target.value })} className={inp + " w-full text-center"} />
+                    <input type="number" min="0" step={moneyInputStep(row.budgetCurrency)} value={row.budgetMin} onChange={e => onPatchRow(idx, { budgetMin: e.target.value })} className={inp + " w-full text-center"} />
                   </div>
                   <div>
                     <p className="text-[9px] text-slate-400 mb-0.5 text-center">Max</p>
-                    <input type="number" value={row.budgetMax} onChange={e => onPatchRow(idx, { budgetMax: e.target.value })} className={inp + " w-full text-center"} />
+                    <input type="number" min="0" step={moneyInputStep(row.budgetCurrency)} value={row.budgetMax} onChange={e => onPatchRow(idx, { budgetMax: e.target.value })} className={inp + " w-full text-center"} />
                   </div>
                   <div>
                     <p className="text-[9px] text-slate-400 mb-0.5 text-center">Bước nhảy</p>
-                    <input type="number" value={row.budgetStep} onChange={e => onPatchRow(idx, { budgetStep: e.target.value })} className={inp + " w-full text-center"} />
+                    <input type="number" min="0" step={moneyInputStep(row.budgetCurrency)} value={row.budgetStep} onChange={e => onPatchRow(idx, { budgetStep: e.target.value })} className={inp + " w-full text-center"} />
                   </div>
                 </div>
               </div>

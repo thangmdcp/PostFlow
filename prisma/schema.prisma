@@ -61,6 +61,8 @@ model Post {
   adId           String?
   adAccountUsed  String?
   adBudget       String?
+  adBudgetMinor  String?
+  adBudgetCurrency String?
   adAgeMin       Int?
   adAgeMax       Int?
   adGender       String?
@@ -133,6 +135,14 @@ model FbAdAccount {
   accessToken   String
   currency      String?
   currencyUpdatedAt DateTime?
+  currencyVerifiedAt DateTime?
+  minDailyBudgetMinor String?
+  maxDailyBudgetMinor String?
+  budgetPolicyConfirmedAt DateTime?
+  budgetPolicyCurrency String?
+  accountStatus Int?
+  activeBudgetWarning String?
+  activeBudgetCheckedAt DateTime?
   createdAt     DateTime @default(now())
 }
 

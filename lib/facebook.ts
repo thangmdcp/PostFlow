@@ -27,39 +27,6 @@ export class AdTemplateConfigurationError extends Error {
   }
 }
 
-// Facebook's Marketing API takes daily_budget in the account currency's
-// smallest unit (cents for USD, etc.) — a "zero decimal" currency like VND
-// or JPY has no subunit, so its display value already IS the API value.
-// Full list per Meta's currency docs.
-const ZERO_DECIMAL_CURRENCIES = new Set([
-  "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG",
-  "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
-]);
-
-async function toFbMinorUnits(adAccountId: string, accessToken: string, amount: string): Promise<string> {
-  try {
-    const normalizedId = adAccountId.replace(/^act_/, "");
-    const saved = await prisma.fbAdAccount.findFirst({ where: { accountId: { in: [normalizedId, `act_${normalizedId}`] } }, select: { currency: true, currencyUpdatedAt: true } });
-    const fresh = saved?.currency && saved.currencyUpdatedAt && saved.currencyUpdatedAt.getTime() > Date.now() - 24 * 60 * 60_000;
-    const currency = fresh
-      ? saved.currency!.toUpperCase()
-      : String((await metaJson<Record<string, unknown>>(`${FB_API}/act_${normalizedId}?fields=currency&access_token=${accessToken}`, {}, { adAccountId: normalizedId })).currency ?? "").toUpperCase();
-    if (!fresh && currency) {
-      await prisma.fbAdAccount.updateMany({
-        where: { accountId: { in: [normalizedId, `act_${normalizedId}`] } },
-        data: { currency, currencyUpdatedAt: new Date() },
-      }).catch(() => {});
-    }
-    const decimals = currency && ZERO_DECIMAL_CURRENCIES.has(currency) ? 0 : 2;
-    return String(Math.round(Number(amount) * 10 ** decimals));
-  } catch (error) {
-    if (error instanceof MetaApiError && ["rate_limit", "permission", "token"].includes(error.category)) throw error;
-    // If the currency lookup itself fails, fall back to the raw amount
-    // (matches the previous behavior) rather than blocking ad creation.
-    return amount;
-  }
-}
-
 export async function publishToPage(
   pageId: string,
   accessToken: string,
@@ -376,7 +343,7 @@ export async function cloneAdCampaign(
   source: AdPostSource,
   adAccountId: string,
   accessToken: string,
-  dailyBudget = "100000",
+  dailyBudgetMinor: string,
   pageAccessToken?: string,
   campaignName?: string,
   ageMin?: number,
@@ -396,10 +363,9 @@ export async function cloneAdCampaign(
   }
   await ensureAdAssetAccess(adAccountId, pageId, needsInstagramIdentity ? instagramIdentityId : undefined, accessToken);
 
-  // Permission preflight deliberately runs before even the cached currency
-  // lookup, so a bad Page/TKQC assignment cannot create requests or empty
-  // campaign shells in the destination account.
-  dailyBudget = await toFbMinorUnits(adAccountId, accessToken, dailyBudget);
+  if (!/^\d+$/.test(dailyBudgetMinor) || BigInt(dailyBudgetMinor) <= BigInt(0)) {
+    throw new AdTemplateConfigurationError("Ngân sách minor units chưa được xác thực.");
+  }
 
   let targeting = sanitizeMetaTargeting(template.targeting);
   if (placementOverride) {
@@ -453,7 +419,7 @@ export async function cloneAdCampaign(
   // instead makes FB fall back to a bid-cap strategy that then demands a
   // bid_amount we never provide (OAuthException 1815857).
   if (useCBO) {
-    campBody.daily_budget = dailyBudget;
+    campBody.daily_budget = dailyBudgetMinor;
     campBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
   }
 
@@ -484,7 +450,7 @@ export async function cloneAdCampaign(
       access_token: accessToken,
     };
     if (!useCBO) {
-      adSetBody.daily_budget = dailyBudget;
+      adSetBody.daily_budget = dailyBudgetMinor;
       adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
     }
     if (startTime) adSetBody.start_time = startTime.toISOString();

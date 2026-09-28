@@ -6,13 +6,15 @@ import { parsePublishTargets, validatePublishTargets, type PublishTarget } from 
 import { validateAdSelection } from "@/lib/adSelection";
 import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
+import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
+import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, adBudget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -23,7 +25,7 @@ export async function PATCH(
       adAgeMin?: number;
       adAgeMax?: number;
       adGender?: string;
-      adBudget?: string;
+      budget?: AdBudgetInput;
       comments?: { text: string; imageUrl?: string }[];
       storyEnabled?: boolean; storyCount?: number;
       publishTargets?: PublishTarget[];
@@ -61,6 +63,7 @@ export async function PATCH(
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
     const adSelectionError = await validateAdSelection(templateId, adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
+    const budgetSnapshot = await resolveAdBudgetSnapshot({ templateId, accountId: adAccountId, budget });
     const parsedPlacements = templateId ? parseAdPlacementConfig(adPlacements) : null;
     if (templateId) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -107,7 +110,11 @@ export async function PATCH(
         ...(adAgeMin !== undefined ? { adAgeMin } : {}),
         ...(adAgeMax !== undefined ? { adAgeMax } : {}),
         ...(adGender !== undefined ? { adGender } : {}),
-        ...(adBudget !== undefined ? { adBudget } : {}),
+        ...(budgetSnapshot ? {
+          adBudget: budgetSnapshot.amountMajor,
+          adBudgetMinor: budgetSnapshot.amountMinor,
+          adBudgetCurrency: budgetSnapshot.currency,
+        } : { adBudget: null, adBudgetMinor: null, adBudgetCurrency: null }),
         ...(storyEnabled !== undefined ? { storyEnabled } : {}),
         ...(storyCount !== undefined ? { storyCount } : {}),
       },
@@ -127,6 +134,9 @@ export async function PATCH(
     return NextResponse.json(scheduled);
   } catch (err) {
     console.error("PATCH /api/posts/[id]/schedule error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error", ...(err instanceof BudgetPolicyError ? { code: err.code } : {}) },
+      { status: err instanceof BudgetPolicyError ? err.status : 500 },
+    );
   }
 }

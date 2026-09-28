@@ -4,6 +4,8 @@ import { persistCommentJobs } from "@/lib/autoCommentsRunner";
 import { publishDuePost } from "@/lib/publishDuePost";
 import { parsePublishTargets, validatePublishTargets, type PublishTarget } from "@/lib/publishTargets";
 import { validateAdSelection } from "@/lib/adSelection";
+import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
+import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 
 export const maxDuration = 90;
 
@@ -16,7 +18,7 @@ interface PublishBody {
   ageMinFrom?: string;
   ageMaxFrom?: string;
   gender?: string;
-  budgetMin?: string;
+  budget?: AdBudgetInput;
   ctaHeadline?: string;
   adStatus?: "ACTIVE" | "PAUSED";
   comments?: { text: string; imageUrl?: string }[];
@@ -46,6 +48,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
     const adSelectionError = await validateAdSelection(body.templateId, body.adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
+    const budgetSnapshot = await resolveAdBudgetSnapshot({
+      templateId: body.templateId,
+      accountId: body.adAccountId,
+      budget: body.budget,
+    });
 
     const queued = await prisma.post.update({ where: { id: post.id }, data: {
       pageId: body.pageId,
@@ -70,7 +77,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       adAgeMin: body.ageMinFrom ? Number(body.ageMinFrom) : null,
       adAgeMax: body.ageMaxFrom ? Number(body.ageMaxFrom) : null,
       adGender: body.gender ?? null,
-      adBudget: body.budgetMin ?? null,
+      adBudget: budgetSnapshot?.amountMajor ?? null,
+      adBudgetMinor: budgetSnapshot?.amountMinor ?? null,
+      adBudgetCurrency: budgetSnapshot?.currency ?? null,
       adPublishStatus: body.adStatus ?? null,
       ctaHeadline: body.ctaHeadline ?? null,
       storyEnabled: body.storyEnabled ?? false,
@@ -81,6 +90,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const result = await publishDuePost(queued, { publishToPage: body.publishToPage });
     return NextResponse.json(result, { status: result.status === "failed" ? 502 : 200 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Không thể đăng bài" }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Không thể đăng bài", ...(error instanceof BudgetPolicyError ? { code: error.code } : {}) },
+      { status: error instanceof BudgetPolicyError ? error.status : 500 },
+    );
   }
 }

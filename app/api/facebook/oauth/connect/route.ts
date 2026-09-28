@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { decryptFacebookOAuthSession, discoverFacebookAssets, FACEBOOK_OAUTH_SESSION_COOKIE } from "@/lib/facebookOAuth";
+import { getVerifiedAdAccountPolicy } from "@/lib/adBudgetPolicy";
 
 export async function POST(request: NextRequest) {
   const token = decryptFacebookOAuthSession(request.cookies.get(FACEBOOK_OAUTH_SESSION_COOKIE)?.value);
@@ -35,6 +36,14 @@ export async function POST(request: NextRequest) {
         },
       }),
     ]);
+    // Persisting a token is not enough to authorize budget creation. Refresh
+    // every selected TKQC from Meta now so currency/minimum budget are known;
+    // the per-account cap deliberately remains unconfirmed until the user
+    // explicitly approves it in Settings.
+    await Promise.all(ads.map((account) => getVerifiedAdAccountPolicy(
+      account!.id.startsWith("act_") ? account!.id : `act_${account!.account_id}`,
+      { forceRefresh: true, requireCap: false, requireActive: false },
+    )));
     const response = NextResponse.json({ ok: true, pages: pages.length, adAccounts: ads.length });
     response.cookies.set(FACEBOOK_OAUTH_SESSION_COOKIE, "", { path: "/api/facebook/oauth", maxAge: 0 });
     return response;

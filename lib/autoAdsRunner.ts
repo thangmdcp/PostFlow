@@ -1,11 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
-import { randomStep, randomInteger } from "@/lib/adSettings";
+import { randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
 import { enqueueAds } from "@/lib/cloudflareQueue";
 import { parseAdPlacementConfig, type AdPlacementConfig } from "@/lib/adPlacements";
 import { MetaApiError } from "@/lib/metaApiClient";
+import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -65,7 +66,8 @@ export interface AutoAdsRunParams {
   ageMinFrom?: string; ageMinTo?: string;
   ageMaxFrom?: string; ageMaxTo?: string;
   gender?: string;
-  budgetMin?: string; budgetMax?: string; budgetStep?: string; // explicit per-row budget — the batch table already rolled and displayed this value, so it must be the one actually used, not re-rolled from the TKQC account's own range
+  budgetCurrency?: string;
+  budgetMinor?: string;
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
   adStartAt?: Date; // prepared campaigns are created before this time
   adPlacements?: AdPlacementConfig;
@@ -87,6 +89,19 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
     }).catch(() => {});
     return;
   }
+  if (!params.adAccountId || !params.budgetMinor || !params.budgetCurrency) {
+    throw new BudgetPolicyError(
+      "BUDGET_INVALID",
+      "Thiếu snapshot TKQC, currency hoặc ngân sách minor units; không xếp hàng tạo Ads.",
+      409,
+    );
+  }
+  const verifiedAccount = await getVerifiedAdAccountPolicy(params.adAccountId);
+  const verifiedBudget = validateMinorBudgetForAccount({
+    account: verifiedAccount,
+    amountMinor: params.budgetMinor,
+    currency: params.budgetCurrency,
+  });
 
   const resolvedAdStartAt = params.adStartAt ? rollPreparedStartForward(params.adStartAt) : undefined;
   const prepareForStart = !!resolvedAdStartAt;
@@ -110,7 +125,9 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
       ...(params.ageMaxFrom ? { adAgeMax: Number(params.ageMaxFrom) } : {}),
       ...(params.gender !== undefined ? { adGender: params.gender } : {}),
-      ...(params.budgetMin ? { adBudget: params.budgetMin } : {}),
+      adBudget: verifiedBudget.amountMajor,
+      adBudgetMinor: verifiedBudget.amountMinor,
+      adBudgetCurrency: verifiedBudget.currency,
       ...(resolvedAdStartAt ? { adStartAt: resolvedAdStartAt } : {}),
     },
   }).catch(() => {});
@@ -138,6 +155,9 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     return { retry: false };
   };
   if (!post.pageId) return failStructural("Bài chưa có Page để tạo quảng cáo");
+  if (!post.adAccountUsed || !post.adBudgetMinor || !post.adBudgetCurrency) {
+    return failStructural("Thiếu snapshot TKQC/currency/ngân sách an toàn; không được phép random lại khi retry");
+  }
   const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
   if (!fbConn) return failStructural("Không tìm thấy kết nối Page");
   const adPlatform = post.adPlatform === "instagram" ? "instagram" : "facebook";
@@ -158,7 +178,8 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     ...(post.adAgeMin != null ? { ageMinFrom: String(post.adAgeMin), ageMinTo: String(post.adAgeMin) } : {}),
     ...(post.adAgeMax != null ? { ageMaxFrom: String(post.adAgeMax), ageMaxTo: String(post.adAgeMax) } : {}),
     ...(post.adGender != null ? { gender: post.adGender } : {}),
-    ...(post.adBudget != null ? { budgetMin: post.adBudget, budgetMax: post.adBudget, budgetStep: "1" } : {}),
+    ...(post.adBudgetMinor != null ? { budgetMinor: post.adBudgetMinor } : {}),
+    ...(post.adBudgetCurrency != null ? { budgetCurrency: post.adBudgetCurrency } : {}),
     adStatus: (post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
     adStartAt: post.adStartAt ?? undefined,
     adPlacements: parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
@@ -190,7 +211,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || err instanceof BudgetPolicyError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = (err instanceof MetaApiError && err.category === "rate_limit") || isMetaRateLimited(msg);
     const permanentMetaError = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
@@ -235,6 +256,8 @@ export async function recoverRateLimitedAds(): Promise<number> {
       status: "done",
       adStatus: "failed",
       errorMsg: { contains: "request limit reached", mode: "insensitive" },
+      adBudgetMinor: { not: null },
+      adBudgetCurrency: { not: null },
     },
     select: { id: true, order: true },
     take: 50,
@@ -266,9 +289,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     where: { key: { in: [
       "autoAdsTemplateId", "autoAdsAdAccountId", "autoAdsStatus",
       "autoAdsAgeMinFrom", "autoAdsAgeMinTo", "autoAdsAgeMaxFrom", "autoAdsAgeMaxTo", "autoAdsGender",
-      "autoAdsBudgetMin", "autoAdsBudgetMax", "autoAdsBudgetStep",
       "batchAgeMinFrom", "batchAgeMinTo", "batchAgeMaxFrom", "batchAgeMaxTo",
-      "batchGender", "batchBudgetMin", "batchBudgetMax", "batchBudgetStep",
+      "batchGender",
     ] } },
   });
   const cfg: Record<string, string> = {};
@@ -277,15 +299,14 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   interface AdsAccountRow {
     id: string; accountId: string; weight: number; assignedCount: number;
     budgetMin: string; budgetMax: string; budgetStep: string; templateId: string | null;
+    budgetCurrency: string | null; budgetMinMinor: string | null;
+    budgetMaxMinor: string | null; budgetStepMinor: string | null;
   }
   const accountRows = await prisma.$queryRawUnsafe<AdsAccountRow[]>(
     `SELECT * FROM "AutoAdsAccount" ORDER BY "sortOrder" ASC, "id" ASC`
   );
 
   let pickedAccountId: string;
-  let pickedBudgetMin: number;
-  let pickedBudgetMax: number;
-  let pickedBudgetStep: number;
   let pickedTemplateId: string;
   let pickedRowId: string | null = null;
 
@@ -295,9 +316,6 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     // Post.adAccountUsed is authoritative. AutoAdsAccount only supplies
     // weighted defaults and must never redirect an explicit user choice.
     pickedAccountId = p.adAccountId;
-    pickedBudgetMin = Number(rowOverride?.budgetMin ?? p.budgetMin ?? cfg.batchBudgetMin) || 100000;
-    pickedBudgetMax = Number(rowOverride?.budgetMax ?? p.budgetMax ?? cfg.batchBudgetMax) || pickedBudgetMin;
-    pickedBudgetStep = Number(rowOverride?.budgetStep ?? p.budgetStep ?? cfg.batchBudgetStep) || 1;
     pickedTemplateId = p.templateId ?? rowOverride?.templateId ?? "";
     pickedRowId = rowOverride?.id ?? null;
   } else if (accountRows.length > 0) {
@@ -312,24 +330,14 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       if (deficit > maxDeficit) { maxDeficit = deficit; picked = row; }
     }
     pickedAccountId  = picked.accountId;
-    pickedBudgetMin  = Number(picked.budgetMin) || Number(cfg.batchBudgetMin) || 100000;
-    pickedBudgetMax  = Number(picked.budgetMax) || Number(cfg.batchBudgetMax) || 200000;
-    pickedBudgetStep = Number(picked.budgetStep) || Number(cfg.batchBudgetStep) || 10000;
     pickedTemplateId = picked.templateId ?? cfg.autoAdsTemplateId;
     pickedRowId      = picked.id;
   } else {
-    if (!cfg.autoAdsAdAccountId) throw new Error("Chưa cấu hình tài khoản quảng cáo");
-    pickedAccountId  = cfg.autoAdsAdAccountId;
-    pickedBudgetMin  = Number(cfg.batchBudgetMin  ?? cfg.autoAdsBudgetMin ?? 100000);
-    pickedBudgetMax  = Number(cfg.batchBudgetMax  ?? cfg.autoAdsBudgetMax ?? 200000);
-    pickedBudgetStep = Number(cfg.batchBudgetStep ?? cfg.autoAdsBudgetStep ?? 10000);
-    pickedTemplateId = cfg.autoAdsTemplateId;
+    throw new AdTemplateConfigurationError("Chưa cấu hình TKQC với currency và trần ngân sách đã xác nhận.");
   }
 
   const rawAdAccountId = pickedAccountId.replace(/^act_/, "");
-  const adAccount = await prisma.fbAdAccount.findUnique({ where: { accountId: pickedAccountId } });
-  if (!adAccount) throw new AdTemplateConfigurationError(`Không tìm thấy tài khoản quảng cáo ${pickedAccountId}; hệ thống không tự đổi sang TKQC khác.`);
-  if (!adAccount.accessToken) throw new AdTemplateConfigurationError(`Tài khoản quảng cáo ${pickedAccountId} chưa có access token.`);
+  const adAccount = await getVerifiedAdAccountPolicy(pickedAccountId);
   const adsAccessToken = adAccount.accessToken;
 
   const postFull = await prisma.post.findUnique({
@@ -351,39 +359,19 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     if (affUrl) campaignName = (await resolveUtmContent(affUrl)) ?? "";
   }
 
-  // The batch table already rolled and showed a specific budget for this
-  // post — use it exactly instead of re-rolling from the TKQC account row's
-  // own range, which is what caused the ad's actual budget to end up
-  // different from what the table displayed.
-  //
-  // SAFETY NET: a stale client bundle or a client-side account/budget
-  // pairing bug can persist an explicit budget that was actually rolled for
-  // a DIFFERENT account (e.g. a VND account's 40000-55000 range attached to
-  // a USD account whose own range is 2-3). Combined with the currency
-  // minor-unit conversion in lib/facebook.ts, that turns a should-be
-  // $2-3/day budget into tens of thousands of USD/day — this happened for
-  // real and cost real money. Reject any explicit budget that's wildly
-  // outside the picked account's OWN currently configured range and fall
-  // back to rolling fresh from the account's real config instead, no matter
-  // what the client sent.
-  const explicitMin = p.budgetMin !== undefined && p.budgetMin !== "" ? Number(p.budgetMin) : null;
-  const explicitMax = p.budgetMax !== undefined && p.budgetMax !== "" ? Number(p.budgetMax) : explicitMin;
-  const SAFETY_MULTIPLIER = 5; // generous margin over the account's own configured max
-  const explicitInRange =
-    explicitMin !== null && explicitMax !== null &&
-    explicitMin > 0 && explicitMax > 0 &&
-    explicitMax <= pickedBudgetMax * SAFETY_MULTIPLIER;
-
-  if (explicitMin !== null && !explicitInRange) {
-    console.error(
-      `[auto-ads] SAFETY: rejected out-of-range explicit budget ${p.budgetMin}-${p.budgetMax} for account ${pickedAccountId} ` +
-      `(account's configured max is ${pickedBudgetMax}) — rolling from the account's own range instead`
-    );
+  // Every queue attempt, including the first one, must carry the immutable
+  // snapshot chosen before enqueueing. Never randomize again in a worker.
+  if (!p.budgetMinor || !p.budgetCurrency) {
+    throw new AdTemplateConfigurationError("Thiếu snapshot ngân sách/currency; không được phép random lại trong Queue.");
   }
-
-  const dailyBudget = explicitInRange
-    ? String(randomStep(explicitMin!, explicitMax!, Number(p.budgetStep ?? 1)))
-    : String(randomStep(pickedBudgetMin, pickedBudgetMax, pickedBudgetStep));
+  const verifiedBudget = validateMinorBudgetForAccount({
+    account: adAccount,
+    amountMinor: p.budgetMinor,
+    currency: p.budgetCurrency,
+  });
+  const dailyBudgetMinor = verifiedBudget.amountMinor;
+  const dailyBudget = verifiedBudget.amountMajor;
+  const budgetCurrency = verifiedBudget.currency;
 
   const pfx = p.isBatchPost ? "batch" : "autoAds";
   const ageMinFrom = Number(p.ageMinFrom ?? cfg[`${pfx}AgeMinFrom`] ?? cfg.autoAdsAgeMinFrom ?? 18);
@@ -422,6 +410,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     data: {
       adAccountUsed: pickedAccountId,
       adBudget: dailyBudget,
+      adBudgetMinor: dailyBudgetMinor,
+      adBudgetCurrency: budgetCurrency,
       adAgeMin: ageMin,
       adAgeMax: ageMax,
       adGender: effGender,
@@ -443,7 +433,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId },
     rawAdAccountId,
     adsAccessToken,
-    dailyBudget,
+    dailyBudgetMinor,
     p.fbConnAccessToken,
     campaignName || undefined,
     ageMin,
@@ -474,8 +464,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   );
 
   await prisma.$executeRawUnsafe(
-    `UPDATE "Post" SET "adBudget" = $1, "adAgeMin" = $2, "adAgeMax" = $3, "adGender" = $4 WHERE "id" = $5`,
-    dailyBudget, ageMin, ageMax, effGender, p.postId
+    `UPDATE "Post" SET "adBudget" = $1, "adBudgetMinor" = $2, "adBudgetCurrency" = $3, "adAgeMin" = $4, "adAgeMax" = $5, "adGender" = $6 WHERE "id" = $7`,
+    dailyBudget, dailyBudgetMinor, budgetCurrency, ageMin, ageMax, effGender, p.postId
   );
 
   if (pickedRowId) {

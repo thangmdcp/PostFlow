@@ -24,9 +24,9 @@ export async function register() {
           "id"         TEXT    NOT NULL,
           "accountId"  TEXT    NOT NULL,
           "weight"     INTEGER NOT NULL DEFAULT 1,
-          "budgetMin"  TEXT    NOT NULL DEFAULT '100000',
-          "budgetMax"  TEXT    NOT NULL DEFAULT '200000',
-          "budgetStep" TEXT    NOT NULL DEFAULT '10000',
+          "budgetMin"  TEXT    NOT NULL DEFAULT '',
+          "budgetMax"  TEXT    NOT NULL DEFAULT '',
+          "budgetStep" TEXT    NOT NULL DEFAULT '',
           "templateId" TEXT,
           "sortOrder"  INTEGER NOT NULL DEFAULT 0,
           CONSTRAINT "AutoAdsAccount_pkey" PRIMARY KEY ("id"),
@@ -35,6 +35,16 @@ export async function register() {
       `);
       await prisma.$executeRawUnsafe(`
         ALTER TABLE "AutoAdsAccount" ADD COLUMN IF NOT EXISTS "assignedCount" INTEGER NOT NULL DEFAULT 0;
+      `);
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "AutoAdsAccount"
+          ADD COLUMN IF NOT EXISTS "budgetCurrency" TEXT,
+          ADD COLUMN IF NOT EXISTS "budgetMinMinor" TEXT,
+          ADD COLUMN IF NOT EXISTS "budgetMaxMinor" TEXT,
+          ADD COLUMN IF NOT EXISTS "budgetStepMinor" TEXT,
+          ALTER COLUMN "budgetMin" SET DEFAULT '',
+          ALTER COLUMN "budgetMax" SET DEFAULT '',
+          ALTER COLUMN "budgetStep" SET DEFAULT '';
       `);
       await prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS "AdSettingsPreset" (
@@ -73,6 +83,8 @@ export async function register() {
         ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "mediaUrls" TEXT;
       `);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adBudget" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adBudgetMinor" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adBudgetCurrency" TEXT;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adAgeMin" INTEGER;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adAgeMax" INTEGER;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adGender" TEXT;`);
@@ -99,6 +111,14 @@ export async function register() {
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "storyPostId" TEXT;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "storyPostedAt" TIMESTAMP(3);`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbMediaId" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "currencyVerifiedAt" TIMESTAMP(3);`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "minDailyBudgetMinor" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "maxDailyBudgetMinor" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "budgetPolicyConfirmedAt" TIMESTAMP(3);`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "budgetPolicyCurrency" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "accountStatus" INTEGER;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "activeBudgetWarning" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FbAdAccount" ADD COLUMN IF NOT EXISTS "activeBudgetCheckedAt" TIMESTAMP(3);`);
     } catch (e) {
       console.warn("[startup] AppConfig table init:", e);
     }

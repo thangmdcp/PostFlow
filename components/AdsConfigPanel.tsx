@@ -1,11 +1,12 @@
 "use client";
 
 import { Megaphone } from "lucide-react";
-import { randomInteger, randomStep } from "@/lib/adSettings";
+import { randomInteger } from "@/lib/adSettings";
+import { randomMajorStep } from "@/lib/adMoney";
 import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import { AdParametersForm } from "@/components/AdParametersForm";
 import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
-import { AutoAdsAccountEditor, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
+import { AutoAdsAccountEditor, type AdAccountLike, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { adsPanel } from "@/lib/ui-classes";
 import { AdPlacementSelector } from "@/components/AdPlacementSelector";
 import type { AdPlacementConfig } from "@/lib/adPlacements";
@@ -21,11 +22,8 @@ export interface BatchAdConfig {
   ageMinFrom: string; ageMinTo: string;
   ageMaxFrom: string; ageMaxTo: string;
   gender: string;
-  // Kept as the fallback range for a freshly-added TKQC row (and for the
-  // rare case no accounts are configured at all) — no longer surfaced as
-  // its own editable field in "Thông số ads" since each account's own
-  // budget range (AutoAdsAccountEditor) is what actually gets used once an
-  // account is picked; see pickAccountAndBudget below.
+  // Legacy persisted keys only. They are never used to authorize or choose
+  // a budget; every amount comes from a currency-labelled TKQC row.
   budgetMin: string; budgetMax: string; budgetStep: string;
   adStatus: "ACTIVE" | "PAUSED";
   placements?: AdPlacementConfig;
@@ -60,26 +58,21 @@ export function weightedPickAccount(rows: { accountId: string; weight: number }[
 // — budget must never be rolled from a global range before the account is
 // known, since each TKQC can be configured with a completely different
 // currency/range (e.g. VND in the thousands vs. USD with 2-decimal steps).
-// `fallback` only applies when there are no TKQC rows configured at all.
 export function pickAccountAndBudget(
   rows: AutoAdsAccountRowLike[],
-  fallback: { budgetMin: string; budgetMax: string; budgetStep: string } = { budgetMin: "100000", budgetMax: "200000", budgetStep: "10000" }
 ): { accountId: string; budget: number } {
-  if (rows.length === 0) return { accountId: "", budget: randomStep(Number(fallback.budgetMin), Number(fallback.budgetMax), Number(fallback.budgetStep)) };
-  const accountId = weightedPickAccount(rows);
-  const row = rows.find((r) => r.accountId === accountId);
-  const budget = randomStep(
-    Number(row?.budgetMin ?? fallback.budgetMin),
-    Number(row?.budgetMax ?? fallback.budgetMax),
-    Number(row?.budgetStep ?? fallback.budgetStep)
-  );
+  const validRows = rows.filter((row) => row.budgetCurrency && Number(row.budgetMin) > 0 && Number(row.budgetMax) >= Number(row.budgetMin) && Number(row.budgetStep) > 0);
+  if (validRows.length === 0) return { accountId: "", budget: 0 };
+  const accountId = weightedPickAccount(validRows);
+  const row = validRows.find((r) => r.accountId === accountId)!;
+  const budget = Number(randomMajorStep(row.budgetMin, row.budgetMax, row.budgetStep, row.budgetCurrency!));
   return { accountId, budget };
 }
 
 interface AdsConfigPanelProps {
   adConfig: BatchAdConfig;
   templates: CampaignTemplate[];
-  adAccounts: { accountId: string; name: string }[];
+  adAccounts: AdAccountLike[];
   accountRows: AutoAdsAccountRowLike[];
   onPatch: (patch: Partial<BatchAdConfig>) => void;
   onPatchRow?: (idx: number, patch: Partial<AutoAdsAccountRowLike>) => void;

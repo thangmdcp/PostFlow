@@ -4,6 +4,11 @@ import { enqueueAds } from "@/lib/cloudflareQueue";
 import { validateAdSelection } from "@/lib/adSelection";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 import { MetaApiError } from "@/lib/metaApiClient";
+import {
+  BudgetPolicyError,
+  getVerifiedAdAccountPolicy,
+  validateMinorBudgetForAccount,
+} from "@/lib/adBudgetPolicy";
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const body = await request.json().catch(() => ({})) as { adAccountId?: string; templateId?: string; delaySeconds?: number };
@@ -14,14 +19,29 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!body.adAccountId || post.adAccountUsed !== body.adAccountId || !body.templateId || post.adTemplateId !== body.templateId) {
     return NextResponse.json({ error: "Snapshot TKQC/template không khớp yêu cầu retry" }, { status: 409 });
   }
+  if (!post.adBudgetMinor || !post.adBudgetCurrency) {
+    return NextResponse.json({
+      error: "Bài cũ chưa có snapshot ngân sách/currency an toàn; không thể retry tự động. Hãy tạo ads mới sau khi xác nhận trần TKQC.",
+      code: "BUDGET_SNAPSHOT_MISSING",
+    }, { status: 409 });
+  }
   const selectionError = await validateAdSelection(post.adTemplateId ?? undefined, post.adAccountUsed ?? undefined);
   if (selectionError) return NextResponse.json({ error: selectionError }, { status: 400 });
   try {
+    const account = await getVerifiedAdAccountPolicy(post.adAccountUsed);
+    validateMinorBudgetForAccount({
+      account,
+      amountMinor: post.adBudgetMinor,
+      currency: post.adBudgetCurrency,
+    });
     await preflightPostAdPermission(post, true);
   } catch (error) {
-    const status = error instanceof MetaApiError && ["rate_limit", "transient"].includes(error.category) ? 503 : 409;
+    const status = error instanceof BudgetPolicyError
+      ? error.status
+      : error instanceof MetaApiError && ["rate_limit", "transient"].includes(error.category) ? 503 : 409;
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Không kiểm tra được quyền quảng cáo",
+      ...(error instanceof BudgetPolicyError ? { code: error.code } : {}),
       ...(error instanceof MetaApiError ? { code: error.code, subcode: error.subcode, fbtrace_id: error.fbtraceId, retryAfterSeconds: error.retryAfterSeconds } : {}),
     }, { status });
   }

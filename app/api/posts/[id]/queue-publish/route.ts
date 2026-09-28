@@ -6,6 +6,8 @@ import { parsePublishTargets, validatePublishTargets, type PublishTarget } from 
 import { validateAdSelection } from "@/lib/adSelection";
 import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
+import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
+import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 
 type QueuePublishBody = {
   pageId: string;
@@ -14,7 +16,7 @@ type QueuePublishBody = {
   ageMinFrom?: string; ageMinTo?: string;
   ageMaxFrom?: string; ageMaxTo?: string;
   gender?: string;
-  budgetMin?: string; budgetMax?: string;
+  budget?: AdBudgetInput;
   adAccountId?: string;
   ctaHeadline?: string;
   adStatus?: "ACTIVE" | "PAUSED";
@@ -61,6 +63,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (targetError) return NextResponse.json({ error: targetError }, { status: 400 });
     const adSelectionError = await validateAdSelection(body.templateId, body.adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
+    const budgetSnapshot = await resolveAdBudgetSnapshot({
+      templateId: body.templateId,
+      accountId: body.adAccountId,
+      budget: body.budget,
+    });
     const parsedPlacements = body.templateId ? parseAdPlacementConfig(body.adPlacements) : null;
     if (body.templateId) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -100,7 +107,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),
         ...(body.ageMaxFrom !== undefined ? { adAgeMax: Number(body.ageMaxFrom) } : {}),
         ...(body.gender !== undefined ? { adGender: body.gender } : {}),
-        ...(body.budgetMin !== undefined ? { adBudget: body.budgetMin } : {}),
+        ...(budgetSnapshot ? {
+          adBudget: budgetSnapshot.amountMajor,
+          adBudgetMinor: budgetSnapshot.amountMinor,
+          adBudgetCurrency: budgetSnapshot.currency,
+        } : { adBudget: null, adBudgetMinor: null, adBudgetCurrency: null }),
         ...(body.adAccountId ? { adAccountUsed: body.adAccountId } : {}),
         ...(body.storyEnabled !== undefined ? { storyEnabled: body.storyEnabled } : {}),
         ...(body.storyCount !== undefined ? { storyCount: body.storyCount } : {}),
@@ -121,6 +132,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
     return NextResponse.json({ queued: true, status: "queued" }, { status: 202 });
   } catch (error) {
     console.error("POST /api/posts/[id]/queue-publish error:", error);
-    return NextResponse.json({ error: "Không thể xếp hàng đăng bài" }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Không thể xếp hàng đăng bài", ...(error instanceof BudgetPolicyError ? { code: error.code } : {}) },
+      { status: error instanceof BudgetPolicyError ? error.status : 500 },
+    );
   }
 }

@@ -13,6 +13,7 @@ export const FACEBOOK_OAUTH_PERMISSIONS = [
   "pages_manage_engagement",
   "instagram_basic",
   "instagram_content_publish",
+  "ads_read",
   "ads_management",
   "business_management",
 ] as const;
@@ -29,6 +30,8 @@ export interface FacebookOAuthAdAccount {
   account_id: string;
   name: string;
   account_status?: number;
+  currency?: string;
+  min_daily_budget?: string;
 }
 
 function oauthSecret() {
@@ -96,7 +99,7 @@ export async function discoverFacebookAssets(accessToken: string) {
   pagesUrl.searchParams.set("limit", "200");
   pagesUrl.searchParams.set("access_token", accessToken);
   const adsUrl = new URL(`${META_GRAPH_API}/me/adaccounts`);
-  adsUrl.searchParams.set("fields", "id,name,account_id,account_status");
+  adsUrl.searchParams.set("fields", "id,name,account_id,account_status,currency,min_daily_budget");
   adsUrl.searchParams.set("limit", "200");
   adsUrl.searchParams.set("access_token", accessToken);
 

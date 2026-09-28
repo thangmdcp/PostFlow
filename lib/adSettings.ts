@@ -14,10 +14,10 @@ export interface AdSettings {
 }
 
 export const DEFAULT_AD_SETTINGS: AdSettings = {
-  currency: "VND",
-  budgetMin: "100000",
-  budgetMax: "200000",
-  budgetStep: "10000",
+  currency: "",
+  budgetMin: "",
+  budgetMax: "",
+  budgetStep: "",
   ageMinFrom: "18",
   ageMinTo: "25",
   ageMaxFrom: "45",
