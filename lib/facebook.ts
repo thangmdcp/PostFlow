@@ -253,23 +253,32 @@ function permissionCacheKey(adAccountId: string, pageId: string, instagramUserId
   return [adAccountId.replace(/^act_/, ""), pageId, instagramUserId ?? "facebook"].join(":");
 }
 
+const PAGE_TOKEN_CACHE_MARKER = "__POSTFLOW_USE_PAGE_TOKEN__";
+
 export async function ensureAdAssetAccess(
   adAccountId: string,
   pageId: string,
   instagramUserId: string | undefined,
   accessToken: string,
+  pageAccessToken?: string,
   options: { forceRefresh?: boolean } = {},
-) {
+): Promise<string> {
   const normalizedId = adAccountId.replace(/^act_/, "");
   const cacheKey = permissionCacheKey(normalizedId, pageId, instagramUserId);
   if (options.forceRefresh) await prisma.metaPermissionCache.deleteMany({ where: { cacheKey } });
   const cached = await prisma.metaPermissionCache.findUnique({ where: { cacheKey } });
   if (cached && cached.expiresAt.getTime() > Date.now()) {
     if (!cached.allowed) throw new AdTemplateConfigurationError(cached.errorMsg || "TKQC chưa được cấp quyền dùng Page/Instagram.");
-    return;
+    if (cached.errorMsg === PAGE_TOKEN_CACHE_MARKER) {
+      if (pageAccessToken) return pageAccessToken;
+      await prisma.metaPermissionCache.deleteMany({ where: { cacheKey } });
+    } else {
+      return accessToken;
+    }
   }
 
   let errorMsg: string | null = null;
+  let effectiveAccessToken = accessToken;
   try {
     const promotePages = await metaJson<{ data?: Array<{ id?: string }> }>(
       `${FB_API}/act_${normalizedId}/promote_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
@@ -317,6 +326,41 @@ export async function ensureAdAssetAccess(
         errorMsg = "Tài khoản quảng cáo chưa được cấp quyền dùng tài khoản Instagram đã chọn.";
       }
     }
+
+    // Page and ad-account connections can originate from different Facebook
+    // users. The ad-account token may then miss the Page even though the saved
+    // Page token can manage both exact assets. Verify both nodes before using
+    // that scoped Page token; never fall back to another/default TKQC token.
+    if (errorMsg && pageAccessToken) {
+      const [targetAccount, targetPage] = await Promise.all([
+        metaJson<{ id?: string; account_status?: number }>(
+          `${FB_API}/act_${normalizedId}?fields=id,account_status&access_token=${encodeURIComponent(pageAccessToken)}`,
+          {},
+          { adAccountId: normalizedId },
+        ),
+        metaJson<{ id?: string }>(
+          `${FB_API}/${pageId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`,
+          {},
+          { pageId },
+        ),
+      ]);
+      const canUseAccountAndPage = targetAccount.id === `act_${normalizedId}`
+        && targetAccount.account_status === 1
+        && targetPage.id === pageId;
+      let canUseInstagram = true;
+      if (canUseAccountAndPage && instagramUserId) {
+        const instagramAccounts = await metaJson<{ data?: Array<{ id?: string }> }>(
+          `${FB_API}/act_${normalizedId}/instagram_accounts?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`,
+          {},
+          { adAccountId: normalizedId },
+        );
+        canUseInstagram = (instagramAccounts.data ?? []).some((account) => account.id === instagramUserId);
+      }
+      if (canUseAccountAndPage && canUseInstagram) {
+        errorMsg = null;
+        effectiveAccessToken = pageAccessToken;
+      }
+    }
   } catch (error) {
     if (error instanceof MetaApiError && ["rate_limit", "token", "transient"].includes(error.category)) throw error;
     errorMsg = error instanceof Error ? error.message : "Không kiểm tra được quyền Page/Instagram";
@@ -326,15 +370,19 @@ export async function ensureAdAssetAccess(
     where: { cacheKey },
     create: {
       cacheKey, adAccountId: normalizedId, pageId, instagramUserId,
-      allowed: !errorMsg, errorMsg,
+      allowed: !errorMsg,
+      errorMsg: !errorMsg && effectiveAccessToken === pageAccessToken ? PAGE_TOKEN_CACHE_MARKER : errorMsg,
       expiresAt: new Date(Date.now() + 6 * 60 * 60_000),
     },
     update: {
-      allowed: !errorMsg, errorMsg, checkedAt: new Date(),
+      allowed: !errorMsg,
+      errorMsg: !errorMsg && effectiveAccessToken === pageAccessToken ? PAGE_TOKEN_CACHE_MARKER : errorMsg,
+      checkedAt: new Date(),
       expiresAt: new Date(Date.now() + 6 * 60 * 60_000),
     },
   });
   if (errorMsg) throw new AdTemplateConfigurationError(errorMsg);
+  return effectiveAccessToken;
 }
 
 export async function cloneAdCampaign(
@@ -361,7 +409,13 @@ export async function cloneAdCampaign(
   if (needsInstagramIdentity && !instagramIdentityId) {
     throw new AdTemplateConfigurationError("Placement Instagram/Threads yêu cầu Page đã liên kết Instagram Professional.");
   }
-  await ensureAdAssetAccess(adAccountId, pageId, needsInstagramIdentity ? instagramIdentityId : undefined, accessToken);
+  const creationAccessToken = await ensureAdAssetAccess(
+    adAccountId,
+    pageId,
+    needsInstagramIdentity ? instagramIdentityId : undefined,
+    accessToken,
+    pageAccessToken,
+  );
 
   if (!/^\d+$/.test(dailyBudgetMinor) || BigInt(dailyBudgetMinor) <= BigInt(0)) {
     throw new AdTemplateConfigurationError("Ngân sách minor units chưa được xác thực.");
@@ -413,7 +467,7 @@ export async function cloneAdCampaign(
     status: adStatus,
     special_ad_categories: template.specialAdCategories,
     buying_type: "AUCTION",
-    access_token: accessToken,
+    access_token: creationAccessToken,
   };
   // With CBO, bid_strategy belongs on the campaign — setting it on the ad set
   // instead makes FB fall back to a bid-cap strategy that then demands a
@@ -447,7 +501,7 @@ export async function cloneAdCampaign(
       billing_event: template.billingEvent,
       optimization_goal: template.optimizationGoal,
       status: adStatus,
-      access_token: accessToken,
+      access_token: creationAccessToken,
     };
     if (!useCBO) {
       adSetBody.daily_budget = dailyBudgetMinor;
@@ -499,12 +553,12 @@ export async function cloneAdCampaign(
               instagramUserId: source.instagramUserId,
               igPostId: source.igPostId,
               destinationUrl: source.destinationUrl,
-              accessToken,
+              accessToken: creationAccessToken,
             })
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
               objectStoryId,
-              accessToken,
+              accessToken: creationAccessToken,
             });
       const creative = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/adcreatives`, {
           method: "POST",
@@ -525,7 +579,7 @@ export async function cloneAdCampaign(
           adset_id: adSetId,
           creative: { creative_id: creativeId },
           status: adStatus,
-          access_token: accessToken,
+          access_token: creationAccessToken,
         }),
       }, { adAccountId });
       adId = ad.id;

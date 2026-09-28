@@ -27,5 +27,12 @@ export async function preflightPostAdPermission(post: PostPermissionSnapshot, fo
   if (!page) throw new Error("Page chưa được kết nối trong PostFlow.");
   const needsInstagram = post.adPlatform === "instagram" || placementsNeedInstagram(post.adPlacementConfig);
   if (needsInstagram && !page.instagramUserId) throw new Error("Page chưa liên kết Instagram Professional.");
-  await ensureAdAssetAccess(post.adAccountUsed, post.pageId, needsInstagram ? page.instagramUserId ?? undefined : undefined, account.accessToken, { forceRefresh });
+  await ensureAdAssetAccess(
+    post.adAccountUsed,
+    post.pageId,
+    needsInstagram ? page.instagramUserId ?? undefined : undefined,
+    account.accessToken,
+    page.accessToken,
+    { forceRefresh },
+  );
 }
