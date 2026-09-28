@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   const { postId } = await request.json() as { postId?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
   const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true } });
-  if (!post || post.adStatus === "done" || post.adStatus === "failed") return NextResponse.json({ ok: true });
+  if (!post || !["pending", "queued", "creating"].includes(post.adStatus ?? "")) return NextResponse.json({ ok: true });
   const placementPlatforms = post.adPlacementConfig && typeof post.adPlacementConfig === "object" && !Array.isArray(post.adPlacementConfig)
     ? (post.adPlacementConfig as Record<string, unknown>).publisherPlatforms
     : null;

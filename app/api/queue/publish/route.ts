@@ -21,6 +21,9 @@ export async function POST(request: Request) {
   let post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post) return NextResponse.json({ status: "missing" });
   if (post.status === "done") return NextResponse.json({ status: "done" });
+  if (!["pending", "queued", "publishing", "partial", "failed"].includes(post.status)) {
+    return NextResponse.json({ status: "cancelled" });
+  }
   const instagramUserId = post.publishToInstagram && post.pageId
     ? (await prisma.fbConnection.findUnique({ where: { pageId: post.pageId }, select: { instagramUserId: true } }))?.instagramUserId
     : null;

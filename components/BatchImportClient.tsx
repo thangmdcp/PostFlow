@@ -11,7 +11,7 @@ import { useToast } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Loader2, Check, Copy, ExternalLink, Calendar, Send,
-  PlusCircle, ArrowRight, RefreshCw, CheckCircle2,
+  PlusCircle, ArrowRight, RefreshCw, CheckCircle2, CalendarX2,
   Columns3, Square, CheckSquare, Eye, EyeOff, ChevronDown,
   Megaphone, Shuffle, SlidersHorizontal, FileDown, FileUp, Image as ImageIcon, Clock, Pin, PinOff, Trash2, MessageCircle, X, Filter,
 } from "lucide-react";
@@ -45,6 +45,7 @@ import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAct
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
 import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { FetchStatusDetail } from "@/components/FetchStatusDetail";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import {
   COMPOSER_DRAFT_KEY,
   batchDraftKey,
@@ -1111,6 +1112,18 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     && !!post.adTemplateId
     && (!!post.fbPostId || !!post.igPostId)
   );
+  const unscheduleTargets = batch.posts.filter((post) =>
+    checkedIds.has(post.id)
+    && (post.status === "pending" || post.status === "queued")
+    && !post.fbPostId
+    && !post.igPostId
+    && !post.igContainerId
+    && !post.fbObjectStoryId
+    && !post.adCampaignId
+    && !post.adSetId
+    && !post.adCreativeId
+    && !post.adId
+  );
   const affiliateBlockedTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed") && (
     post.extractedLinks.some((link) => !link.myUrl) || post.extractedLinks.some((link) => post.finalCaption?.includes(link.competitorUrl))
   ));
@@ -1535,7 +1548,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setRowOverrides((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, config.adConfig.overridePublish])) }));
 
     setBulkRunning(true);
-    const outcomes = await Promise.all(targets.map(async (post, index) => {
+    const outcomes = await mapWithConcurrency(targets, 3, async (post, index) => {
       const id = post.id;
       const pageId = allocation.pageByPost[id];
       const accountId = allocation.accountByPost[id];
@@ -1573,7 +1586,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
               } : {}),
             }),
           });
-          return response.ok;
+          const payload = await response.json().catch(() => ({})) as { error?: string };
+          return response.ok
+            ? { ok: true as const }
+            : { ok: false as const, error: payload.error || `HTTP ${response.status}` };
         }
 
         const publishAt = kind === "prepare"
@@ -1595,13 +1611,16 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             ...(adStartAt ? { adStartAt } : {}),
           }),
         });
-        return response.ok;
-      } catch {
-        return false;
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        return response.ok
+          ? { ok: true as const }
+          : { ok: false as const, error: payload.error || `HTTP ${response.status}` };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : "Không thể gửi cấu hình" };
       }
-    }));
+    });
 
-    const succeededIds = ids.filter((_, index) => outcomes[index]);
+    const succeededIds = ids.filter((_, index) => outcomes[index]?.ok);
     const plannedTimes = Object.fromEntries(ids.map((id, index) => {
       if (kind === "schedule") return [id, scheduleTimes[id]];
       if (kind === "prepare") return [id, dateToVn7(new Date(preparedFirst.getTime() + index * prepareSpacingMinutes * 60_000))];
@@ -1612,11 +1631,64 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setBulkRunning(false);
     await mutateBatch().catch(() => undefined);
     const failed = outcomes.length - succeededIds.length;
+    const firstError = outcomes.find((outcome) => !outcome.ok)?.error;
     onToast(
-      failed ? `Đã gửi ${succeededIds.length}/${outcomes.length} bài · giữ lại ${failed} bài lỗi` : `Đã gửi thành công ${succeededIds.length} bài`,
+      failed
+        ? `Đã gửi ${succeededIds.length}/${outcomes.length} bài · ${failed} bài lỗi: ${firstError ?? "Không rõ nguyên nhân"}`
+        : `Đã gửi thành công ${succeededIds.length} bài`,
       failed ? "error" : "success",
     );
     return failed === 0;
+  }
+
+  async function handleBulkUnschedule() {
+    if (!unscheduleTargets.length) return;
+    const skippedCount = checkedIds.size - unscheduleTargets.length;
+    const message = [
+      `Huỷ lịch ${unscheduleTargets.length} bài chưa đăng và đưa về trạng thái Sẵn sàng?`,
+      skippedCount ? `${skippedCount} bài đã đăng/đang xử lý/có tài sản Meta sẽ được giữ nguyên.` : "",
+      "Nội dung, media, link affiliate và tên campaign vẫn được giữ lại.",
+    ].filter(Boolean).join("\n\n");
+    if (!confirm(message)) return;
+
+    setBulkRunning(true);
+    try {
+      const response = await fetch("/api/posts/bulk-unschedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postIds: [...checkedIds] }),
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        error?: string;
+        cancelledIds?: string[];
+        skipped?: Array<{ id: string; reason: string }>;
+      };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      const cancelledIds = payload.cancelledIds ?? [];
+      const cancelled = new Set(cancelledIds);
+      const omitCancelled = <T,>(current: Record<string, T>) => Object.fromEntries(
+        Object.entries(current).filter(([id]) => !cancelled.has(id)),
+      ) as Record<string, T>;
+      setRowPageId(omitCancelled);
+      setRowAccountId(omitCancelled);
+      setRowAdParams(omitCancelled);
+      setRowRunAds(omitCancelled);
+      setRowPublishTargets(omitCancelled);
+      setRowOverrides(omitCancelled);
+      setPostTimes(omitCancelled);
+      await mutateBatch();
+      const skipped = payload.skipped ?? [];
+      onToast(
+        skipped.length
+          ? `Đã huỷ ${cancelledIds.length} bài · giữ nguyên ${skipped.length} bài: ${skipped[0].reason}`
+          : `Đã huỷ lịch ${cancelledIds.length} bài; có thể cài lại ngay`,
+        skipped.length ? "error" : "success",
+      );
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Không thể huỷ lịch", "error");
+    } finally {
+      setBulkRunning(false);
+    }
   }
 
   async function handleBulkDelete() {
@@ -1741,6 +1813,11 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             title="Kiểm tra lại quyền và retry riêng Ads của các bài đã chọn; không đăng lại bài nguồn"
             className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
             {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Retry Ads
+          </button>
+          <button onClick={handleBulkUnschedule} disabled={bulkRunning || unscheduleTargets.length === 0}
+            title="Huỷ lịch các bài chưa đăng để chọn lại Page, nền tảng và TKQC"
+            className="flex items-center gap-1.5 rounded-lg border border-orange-300 bg-orange-50 hover:bg-orange-100 text-orange-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            {bulkRunning ? <Loader2 size={11} className="animate-spin" /> : <CalendarX2 size={11} />} Huỷ lên lịch
           </button>
           <button onClick={handleBulkDelete} disabled={bulkRunning || checkedIds.size === 0} title="Xoá các dòng đã chọn"
             className="flex items-center rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -2108,9 +2185,11 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
     const isRetry = (adAttempt ?? 0) > 0;
     const display = metaErrorDisplay(errorMsg);
     const isMetaRateLimit = display.kind === "quota";
-    const maxAttempts = 3;
+    const isSourceWaiting = display.kind === "source";
+    const maxAttempts = isSourceWaiting ? 6 : 3;
     const pendingLabel = isMetaRateLimit
       ? "Meta đang hồi quota"
+      : isSourceWaiting ? "Bài đang được Facebook xử lý"
       : isRetry ? `Thử lại ads ${Math.min((adAttempt ?? 0) + 1, maxAttempts)}/${maxAttempts}` : "Đợi Meta xử lý bài";
     if (now === null) {
       return (
@@ -2134,7 +2213,7 @@ function AdStatusBadge({ adStatus, adNextAttemptAt, adAttempt, errorMsg, adCampa
       <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 whitespace-nowrap"
         title={errorMsg ? `${pendingLabel}: ${errorMsg}` : `${pendingLabel} — thời gian còn lại tới lần tạo ads tiếp theo`}>
         <Clock size={8} className="shrink-0" />
-        <span>{isRetry ? "Thử lại" : "Đợi Meta"}</span>
+        <span>{isSourceWaiting ? "Facebook xử lý" : isRetry ? "Thử lại" : "Đợi Meta"}</span>
         <span className="tabular-nums">{m}:{String(s).padStart(2, "0")}</span>
       </div>
     );

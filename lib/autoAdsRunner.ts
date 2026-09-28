@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
+import { AdSourceNotReadyError, SOURCE_READY_RETRY_DELAYS_MS } from "@/lib/adSourceReadiness";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { randomInteger } from "@/lib/adSettings";
 import { resolveUtmContent } from "@/lib/resolveUtmContent";
@@ -17,7 +18,7 @@ import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAc
 //
 // Cloudflare Queue owns delayed delivery and retry. Supabase
 // stores state for the UI and idempotency, not a cron-owned retry schedule.
-const RETRY_DELAYS_MS = [30_000, 120_000, 300_000]; // source readiness: 30s, 2m, 5m
+const RETRY_DELAYS_MS = [30_000, 120_000, 300_000];
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 const DAY_MS = 86_400_000;
 const BATCH_AD_SPACING_MS = 20_000;
@@ -139,7 +140,7 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
 // Called only by the secure Queue consumer endpoint.
 export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const post = await prisma.post.findUnique({ where: { id: postId } });
-  if (!post || post.adStatus === "done" || post.adStatus === "failed") return { retry: false };
+  if (!post || !["pending", "queued", "creating"].includes(post.adStatus ?? "")) return { retry: false };
   if (post.adStatus === "creating") {
     if (post.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };
     await prisma.post.updateMany({
@@ -215,14 +216,18 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = (err instanceof MetaApiError && err.category === "rate_limit") || isMetaRateLimited(msg);
     const permanentMetaError = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
-    const sourceNotReady = /chưa sẵn sàng|cannot be advertised|can't be advertised|2446187/i.test(msg);
+    const sourceNotReady = err instanceof AdSourceNotReadyError || /AD_SOURCE_NOT_READY|chưa sẵn sàng|đang được xử lý|cannot be advertised|can't be advertised|2446187/i.test(msg);
+    const sourceCanRetry = sourceNotReady && attemptNumber <= SOURCE_READY_RETRY_DELAYS_MS.length;
+    const normalCanRetry = !sourceNotReady && attemptNumber < MAX_ATTEMPTS;
     // A quota response needs a much longer, individually-jittered retry. It
     // must not be treated like a normal creative delay, otherwise every row
     // from the batch retries together and immediately exhausts Meta again.
-    if (!isConfigurationError && !isPermanentInstagramError && !permanentMetaError && (attemptNumber < MAX_ATTEMPTS || rateLimited)) {
+    if (!isConfigurationError && !isPermanentInstagramError && (sourceCanRetry || rateLimited || (!permanentMetaError && normalCanRetry))) {
       const delay = rateLimited
         ? Math.max((err instanceof MetaApiError ? err.retryAfterSeconds ?? 0 : 0) * 1000, metaRateLimitDelayMs(attemptNumber, params.postId))
-        : RETRY_DELAYS_MS[Math.min(attemptNumber - 1, RETRY_DELAYS_MS.length - 1)];
+        : sourceNotReady
+          ? SOURCE_READY_RETRY_DELAYS_MS[Math.min(attemptNumber - 1, SOURCE_READY_RETRY_DELAYS_MS.length - 1)]
+          : RETRY_DELAYS_MS[Math.min(attemptNumber - 1, RETRY_DELAYS_MS.length - 1)];
       const nextAttemptAt = new Date(Date.now() + delay);
       await prisma.post.update({
         where: { id: params.postId },

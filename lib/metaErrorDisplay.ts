@@ -16,7 +16,7 @@ export function metaErrorDisplay(message?: string | null): MetaErrorDisplay {
     return { label: "Thiếu quyền quảng bá Page", kind: "permission" };
   }
   if (/\[source\]|chưa sẵn sàng|not ready|2446187/.test(normalized)) {
-    return { label: "Bài chưa sẵn sàng làm quảng cáo", kind: "source" };
+    return { label: "Bài đang được Facebook xử lý", kind: "source" };
   }
   return { label: "Lỗi Ads", kind: "other" };
 }

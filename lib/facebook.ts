@@ -13,6 +13,7 @@ import { applyAdPlacements, validateAdPlacements, type AdPlacementConfig } from 
 import { metaRequestJson, MetaApiError } from "@/lib/metaApiClient";
 import type { MetaRequestContext } from "@/lib/metaUsage";
 import { prisma } from "@/lib/prisma";
+import { AdSourceNotReadyError } from "@/lib/adSourceReadiness";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -482,6 +483,28 @@ export async function cloneAdCampaign(
   let creativeId = existing.creativeId ?? undefined;
   let adId = existing.adId ?? undefined;
   try {
+    // Resolve the Facebook story before creating any paid asset. Fresh video
+    // posts can take several minutes to appear in published_posts; creating a
+    // Campaign and Ad Set first leaves empty assets behind on every retry.
+    let objectStoryId = existing.objectStoryId ?? "";
+    if (source.platform === "facebook") {
+      const fbPostId = source.fbPostId;
+      if (!objectStoryId && fbPostId.includes("_")) objectStoryId = fbPostId;
+      if (!objectStoryId && !fbPostId.includes("_")) {
+        const lookupToken = pageAccessToken ?? accessToken;
+        const postsUrl = `${FB_API}/${pageId}/published_posts?fields=id,attachments{target{id}}&limit=25&access_token=${lookupToken}`;
+        const postsData: { data?: Record<string, unknown>[] } = await metaJson(postsUrl, {}, { pageId });
+        const match = (postsData.data ?? []).find((publishedPost) => {
+          const attData = (((publishedPost.attachments as Record<string, unknown>) ?? {}).data ?? []) as Record<string, unknown>[];
+          return attData.some((attachment) => (attachment.target as Record<string, string> | undefined)?.id === fbPostId);
+        });
+        if (match) objectStoryId = match.id as string;
+      }
+      if (!objectStoryId) throw new AdSourceNotReadyError();
+      if (!existing.objectStoryId) await onProgress?.({ objectStoryId });
+      console.log("[creative] using objectStoryId:", objectStoryId);
+    }
+
     if (!campaignId) {
       const newCamp = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/campaigns`, {
         method: "POST",
@@ -517,28 +540,6 @@ export async function cloneAdCampaign(
       }, { adAccountId });
       adSetId = newAdSet.id;
       await onProgress?.({ adSetId });
-    }
-
-    // 5. Resolve and persist the canonical Page story ID once. A bare video
-    // ID is not a valid object_story_id, so wait until published_posts exposes
-    // the matching Page post instead of inventing pageId_videoId.
-    let objectStoryId = existing.objectStoryId ?? "";
-    if (source.platform === "facebook") {
-      const fbPostId = source.fbPostId;
-      if (!objectStoryId && fbPostId.includes("_")) objectStoryId = fbPostId;
-      if (!objectStoryId && !fbPostId.includes("_")) {
-        const lookupToken = pageAccessToken ?? accessToken;
-        const postsUrl = `${FB_API}/${pageId}/published_posts?fields=id,attachments{target{id}}&limit=25&access_token=${lookupToken}`;
-        const postsData: { data?: Record<string, unknown>[] } = await metaJson(postsUrl, {}, { pageId });
-        const match = (postsData.data ?? []).find((publishedPost) => {
-          const attData = (((publishedPost.attachments as Record<string, unknown>) ?? {}).data ?? []) as Record<string, unknown>[];
-          return attData.some((attachment) => (attachment.target as Record<string, string> | undefined)?.id === fbPostId);
-        });
-        if (match) objectStoryId = match.id as string;
-      }
-      if (!objectStoryId) throw new Error("Bài Facebook chưa sẵn sàng để làm nguồn quảng cáo");
-      if (!existing.objectStoryId) await onProgress?.({ objectStoryId });
-      console.log("[creative] using objectStoryId:", objectStoryId);
     }
 
   // A post just published (especially video) often isn't immediately eligible
