@@ -13,7 +13,11 @@ import { applyAdPlacements, validateAdPlacements, type AdPlacementConfig } from 
 import { metaRequestJson, MetaApiError } from "@/lib/metaApiClient";
 import type { MetaRequestContext } from "@/lib/metaUsage";
 import { prisma } from "@/lib/prisma";
-import { AdSourceNotReadyError, facebookObjectStoryIdCandidate } from "@/lib/adSourceReadiness";
+import {
+  AdSourceNotReadyError,
+  facebookObjectStoryIdCandidate,
+  facebookPromotableStoryId,
+} from "@/lib/adSourceReadiness";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -495,16 +499,16 @@ export async function cloneAdCampaign(
       // PageID_ReelID object first; it is both cheaper and more reliable than
       // paging the Page feed. Keep published_posts below as a compatibility
       // fallback for older photo/video post shapes.
-      if (!objectStoryId && !fbPostId.includes("_")) {
+      const deterministicCandidate = facebookObjectStoryIdCandidate(pageId, fbPostId);
+      if ((!objectStoryId || objectStoryId === deterministicCandidate) && !fbPostId.includes("_")) {
         const lookupToken = pageAccessToken ?? accessToken;
-        const candidate = facebookObjectStoryIdCandidate(pageId, fbPostId);
         try {
-          const directStory = await metaJson<{ id?: string }>(
-            `${FB_API}/${candidate}?fields=id&access_token=${encodeURIComponent(lookupToken)}`,
+          const directStory = await metaJson<{ id?: string; promotable_id?: string; is_eligible_for_promotion?: boolean }>(
+            `${FB_API}/${deterministicCandidate}?fields=id,promotable_id,is_eligible_for_promotion&access_token=${encodeURIComponent(lookupToken)}`,
             {},
             { pageId },
           );
-          if (directStory.id) objectStoryId = directStory.id;
+          objectStoryId = facebookPromotableStoryId(directStory);
         } catch (error) {
           // Auth, quota and upstream failures must retain their structured
           // classification. A normal "object not found yet" response may
@@ -525,7 +529,7 @@ export async function cloneAdCampaign(
         if (match) objectStoryId = match.id as string;
       }
       if (!objectStoryId) throw new AdSourceNotReadyError();
-      if (!existing.objectStoryId) await onProgress?.({ objectStoryId });
+      if (existing.objectStoryId !== objectStoryId) await onProgress?.({ objectStoryId });
       console.log("[creative] using objectStoryId:", objectStoryId);
     }
 

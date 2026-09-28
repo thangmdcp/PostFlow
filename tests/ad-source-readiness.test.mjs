@@ -5,6 +5,7 @@ import {
   AdSourceNotReadyError,
   SOURCE_READY_RETRY_DELAYS_MS,
   facebookObjectStoryIdCandidate,
+  facebookPromotableStoryId,
 } from "../lib/adSourceReadiness.ts";
 
 test("Facebook source readiness uses a typed error", () => {
@@ -21,6 +22,15 @@ test("source readiness backoff covers about thirty minutes", () => {
 test("canonical Facebook story candidate uses PageID_ReelID", () => {
   assert.equal(facebookObjectStoryIdCandidate("233853783154665", "1742013207103324"), "233853783154665_1742013207103324");
   assert.equal(facebookObjectStoryIdCandidate("233853783154665", "233853783154665_1742013207103324"), "233853783154665_1742013207103324");
+});
+
+test("Reel resolver prefers Meta promotable_id over the visible story id", () => {
+  assert.equal(facebookPromotableStoryId({
+    id: "233853783154665_1709441733462492",
+    promotable_id: "233853783154665_122237008658288611",
+    is_eligible_for_promotion: true,
+  }), "233853783154665_122237008658288611");
+  assert.equal(facebookPromotableStoryId({ id: "page_post", is_eligible_for_promotion: false }), "");
 });
 
 test("Facebook story readiness is checked before any Campaign is created", () => {

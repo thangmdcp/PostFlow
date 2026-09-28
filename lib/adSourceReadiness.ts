@@ -4,6 +4,16 @@ export function facebookObjectStoryIdCandidate(pageId: string, fbPostId: string)
   return fbPostId.includes("_") ? fbPostId : `${pageId}_${fbPostId}`;
 }
 
+export function facebookPromotableStoryId(payload: {
+  id?: unknown;
+  promotable_id?: unknown;
+  is_eligible_for_promotion?: unknown;
+}): string {
+  if (payload.is_eligible_for_promotion === false) return "";
+  if (typeof payload.promotable_id === "string" && payload.promotable_id) return payload.promotable_id;
+  return typeof payload.id === "string" ? payload.id : "";
+}
+
 export class AdSourceNotReadyError extends Error {
   readonly code = "AD_SOURCE_NOT_READY";
 

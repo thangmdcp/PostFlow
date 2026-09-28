@@ -216,7 +216,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = (err instanceof MetaApiError && err.category === "rate_limit") || isMetaRateLimited(msg);
     const permanentMetaError = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
-    const sourceNotReady = err instanceof AdSourceNotReadyError || /AD_SOURCE_NOT_READY|chưa sẵn sàng|đang được xử lý|cannot be advertised|can't be advertised|2446187/i.test(msg);
+    const sourceNotReady = err instanceof AdSourceNotReadyError || /AD_SOURCE_NOT_READY|chưa sẵn sàng|đang được xử lý|cannot be advertised|can't be advertised|không thể đưa vào quảng cáo|2446187|1487472/i.test(msg);
     const sourceCanRetry = sourceNotReady && attemptNumber <= SOURCE_READY_RETRY_DELAYS_MS.length;
     const normalCanRetry = !sourceNotReady && attemptNumber < MAX_ATTEMPTS;
     // A quota response needs a much longer, individually-jittered retry. It
