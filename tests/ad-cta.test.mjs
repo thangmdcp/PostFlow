@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adCallToAction, parseAdCtaType, validateAdCta } from "../lib/adCta.ts";
+import { adCallToAction, parseAdCtaScope, parseAdCtaType, resolveAdCtaScope, validateAdCta, validateAdCtaScope } from "../lib/adCta.ts";
 
 test("CTA parser accepts only the supported Shopee actions", () => {
   assert.equal(parseAdCtaType("LEARN_MORE"), "LEARN_MORE");
@@ -21,4 +21,19 @@ test("CTA payload leaves headline absent", () => {
   const cta = adCallToAction("LEARN_MORE", "https://s.shopee.vn/demo");
   assert.deepEqual(cta, { type: "LEARN_MORE", value: { link: "https://s.shopee.vn/demo" } });
   assert.equal("title" in cta, false);
+});
+
+test("CTA scope defaults legacy rows to ad-only and validates public Facebook sources", () => {
+  assert.equal(resolveAdCtaScope(null), "AD_ONLY");
+  assert.equal(parseAdCtaScope("AD_AND_FACEBOOK_POST"), "AD_AND_FACEBOOK_POST");
+  assert.equal(parseAdCtaScope("ORGANIC_ONLY"), null);
+  assert.equal(validateAdCtaScope({
+    scope: "AD_AND_FACEBOOK_POST", ctaType: "SHOP_NOW", publishToFacebook: true, publishedToPage: true,
+  }).error, undefined);
+  assert.match(validateAdCtaScope({
+    scope: "AD_AND_FACEBOOK_POST", ctaType: "SHOP_NOW", publishToFacebook: false, publishedToPage: true,
+  }).error, /Facebook/);
+  assert.equal(validateAdCtaScope({
+    scope: "AD_AND_FACEBOOK_POST", ctaType: "NO_BUTTON", publishToFacebook: false, publishedToPage: false,
+  }).scope, "AD_ONLY");
 });

@@ -45,7 +45,7 @@ type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostCom
 const EMPTY_AD_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65", gender: "",
-  budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED", ctaType: "LEARN_MORE",
+  budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED", ctaType: "LEARN_MORE", ctaScope: "AD_ONLY",
   advantage: { ...DEFAULT_BATCH_ADVANTAGE },
 };
 
@@ -67,6 +67,7 @@ function buildAdConfigFromCfg(cfg: Record<string, string>, tpl?: CampaignTemplat
     budgetStep: cfg.batchBudgetStep ?? EMPTY_AD_CONFIG.budgetStep,
     adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? EMPTY_AD_CONFIG.adStatus,
     ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? EMPTY_AD_CONFIG.ctaType,
+    ctaScope: (cfg.batchCtaScope as BatchAdConfig["ctaScope"]) ?? EMPTY_AD_CONFIG.ctaScope,
     advantage: parseStoredBatchAdvantage(cfg.batchAdvantageConfig, DEFAULT_BATCH_ADVANTAGE),
   };
 }
@@ -263,6 +264,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
           autoAdsStatus: drawerAdConfig.adStatus,
           batchCtaType: drawerAdConfig.ctaType,
+          batchCtaScope: drawerAdConfig.ctaScope,
           batchAdvantageConfig: JSON.stringify(drawerAdConfig.advantage),
           batchDefaultPageIds: JSON.stringify(selectedPageIds),
           commentEnabled: String(drawerCommentEnabled), commentUseCaption: String(drawerCommentUseCaption),
@@ -303,6 +305,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               adAccountId: accountId, adAgeMin: ageMin, adAgeMax: ageMax, adGender: drawerAdConfig.gender,
               budget: { amount: String(budget), currency: row?.budgetCurrency },
               adCtaType: drawerAdConfig.ctaType,
+              adCtaScope: drawerAdConfig.ctaScope,
               adAdvantage: drawerAdConfig.advantage,
               adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
             } : {}),
@@ -344,6 +347,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
       ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
+      ...(patch.ctaScope !== undefined ? { batchCtaScope: patch.ctaScope } : {}),
       ...(patch.advantage !== undefined ? { batchAdvantageConfig: JSON.stringify(patch.advantage) } : {}),
     });
   }
@@ -423,6 +427,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
       adStatus: drawerAdConfig.adStatus,
       batchCtaType: drawerAdConfig.ctaType,
+      batchCtaScope: drawerAdConfig.ctaScope,
       batchAdvantageConfig: drawerAdConfig.advantage,
       commentEnabled: drawerCommentEnabled, commentUseCaption: drawerCommentUseCaption,
       commentCaptionAttachImage: drawerCommentCaptionAttachImage, commentCaptionImageUrls: drawerCommentCaptionImageUrls,
@@ -460,6 +465,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
       ...(d.adStatus ? { adStatus: d.adStatus } : {}),
       ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
+      ...(d.batchCtaScope ? { ctaScope: d.batchCtaScope } : {}),
       ...(d.batchAdvantageConfig ? { advantage: parseBatchAdvantageConfig(d.batchAdvantageConfig) } : {}),
     });
   }
@@ -539,6 +545,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               adAccountId: accountId,
               adStatus: drawerAdConfig.adStatus,
               adCtaType: drawerAdConfig.ctaType,
+              adCtaScope: drawerAdConfig.ctaScope,
               adAdvantage: drawerAdConfig.advantage,
               adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
               comments: comments.length ? comments : undefined,
@@ -563,7 +570,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 postId: p.id,
                 templateCampaignId: drawerAdConfig.templateId,
                 adAccountId: accountId,
-                budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus, adCtaType: drawerAdConfig.ctaType, adAdvantage: drawerAdConfig.advantage,
+                budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus, adCtaType: drawerAdConfig.ctaType, adCtaScope: drawerAdConfig.ctaScope, adAdvantage: drawerAdConfig.advantage,
                 adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
               }),
             });
@@ -1248,6 +1255,9 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                           fetchErrorCode={post.fetchErrorCode} fetchHttpStatus={post.fetchHttpStatus}
                           fetchDiagnostics={post.fetchDiagnostics} />
                         {post.errorMsg && !post.fetchErrorCode && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.adStatus === "failed" ? metaErrorDisplay(post.errorMsg).label : post.errorMsg}</p>}
+                        {post.fbCtaStatus === "pending" && <p className="mt-0.5 truncate text-xs text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Đang cập nhật nút trên bài Page…</p>}
+                        {post.fbCtaStatus === "failed" && <p className="mt-0.5 truncate text-xs text-amber-700" title={post.fbCtaErrorMsg ?? undefined}>Ads đã có CTA · bài Page chưa cập nhật nút</p>}
+                        {post.fbCtaStatus === "done" && <p className="mt-0.5 text-xs text-emerald-600">CTA đã cập nhật trên bài Page</p>}
                       </td>
                     )}
 

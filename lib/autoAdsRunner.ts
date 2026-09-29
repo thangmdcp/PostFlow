@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
+import type { Post } from "@prisma/client";
+import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint, updateFacebookVideoCallToAction } from "@/lib/facebook";
 import { AdSourceNotReadyError, SOURCE_READY_RETRY_DELAYS_MS } from "@/lib/adSourceReadiness";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { randomInteger } from "@/lib/adSettings";
@@ -8,7 +9,7 @@ import { enqueueAds } from "@/lib/cloudflareQueue";
 import { parseAdPlacementConfig, type AdPlacementConfig } from "@/lib/adPlacements";
 import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
-import { parseAdCtaType, validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { parseAdCtaType, resolveAdCtaScope, validateAdCta, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
 
 // Facebook needs a bit of time after a post publishes (especially video)
@@ -25,6 +26,7 @@ const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 const DAY_MS = 86_400_000;
 const BATCH_AD_SPACING_MS = 20_000;
 const META_RATE_LIMIT_RETRY_MS = 5 * 60_000;
+const FACEBOOK_CTA_RETRY_DELAYS_MS = [30_000, 120_000, 300_000];
 
 function stableJitterMs(value: string, maxMs = 30_000): number {
   let hash = 0;
@@ -63,6 +65,7 @@ export interface AutoAdsRunParams {
   instagramUserId?: string;
   destinationUrl?: string;
   ctaType: AdCtaType;
+  ctaScope?: AdCtaScope;
   fbConnAccessToken: string;
   templateId: string | null;
   isBatchPost: boolean;
@@ -128,6 +131,11 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       adPlatform: params.adPlatform,
       ...(params.destinationUrl ? { adDestinationUrl: params.destinationUrl } : {}),
       adCtaType: cta.ctaType,
+      adCtaScope: params.ctaScope ?? "AD_ONLY",
+      fbCtaStatus: params.adPlatform === "facebook" && params.ctaScope === "AD_AND_FACEBOOK_POST" && cta.ctaType !== "NO_BUTTON" ? "pending" : null,
+      fbCtaErrorMsg: null,
+      fbCtaNextAttemptAt: null,
+      fbCtaAttempt: 0,
       ...(params.templateId ? { adTemplateId: params.templateId } : {}),
       ...(params.adAccountId ? { adAccountUsed: params.adAccountId } : {}),
       ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
@@ -145,10 +153,72 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
   }
 }
 
+interface FacebookCtaAttemptResult {
+  retry: boolean;
+  retryAfterSeconds?: number;
+}
+
+async function attemptFacebookOriginalCta(
+  post: Post,
+  pageAccessToken: string,
+  ctaType: AdCtaType,
+): Promise<FacebookCtaAttemptResult> {
+  if (resolveAdCtaScope(post.adCtaScope) !== "AD_AND_FACEBOOK_POST" || ctaType === "NO_BUTTON") {
+    return { retry: false };
+  }
+  if (post.fbCtaStatus === "done" || post.fbCtaStatus === "failed") return { retry: false };
+  if (post.fbCtaNextAttemptAt && post.fbCtaNextAttemptAt.getTime() > Date.now()) {
+    return { retry: true, retryAfterSeconds: Math.max(1, Math.ceil((post.fbCtaNextAttemptAt.getTime() - Date.now()) / 1000)) };
+  }
+  const attempt = (post.fbCtaAttempt ?? 0) + 1;
+  if (post.mediaType !== "video" || !post.fbMediaId || !post.pageId || !post.adDestinationUrl) {
+    await prisma.post.update({
+      where: { id: post.id },
+      data: {
+        fbCtaStatus: "failed",
+        fbCtaAttempt: attempt,
+        fbCtaNextAttemptAt: null,
+        fbCtaErrorMsg: "CTA trên bài Facebook gốc hiện chỉ hỗ trợ Reel/video có Video ID và URL đích.",
+      },
+    });
+    return { retry: false };
+  }
+  try {
+    await updateFacebookVideoCallToAction(post.pageId, post.fbMediaId, pageAccessToken, ctaType, post.adDestinationUrl);
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { fbCtaStatus: "done", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null, fbCtaErrorMsg: null },
+    });
+    return { retry: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Meta không cập nhật được CTA trên bài Facebook gốc.";
+    const retryable = !(error instanceof MetaApiError) || ["rate_limit", "transient", "unknown"].includes(error.category);
+    if (retryable && attempt <= FACEBOOK_CTA_RETRY_DELAYS_MS.length) {
+      const delay = Math.max(
+        error instanceof MetaApiError ? (error.retryAfterSeconds ?? 0) * 1000 : 0,
+        FACEBOOK_CTA_RETRY_DELAYS_MS[Math.min(attempt - 1, FACEBOOK_CTA_RETRY_DELAYS_MS.length - 1)],
+      );
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { fbCtaStatus: "pending", fbCtaAttempt: attempt, fbCtaNextAttemptAt: new Date(Date.now() + delay), fbCtaErrorMsg: message },
+      });
+      return { retry: true, retryAfterSeconds: Math.ceil(delay / 1000) };
+    }
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { fbCtaStatus: "failed", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null, fbCtaErrorMsg: message },
+    });
+    return { retry: false };
+  }
+}
+
 // Called only by the secure Queue consumer endpoint.
 export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const post = await prisma.post.findUnique({ where: { id: postId } });
-  if (!post || !["pending", "queued", "creating"].includes(post.adStatus ?? "")) return { retry: false };
+  if (!post) return { retry: false };
+  const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
+  const facebookCtaNeedsWork = resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST" && post.fbCtaStatus === "pending";
+  if (!adsNeedWork && !facebookCtaNeedsWork) return { retry: false };
   if (post.adStatus === "creating") {
     if (post.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };
     await prisma.post.updateMany({
@@ -181,6 +251,10 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
   if (!ctaType) return failStructural("Snapshot CTA không hợp lệ; hãy huỷ lịch và cấu hình lại bài.");
   const cta = validateAdCta({ ctaType, destinationUrl: post.adDestinationUrl, adsEnabled: true });
   if (cta.error) return failStructural(cta.error);
+  const facebookCtaResult = adPlatform === "facebook"
+    ? await attemptFacebookOriginalCta(post, fbConn.accessToken, ctaType)
+    : { retry: false };
+  if (!adsNeedWork) return facebookCtaResult;
   const attemptNumber = (post.adAttempt ?? 0) + 1;
   const params: AutoAdsRunParams = {
     postId: post.id, pageId: post.pageId, adPlatform,
@@ -189,6 +263,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     instagramUserId: fbConn.instagramUserId ?? undefined,
     destinationUrl: post.adDestinationUrl ?? undefined,
     ctaType,
+    ctaScope: resolveAdCtaScope(post.adCtaScope),
     fbConnAccessToken: fbConn.accessToken,
     templateId: post.adTemplateId, isBatchPost: !!post.adTemplateId,
     adAccountId: post.adAccountUsed ?? undefined,
@@ -212,7 +287,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     where: { id: params.postId, adStatus: { in: ["pending", "queued"] } },
     data: { adStatus: "creating", adAttempt: attemptNumber },
   }).catch(() => ({ count: 0 }));
-  if (!attemptClaim.count) return { retry: false };
+  if (!attemptClaim.count) return facebookCtaResult;
 
   try {
     const { campaignId, adAccountId } = await createAdCampaignForPost(params);
@@ -221,7 +296,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
       data: { adStatus: "done", adCampaignId: campaignId, adAccountUsed: adAccountId, adAttempt: attemptNumber, errorMsg: null, adNextAttemptAt: null },
     });
     console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created in account ${adAccountId} (attempt ${attemptNumber})`);
-    return { retry: false };
+    return facebookCtaResult;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "auto-ads failed";
     console.error(`[auto-ads] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
@@ -262,7 +337,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
         where: { id: params.postId },
         data: { adStatus: "failed", adAttempt: attemptNumber, adNextAttemptAt: null, errorMsg: `[ads] ${msg}` },
       }).catch(() => {});
-      return { retry: false };
+      return facebookCtaResult.retry ? facebookCtaResult : { retry: false };
     }
   }
 }
@@ -439,6 +514,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       adGender: effGender,
       adPlatform: p.adPlatform,
       adCtaType: p.ctaType,
+      adCtaScope: p.ctaScope ?? "AD_ONLY",
       ...(p.destinationUrl ? { adDestinationUrl: p.destinationUrl } : {}),
     },
   });

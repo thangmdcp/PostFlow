@@ -4,14 +4,15 @@ import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { BudgetPolicyError, validateBudgetForAccount } from "@/lib/adBudgetPolicy";
-import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { validateAdCta, validateAdCtaScope, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, resolveAdAdvantageConfig, type BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { Prisma } from "@prisma/client";
+import { enqueueAds } from "@/lib/cloudflareQueue";
 
 export async function POST(req: Request) {
 
   try {
-    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType, adAdvantage, adPlacements } = (await req.json()) as {
+    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType, adCtaScope, adAdvantage, adPlacements } = (await req.json()) as {
       postId: string;
       templateCampaignId: string;
       adAccountId?: string;
@@ -21,6 +22,7 @@ export async function POST(req: Request) {
       gender?: string;
       adStatus?: "ACTIVE" | "PAUSED";
       adCtaType?: AdCtaType;
+      adCtaScope?: AdCtaScope;
       adAdvantage?: BatchAdvantageConfig;
       adPlacements?: AdPlacementConfig;
     };
@@ -111,6 +113,8 @@ export async function POST(req: Request) {
     const affUrl = post.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
     const cta = validateAdCta({ ctaType: adCtaType, destinationUrl: affUrl, adsEnabled: true });
     if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
+    const ctaScope = validateAdCtaScope({ scope: adCtaScope, ctaType: cta.ctaType, publishToFacebook: !instagramOnly, publishedToPage: post.publishToFacebook });
+    if (ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
     let campaignName = "";
     try {
       const parsed = new URL(affUrl);
@@ -177,11 +181,22 @@ export async function POST(req: Request) {
       where: { id: postId },
       data: {
         adAdvantageConfig: advantageSnapshot as unknown as Prisma.InputJsonValue,
+        adCtaScope: ctaScope.scope,
+        fbCtaStatus: ctaScope.scope === "AD_AND_FACEBOOK_POST" ? "pending" : null,
+        fbCtaErrorMsg: null,
+        fbCtaNextAttemptAt: null,
+        fbCtaAttempt: 0,
         adPlacementConfig: placementSnapshot
           ? placementSnapshot as unknown as Prisma.InputJsonValue
           : Prisma.DbNull,
       },
     });
+    if (ctaScope.scope === "AD_AND_FACEBOOK_POST" && !await enqueueAds(postId, 0)) {
+      await prisma.post.update({
+        where: { id: postId },
+        data: { fbCtaStatus: "failed", fbCtaErrorMsg: "Ads đã tạo nhưng không thể xếp hàng cập nhật CTA trên bài Page." },
+      });
+    }
 
     return NextResponse.json(result);
   } catch (err: unknown) {

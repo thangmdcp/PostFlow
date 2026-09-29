@@ -9,7 +9,7 @@ import { AutoAdsAccountEditor, type AdAccountLike, type AutoAdsAccountRowLike } 
 import { adsPanel } from "@/lib/ui-classes";
 import { AdPlacementSelector } from "@/components/AdPlacementSelector";
 import type { AdPlacementConfig } from "@/lib/adPlacements";
-import type { AdCtaType } from "@/lib/adCta";
+import type { AdCtaScope, AdCtaType } from "@/lib/adCta";
 import { DEFAULT_BATCH_ADVANTAGE, type BatchAdvantageConfig, type CampaignBudgetMode } from "@/lib/adAdvantage";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
@@ -28,6 +28,7 @@ export interface BatchAdConfig {
   budgetMin: string; budgetMax: string; budgetStep: string;
   adStatus: "ACTIVE" | "PAUSED";
   ctaType: AdCtaType;
+  ctaScope: AdCtaScope;
   placements?: AdPlacementConfig;
   advantage: BatchAdvantageConfig;
 }
@@ -92,6 +93,7 @@ interface AdsConfigPanelProps {
 }
 
 export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true }: AdsConfigPanelProps) {
+  const canUpdateFacebookPost = hasFacebook && (adConfig.postType !== "dark" || adConfig.overridePublish);
   const patchAdvantage = (patch: Partial<BatchAdvantageConfig>) => onPatch({
     advantage: { ...adConfig.advantage, ...patch },
   });
@@ -167,8 +169,23 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
               </button>
             ))}
           </div>
-          {hasFacebook && adConfig.ctaType !== "NO_BUTTON" && <p className="text-[10px] leading-4 text-amber-600">Facebook có thể cập nhật nút trên bài gốc khi dùng đúng Post ID. Tắt CTA nếu không muốn thay đổi bài gốc.</p>}
-          {!hasFacebook && adConfig.ctaType !== "NO_BUTTON" && <p className="text-[10px] leading-4 text-pink-600">CTA chỉ xuất hiện trên quảng cáo Instagram; bài organic không bị sửa.</p>}
+          {adConfig.ctaType !== "NO_BUTTON" && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Hiển thị nút</p>
+              <div className="grid grid-cols-2 overflow-hidden rounded-lg border">
+                <button type="button" onClick={() => onPatch({ ctaScope: "AD_ONLY" })}
+                  className={`border-r px-2 py-2 text-[10px] font-medium ${adConfig.ctaScope === "AD_ONLY" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
+                  Chỉ trên quảng cáo
+                </button>
+                <button type="button" disabled={!canUpdateFacebookPost} onClick={() => onPatch({ ctaScope: "AD_AND_FACEBOOK_POST" })}
+                  className={`px-2 py-2 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${adConfig.ctaScope === "AD_AND_FACEBOOK_POST" && canUpdateFacebookPost ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
+                  Quảng cáo + bài Facebook gốc
+                </button>
+              </div>
+              {adConfig.ctaScope === "AD_AND_FACEBOOK_POST" && canUpdateFacebookPost && <p className="text-[10px] leading-4 text-amber-600">PostFlow cập nhật chính Reel/video đã đăng; không tạo thêm bài. Nếu Meta từ chối, Ads vẫn được tạo và bài Page hiện cảnh báo.</p>}
+              {!canUpdateFacebookPost && <p className="text-[10px] leading-4 text-pink-600">Bài Instagram-only hoặc chạy ẩn chỉ hỗ trợ CTA trên quảng cáo.</p>}
+            </div>
+          )}
         </div>
       )}
 

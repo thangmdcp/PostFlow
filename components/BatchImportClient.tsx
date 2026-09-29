@@ -199,6 +199,7 @@ const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   gender: "", budgetMin: "", budgetMax: "", budgetStep: "",
   adStatus: "PAUSED",
   ctaType: "LEARN_MORE",
+  ctaScope: "AD_ONLY",
   advantage: { ...DEFAULT_BATCH_ADVANTAGE },
 };
 
@@ -357,6 +358,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
           autoAdsStatus: adConfig.adStatus,
           batchCtaType: adConfig.ctaType,
+          batchCtaScope: adConfig.ctaScope,
           batchAdvantageConfig: JSON.stringify(adConfig.advantage),
           batchDefaultPageIds: JSON.stringify(defaultPageIds),
           batchScheduleMode: defaultScheduleMode, batchStepMinutes: defaultStepMinutes,
@@ -401,6 +403,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         budgetStep: cfg.batchBudgetStep ?? saved.budgetStep,
         adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? saved.adStatus ?? "PAUSED",
         ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? saved.ctaType ?? "LEARN_MORE",
+        ctaScope: (cfg.batchCtaScope as BatchAdConfig["ctaScope"]) ?? saved.ctaScope ?? "AD_ONLY",
         advantage: parseStoredBatchAdvantage(cfg.batchAdvantageConfig, saved.advantage),
       });
       if (cfg.batchDefaultPageIds) { try { setDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
@@ -476,6 +479,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
       ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
+      ...(patch.ctaScope !== undefined ? { batchCtaScope: patch.ctaScope } : {}),
       ...(patch.advantage !== undefined ? { batchAdvantageConfig: JSON.stringify(patch.advantage) } : {}),
     });
   }
@@ -524,6 +528,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
       adStatus: adConfig.adStatus,
       batchCtaType: adConfig.ctaType,
+      batchCtaScope: adConfig.ctaScope,
       batchAdvantageConfig: adConfig.advantage,
       commentEnabled: defaultCommentEnabled, commentUseCaption: defaultCommentUseCaption,
       commentCaptionAttachImage: defaultCommentCaptionAttachImage, commentCaptionImageUrls: defaultCommentCaptionImageUrls,
@@ -568,6 +573,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
       ...(d.adStatus ? { adStatus: d.adStatus } : {}),
       ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
+      ...(d.batchCtaScope ? { ctaScope: d.batchCtaScope } : {}),
       ...(d.batchAdvantageConfig ? { advantage: parseBatchAdvantageConfig(d.batchAdvantageConfig) } : {}),
     });
   }
@@ -590,7 +596,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     {
       refreshInterval: (data) => data?.posts?.some((p) => p.status === "queued" || p.status === "fetching")
         ? 1000
-        : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating") ? 2000 : 0,
+        : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating" || p.fbCtaStatus === "pending") ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
     }
   );
@@ -1431,6 +1437,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
           ...(adConfig.postType === "dark" && rowOvr ? { publishToPage: true } : {}),
           ...(runAdsForRow ? { adCtaType: adConfig.ctaType } : {}),
+          ...(runAdsForRow ? { adCtaScope: adConfig.ctaScope } : {}),
           ...(runAdsForRow ? {
             adAdvantage: adConfig.advantage,
             adPlacements: adConfig.advantage.placementsEnabled ? undefined : adConfig.placements,
@@ -1547,12 +1554,14 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         pageId,
         publishTargets: config.publishTargets,
         templateId,
+        ...(postType === "dark" && config.adConfig.overridePublish ? { publishToPage: true } : {}),
         ...(runsAds ? {
           adPlacements: config.adConfig.advantage.placementsEnabled ? undefined : config.adConfig.placements,
           adAdvantage: config.adConfig.advantage,
         } : {}),
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
         ...(runsAds ? { adCtaType: config.adConfig.ctaType } : {}),
+        ...(runsAds ? { adCtaScope: config.adConfig.ctaScope } : {}),
         ...(comments.length ? { comments } : {}),
         storyEnabled: facebookEngagement ? config.engagement.storyEnabled : false,
         storyCount: facebookEngagement ? Number(config.engagement.storyCount) || 0 : 0,
@@ -2350,6 +2359,15 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
             </div>
           )}
           <AdStatusBadge adStatus={post.adStatus} adNextAttemptAt={post.adNextAttemptAt} adAttempt={post.adAttempt} errorMsg={post.errorMsg} adCampaignId={post.adCampaignId} adAccountUsed={post.adAccountUsed} adPlatform={post.adPlatform} />
+          {post.fbCtaStatus === "pending" && (
+            <span className="block text-[9px] leading-tight text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Đang cập nhật nút trên bài Page…</span>
+          )}
+          {post.fbCtaStatus === "failed" && (
+            <span className="block text-[9px] leading-tight text-amber-700" title={post.fbCtaErrorMsg ?? undefined}>Ads đã có CTA · bài Page chưa cập nhật nút</span>
+          )}
+          {post.fbCtaStatus === "done" && (
+            <span className="block text-[9px] leading-tight text-emerald-600">CTA đã cập nhật trên bài Page</span>
+          )}
           {post.adStatus === "failed" && !post.adId && post.adAccountUsed && post.adTemplateId && (post.fbPostId || post.igPostId) && (
             <button type="button" onClick={retryAdsOnly} disabled={retryingAds}
               title="Kiểm tra lại quyền rồi retry riêng Ads; không đăng lại bài nguồn"

@@ -99,6 +99,10 @@ export async function publishDuePost(
           const tpl = await prisma.campaignTemplate.findFirst({ where: { campaignId: resolvedTemplateId } });
           if ((tpl?.settings as Record<string, unknown> | null)?.postType === "dark") publishToPageFlag = false;
         }
+        // Updating a CTA on the Facebook source requires a public source
+        // post. The UI/API only allow this scope after the user explicitly
+        // opts to publish a normally-dark template to the Page.
+        if (post.adCtaScope === "AD_AND_FACEBOOK_POST") publishToPageFlag = true;
         if (mediaUrl && !cloudinaryId && mediaType === "video" && !preparedInstagram.length) {
           const uploaded = await uploadFromUrl(mediaUrl);
           mediaUrl = uploaded.secureUrl;
@@ -193,6 +197,7 @@ export async function publishDuePost(
           instagramUserId: connection.instagramUserId ?? undefined,
           destinationUrl,
           ctaType: (fresh.adCtaType as "LEARN_MORE" | "SHOP_NOW" | "NO_BUTTON" | null) ?? (instagramOnlyAds ? "LEARN_MORE" : "NO_BUTTON"),
+          ctaScope: (fresh.adCtaScope as "AD_ONLY" | "AD_AND_FACEBOOK_POST" | null) ?? "AD_ONLY",
           fbConnAccessToken: connection.accessToken,
           templateId: post.adTemplateId,
           isBatchPost: true,

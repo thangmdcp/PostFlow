@@ -8,7 +8,7 @@ import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
-import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { validateAdCta, validateAdCtaScope, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
@@ -19,12 +19,14 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adCtaType, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements, adAdvantage } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, publishToPage, ctaHeadline, adCtaType, adCtaScope, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements, adAdvantage } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
+      publishToPage?: boolean;
       ctaHeadline?: string;
       adCtaType?: AdCtaType;
+      adCtaScope?: AdCtaScope;
       adStatus?: "ACTIVE" | "PAUSED";
       adStartAt?: string | null;
       adAccountId?: string;
@@ -74,6 +76,10 @@ export async function PATCH(
     const destinationUrl = templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
     const cta = validateAdCta({ ctaType: adCtaType, destinationUrl, adsEnabled: Boolean(templateId) });
     if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
+    const selectedTemplate = templateId ? await prisma.campaignTemplate.findFirst({ where: { campaignId: templateId }, select: { settings: true } }) : null;
+    const templatePostType = (selectedTemplate?.settings as Record<string, unknown> | null)?.postType;
+    const ctaScope = validateAdCtaScope({ scope: adCtaScope, ctaType: cta.ctaType, publishToFacebook: targets.includes("facebook"), publishedToPage: publishToPage === true || templatePostType !== "dark" });
+    if (templateId && ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
     const advantageSnapshot = await resolvePostAdAdvantage(templateId, adAccountId, adAdvantage);
     const parsedPlacements = templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(adPlacements) : null;
     if (templateId && !advantageSnapshot?.placementsEnabled) {
@@ -97,6 +103,11 @@ export async function PATCH(
         adPlatform: targets.length === 1 && targets[0] === "instagram" ? "instagram" : "facebook",
         adDestinationUrl: destinationUrl,
         adCtaType: templateId ? cta.ctaType : null,
+        adCtaScope: templateId ? ctaScope.scope : null,
+        fbCtaStatus: templateId && ctaScope.scope === "AD_AND_FACEBOOK_POST" ? "pending" : null,
+        fbCtaErrorMsg: null,
+        fbCtaNextAttemptAt: null,
+        fbCtaAttempt: 0,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

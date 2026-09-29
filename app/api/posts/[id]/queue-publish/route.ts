@@ -8,7 +8,7 @@ import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
-import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { validateAdCta, validateAdCtaScope, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
@@ -31,6 +31,7 @@ type QueuePublishBody = {
   publishTargets?: PublishTarget[];
   adPlacements?: AdPlacementConfig;
   adCtaType?: AdCtaType;
+  adCtaScope?: AdCtaScope;
   adAdvantage?: BatchAdvantageConfig;
 };
 
@@ -78,6 +79,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const destinationUrl = body.templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
     const cta = validateAdCta({ ctaType: body.adCtaType, destinationUrl, adsEnabled: Boolean(body.templateId) });
     if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
+    const selectedTemplate = body.templateId ? await prisma.campaignTemplate.findFirst({ where: { campaignId: body.templateId }, select: { settings: true } }) : null;
+    const templatePostType = (selectedTemplate?.settings as Record<string, unknown> | null)?.postType;
+    const ctaScope = validateAdCtaScope({
+      scope: body.adCtaScope,
+      ctaType: cta.ctaType,
+      publishToFacebook: publishTargets.includes("facebook"),
+      publishedToPage: body.publishToPage === true || templatePostType !== "dark",
+    });
+    if (body.templateId && ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
     const advantageSnapshot = await resolvePostAdAdvantage(body.templateId, body.adAccountId, body.adAdvantage);
     const parsedPlacements = body.templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(body.adPlacements) : null;
     if (body.templateId && !advantageSnapshot?.placementsEnabled) {
@@ -103,6 +113,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
         adPlatform: publishToInstagram && !publishToFacebook ? "instagram" : "facebook",
         adDestinationUrl: destinationUrl,
         adCtaType: body.templateId ? cta.ctaType : null,
+        adCtaScope: body.templateId ? ctaScope.scope : null,
+        fbCtaStatus: body.templateId && ctaScope.scope === "AD_AND_FACEBOOK_POST" ? "pending" : null,
+        fbCtaErrorMsg: null,
+        fbCtaNextAttemptAt: null,
+        fbCtaAttempt: 0,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

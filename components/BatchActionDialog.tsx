@@ -341,6 +341,12 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (new Set(config.pageRows.map((row) => row.pageId)).size !== config.pageRows.length) return "Mỗi Page chỉ được chọn một lần.";
     if (needsInstagram && config.pageRows.some((row) => !connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId)) return "Tất cả Page đã chọn phải có Instagram Professional liên kết.";
     if (runsAds && config.accountRows.some((row) => !templates.some((template) => template.campaignId === row.templateId))) return "Mỗi TKQC phải chọn một template hợp lệ.";
+    if (runsAds && config.adConfig.ctaType !== "NO_BUTTON" && config.adConfig.ctaScope === "AD_AND_FACEBOOK_POST") {
+      if (!hasFacebook) return "CTA trên bài gốc cần đăng Facebook.";
+      if (!config.adConfig.overridePublish && config.accountRows.some((row) => (templates.find((template) => template.campaignId === row.templateId)?.settings?.postType as string | undefined) === "dark")) {
+        return "CTA trên bài Facebook gốc không dùng được với template chạy ẩn.";
+      }
+    }
     if (runsAds && config.accountRows.some((row) => {
       const template = templates.find((item) => item.campaignId === row.templateId);
       return template && !templatePortability(template.settings, template.adAccountId, row.accountId).valid;

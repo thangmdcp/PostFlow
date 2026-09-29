@@ -14,8 +14,11 @@ export async function POST(request: Request) {
   }
   const { postId } = await request.json() as { postId?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
-  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true } });
-  if (!post || !["pending", "queued", "creating"].includes(post.adStatus ?? "")) return NextResponse.json({ ok: true });
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true, adCtaScope: true, fbCtaStatus: true } });
+  if (!post) return NextResponse.json({ ok: true });
+  const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
+  const facebookCtaNeedsWork = post.adCtaScope === "AD_AND_FACEBOOK_POST" && post.fbCtaStatus === "pending";
+  if (!adsNeedWork && !facebookCtaNeedsWork) return NextResponse.json({ ok: true });
   const placementPlatforms = post.adPlacementConfig && typeof post.adPlacementConfig === "object" && !Array.isArray(post.adPlacementConfig)
     ? (post.adPlacementConfig as Record<string, unknown>).publisherPlatforms
     : null;
@@ -26,7 +29,12 @@ export async function POST(request: Request) {
   const gate = await reserveMetaJob("ads", scopesForPost(post.pageId, post.adAccountUsed, instagramUserId), postId);
   if (!gate.allowed) {
     const nextAttemptAt = new Date(Date.now() + gate.retryAfterSeconds * 1000);
-    await prisma.post.update({ where: { id: postId }, data: { adStatus: "pending", adNextAttemptAt: nextAttemptAt, errorMsg: `[quota] ${gate.reason ?? "Chờ Meta hồi quota"}` } });
+    await prisma.post.update({
+      where: { id: postId },
+      data: adsNeedWork
+        ? { adStatus: "pending", adNextAttemptAt: nextAttemptAt, errorMsg: `[quota] ${gate.reason ?? "Chờ Meta hồi quota"}` }
+        : { fbCtaStatus: "pending", fbCtaNextAttemptAt: nextAttemptAt, fbCtaErrorMsg: gate.reason ?? "Chờ Meta hồi quota" },
+    });
     return NextResponse.json({ error: gate.reason ?? "Chờ Meta hồi quota", deferredReason: "quota", retryAfterSeconds: gate.retryAfterSeconds }, { status: 503 });
   }
   const result = await attemptAutoAds(postId);

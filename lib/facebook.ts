@@ -19,7 +19,7 @@ import {
   facebookObjectStoryIdCandidate,
   facebookPromotableStoryId,
 } from "@/lib/adSourceReadiness";
-import type { AdCtaType } from "@/lib/adCta";
+import { adCallToAction, type AdCtaType } from "@/lib/adCta";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -123,6 +123,26 @@ export async function publishToPage(
     body: JSON.stringify({ message: caption, published: publishedToPage, access_token: accessToken }),
   }, { pageId });
   return json;
+}
+
+/** Update the CTA attached to the already-published Facebook video/Reel.
+ * This is deliberately separate from the Ad Creative CTA: Meta's Ads Manager
+ * performs the same mutation when the user chooses “Cập nhật bài viết”. */
+export async function updateFacebookVideoCallToAction(
+  pageId: string,
+  videoId: string,
+  accessToken: string,
+  ctaType: Exclude<AdCtaType, "NO_BUTTON">,
+  destinationUrl: string,
+): Promise<void> {
+  await metaJson<{ success?: boolean }>(`${FB_API}/${videoId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      call_to_action: adCallToAction(ctaType, destinationUrl),
+      access_token: accessToken,
+    }),
+  }, { pageId });
 }
 
 // Facebook Stories are media-only via the Graph API — there is no caption/

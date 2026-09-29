@@ -92,6 +92,11 @@ export async function register() {
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adAccountUsed" TEXT;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "ctaHeadline" TEXT;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adCtaType" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adCtaScope" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbCtaStatus" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbCtaErrorMsg" TEXT;`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbCtaNextAttemptAt" TIMESTAMP(3);`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbCtaAttempt" INTEGER DEFAULT 0;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "adAdvantageConfig" JSONB;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "sponsoredContentTagEnabled" BOOLEAN;`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "campaignName" TEXT;`);
