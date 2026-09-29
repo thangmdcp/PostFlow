@@ -8,6 +8,7 @@ import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
+import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 
 type QueuePublishBody = {
   pageId: string;
@@ -25,6 +26,7 @@ type QueuePublishBody = {
   storyCount?: number;
   publishTargets?: PublishTarget[];
   adPlacements?: AdPlacementConfig;
+  adCtaType?: AdCtaType;
 };
 
 // The browser only records the user's choices and asks the trusted Vercel
@@ -68,6 +70,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
       accountId: body.adAccountId,
       budget: body.budget,
     });
+    const destinationUrl = body.templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
+    const cta = validateAdCta({ ctaType: body.adCtaType, destinationUrl, adsEnabled: Boolean(body.templateId) });
+    if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
     const parsedPlacements = body.templateId ? parseAdPlacementConfig(body.adPlacements) : null;
     if (body.templateId) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -88,9 +93,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
         publishToFacebook,
         publishToInstagram,
         adPlatform: publishToInstagram && !publishToFacebook ? "instagram" : "facebook",
-        adDestinationUrl: body.templateId
-          ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null
-          : null,
+        adDestinationUrl: destinationUrl,
+        adCtaType: body.templateId ? cta.ctaType : null,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

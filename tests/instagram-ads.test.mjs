@@ -44,6 +44,7 @@ test("existing Instagram post creative includes identity, media and affiliate CT
     instagramUserId: "ig-user-1",
     igPostId: "ig-media-1",
     destinationUrl: "https://example.com/affiliate",
+    ctaType: "LEARN_MORE",
     accessToken: "secret-token",
   });
 
@@ -58,15 +59,43 @@ test("existing Instagram post creative includes identity, media and affiliate CT
   assert.equal("object_story_id" in creative, false);
 });
 
-test("existing Facebook post creative enables app deep linking with web fallback", () => {
+test("existing Facebook post creative adds affiliate CTA and deep linking", () => {
   const creative = buildFacebookExistingPostCreative({
     name: "Campaign B",
     objectStoryId: "page-1_post-1",
+    destinationUrl: "https://example.com/affiliate",
+    ctaType: "SHOP_NOW",
     accessToken: "secret-token",
   });
 
   assert.equal(APP_DEEP_LINK_TREATMENT, "deeplink_with_web_fallback");
   assert.equal(creative.object_story_id, "page-1_post-1");
   assert.equal(creative.applink_treatment, APP_DEEP_LINK_TREATMENT);
+  assert.deepEqual(creative.call_to_action, {
+    type: "SHOP_NOW",
+    value: { link: "https://example.com/affiliate" },
+  });
   assert.equal(creative.access_token, "secret-token");
+});
+
+test("NO_BUTTON omits CTA without disabling deep linking", () => {
+  const facebook = buildFacebookExistingPostCreative({
+    name: "No CTA",
+    objectStoryId: "page-1_post-2",
+    ctaType: "NO_BUTTON",
+    accessToken: "secret-token",
+  });
+  const instagram = buildInstagramExistingPostCreative({
+    name: "No CTA IG",
+    pageId: "page-1",
+    instagramUserId: "ig-user-1",
+    igPostId: "ig-media-2",
+    destinationUrl: "https://example.com/affiliate",
+    ctaType: "NO_BUTTON",
+    accessToken: "secret-token",
+  });
+  assert.equal("call_to_action" in facebook, false);
+  assert.equal("call_to_action" in instagram, false);
+  assert.equal(facebook.applink_treatment, APP_DEEP_LINK_TREATMENT);
+  assert.equal(instagram.applink_treatment, APP_DEEP_LINK_TREATMENT);
 });

@@ -1,3 +1,5 @@
+import { adCallToAction, type AdCtaType } from "./adCta.ts";
+
 export const APP_DEEP_LINK_TREATMENT = "deeplink_with_web_fallback" as const;
 
 export function sanitizeMetaTargeting(
@@ -35,14 +37,18 @@ export function restrictTargetingToInstagram(
 export function buildFacebookExistingPostCreative(input: {
   name: string;
   objectStoryId: string;
+  destinationUrl?: string;
+  ctaType: AdCtaType;
   accessToken: string;
 }): Record<string, unknown> {
+  const callToAction = adCallToAction(input.ctaType, input.destinationUrl);
   return {
     name: input.name,
     object_story_id: input.objectStoryId,
     // Match Meta Ads Manager's “Enable app deep linking” option: open the
     // destination app when installed, otherwise keep the website fallback.
     applink_treatment: APP_DEEP_LINK_TREATMENT,
+    ...(callToAction ? { call_to_action: callToAction } : {}),
     access_token: input.accessToken,
   };
 }
@@ -53,15 +59,17 @@ export function buildInstagramExistingPostCreative(input: {
   instagramUserId: string;
   igPostId: string;
   destinationUrl: string;
+  ctaType: AdCtaType;
   accessToken: string;
 }): Record<string, unknown> {
+  const callToAction = adCallToAction(input.ctaType, input.destinationUrl);
   return {
     name: input.name,
     object_id: input.pageId,
     instagram_user_id: input.instagramUserId,
     source_instagram_media_id: input.igPostId,
     applink_treatment: APP_DEEP_LINK_TREATMENT,
-    call_to_action: { type: "LEARN_MORE", value: { link: input.destinationUrl } },
+    ...(callToAction ? { call_to_action: callToAction } : {}),
     access_token: input.accessToken,
   };
 }

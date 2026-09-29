@@ -8,6 +8,7 @@ import { enqueueAds } from "@/lib/cloudflareQueue";
 import { parseAdPlacementConfig, type AdPlacementConfig } from "@/lib/adPlacements";
 import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
+import { parseAdCtaType, validateAdCta, type AdCtaType } from "@/lib/adCta";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -60,6 +61,7 @@ export interface AutoAdsRunParams {
   igPostId?: string;
   instagramUserId?: string;
   destinationUrl?: string;
+  ctaType: AdCtaType;
   fbConnAccessToken: string;
   templateId: string | null;
   isBatchPost: boolean;
@@ -76,7 +78,7 @@ export interface AutoAdsRunParams {
 
 export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
   const missingSource = params.adPlatform === "instagram"
-    ? !params.igPostId || !params.instagramUserId || !params.destinationUrl
+    ? !params.igPostId || !params.instagramUserId
     : !params.fbPostId;
   if (!params.templateId || missingSource || !params.pageId) {
     // Structural skip (ads not enabled / bad state) — record immediately,
@@ -90,6 +92,8 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
     }).catch(() => {});
     return;
   }
+  const cta = validateAdCta({ ctaType: params.ctaType, destinationUrl: params.destinationUrl, adsEnabled: true });
+  if (cta.error) throw new AdTemplateConfigurationError(cta.error);
   if (!params.adAccountId || !params.budgetMinor || !params.budgetCurrency) {
     throw new BudgetPolicyError(
       "BUDGET_INVALID",
@@ -121,6 +125,7 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       adStatus: "pending", adNextAttemptAt: nextAttemptAt, adAttempt: 0,
       adPlatform: params.adPlatform,
       ...(params.destinationUrl ? { adDestinationUrl: params.destinationUrl } : {}),
+      adCtaType: cta.ctaType,
       ...(params.templateId ? { adTemplateId: params.templateId } : {}),
       ...(params.adAccountId ? { adAccountUsed: params.adAccountId } : {}),
       ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
@@ -165,7 +170,14 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
   if (adPlatform === "facebook" && !post.fbPostId) return failStructural("Bài Facebook chưa đăng thành công");
   if (adPlatform === "instagram" && !post.igPostId) return failStructural("Bài Instagram chưa đăng thành công");
   if (adPlatform === "instagram" && !fbConn.instagramUserId) return failStructural("Page chưa kết nối Instagram Professional");
-  if (adPlatform === "instagram" && !post.adDestinationUrl) return failStructural("Bài chưa có link affiliate làm URL quảng cáo");
+  // Null is a legacy row from before CTA snapshots existed. Preserve the old
+  // behavior even if a queued worker runs during the migration rollout.
+  const ctaType = post.adCtaType === null
+    ? adPlatform === "instagram" ? "LEARN_MORE" : "NO_BUTTON"
+    : parseAdCtaType(post.adCtaType);
+  if (!ctaType) return failStructural("Snapshot CTA không hợp lệ; hãy huỷ lịch và cấu hình lại bài.");
+  const cta = validateAdCta({ ctaType, destinationUrl: post.adDestinationUrl, adsEnabled: true });
+  if (cta.error) return failStructural(cta.error);
   const attemptNumber = (post.adAttempt ?? 0) + 1;
   const params: AutoAdsRunParams = {
     postId: post.id, pageId: post.pageId, adPlatform,
@@ -173,6 +185,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     igPostId: post.igPostId ?? undefined,
     instagramUserId: fbConn.instagramUserId ?? undefined,
     destinationUrl: post.adDestinationUrl ?? undefined,
+    ctaType,
     fbConnAccessToken: fbConn.accessToken,
     templateId: post.adTemplateId, isBatchPost: !!post.adTemplateId,
     adAccountId: post.adAccountUsed ?? undefined,
@@ -421,6 +434,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       adAgeMax: ageMax,
       adGender: effGender,
       adPlatform: p.adPlatform,
+      adCtaType: p.ctaType,
       ...(p.destinationUrl ? { adDestinationUrl: p.destinationUrl } : {}),
     },
   });
@@ -434,8 +448,9 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
           igPostId: p.igPostId!,
           instagramUserId: p.instagramUserId!,
           destinationUrl: p.destinationUrl!,
+          ctaType: p.ctaType,
         }
-      : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId },
+      : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId, destinationUrl: p.destinationUrl, ctaType: p.ctaType },
     rawAdAccountId,
     adsAccessToken,
     dailyBudgetMinor,

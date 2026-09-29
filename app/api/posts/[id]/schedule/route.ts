@@ -8,17 +8,19 @@ import { Prisma } from "@prisma/client";
 import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
+import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adCtaType, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
       ctaHeadline?: string;
+      adCtaType?: AdCtaType;
       adStatus?: "ACTIVE" | "PAUSED";
       adStartAt?: string | null;
       adAccountId?: string;
@@ -64,6 +66,9 @@ export async function PATCH(
     const adSelectionError = await validateAdSelection(templateId, adAccountId);
     if (adSelectionError) return NextResponse.json({ error: adSelectionError }, { status: 400 });
     const budgetSnapshot = await resolveAdBudgetSnapshot({ templateId, accountId: adAccountId, budget });
+    const destinationUrl = templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
+    const cta = validateAdCta({ ctaType: adCtaType, destinationUrl, adsEnabled: Boolean(templateId) });
+    if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
     const parsedPlacements = templateId ? parseAdPlacementConfig(adPlacements) : null;
     if (templateId) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -82,9 +87,8 @@ export async function PATCH(
         publishToFacebook: targets.includes("facebook"),
         publishToInstagram: targets.includes("instagram"),
         adPlatform: targets.length === 1 && targets[0] === "instagram" ? "instagram" : "facebook",
-        adDestinationUrl: templateId
-          ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null
-          : null,
+        adDestinationUrl: destinationUrl,
+        adCtaType: templateId ? cta.ctaType : null,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

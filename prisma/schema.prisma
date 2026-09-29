@@ -67,6 +67,7 @@ model Post {
   adAgeMax       Int?
   adGender       String?
   adPlacementConfig Json?
+  adCtaType      String?
   ctaHeadline    String?
   campaignName   String?
   adStatus       String?

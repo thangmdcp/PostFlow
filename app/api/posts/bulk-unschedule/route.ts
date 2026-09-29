@@ -60,6 +60,7 @@ export async function POST(request: Request) {
           adTemplateId: null,
           adPlatform: "facebook",
           adDestinationUrl: null,
+          adCtaType: null,
           adCampaignId: null,
           adSetId: null,
           adCreativeId: null,

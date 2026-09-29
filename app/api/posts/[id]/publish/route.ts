@@ -6,6 +6,7 @@ import { parsePublishTargets, validatePublishTargets, type PublishTarget } from 
 import { validateAdSelection } from "@/lib/adSelection";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
+import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 
 export const maxDuration = 90;
 
@@ -20,6 +21,7 @@ interface PublishBody {
   gender?: string;
   budget?: AdBudgetInput;
   ctaHeadline?: string;
+  adCtaType?: AdCtaType;
   adStatus?: "ACTIVE" | "PAUSED";
   comments?: { text: string; imageUrl?: string }[];
   storyEnabled?: boolean;
@@ -53,6 +55,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       accountId: body.adAccountId,
       budget: body.budget,
     });
+    const destinationUrl = body.templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
+    const cta = validateAdCta({ ctaType: body.adCtaType, destinationUrl, adsEnabled: Boolean(body.templateId) });
+    if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
 
     const queued = await prisma.post.update({ where: { id: post.id }, data: {
       pageId: body.pageId,
@@ -60,9 +65,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       publishToFacebook: targets.includes("facebook"),
       publishToInstagram: targets.includes("instagram"),
       adPlatform: targets.length === 1 && targets[0] === "instagram" ? "instagram" : "facebook",
-      adDestinationUrl: body.templateId
-        ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null
-        : null,
+      adDestinationUrl: destinationUrl,
+      adCtaType: body.templateId ? cta.ctaType : null,
       adCampaignId: null,
       adSetId: null,
       adCreativeId: null,

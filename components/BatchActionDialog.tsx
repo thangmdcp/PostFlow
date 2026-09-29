@@ -433,7 +433,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
             </div>
 
             <div className="space-y-5">
-              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect showPlacements instagramOnly={instagramOnlyAds} hasInstagram={selectedPagesHaveInstagram} />}
+              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect showPlacements instagramOnly={instagramOnlyAds} hasInstagram={selectedPagesHaveInstagram} hasFacebook={hasFacebook} />}
               {runsAds && config.accountRows.length > 0 && <div className="space-y-2 rounded-xl border bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
                 <p className="font-semibold">Dự kiến phân Ads</p>
                 {config.accountRows.map((row) => {

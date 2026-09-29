@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 import { randomInteger } from "@/lib/adSettings";
-import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import type { ScheduleMode } from "@/lib/schedulePlan";
 import { buildScheduleTimes } from "@/lib/schedulePlan";
 import type { AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
@@ -63,14 +62,13 @@ import {
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
 
-type RandomField = "age" | "gender" | "budget" | "page" | "account" | "cta";
+type RandomField = "age" | "gender" | "budget" | "page" | "account";
 const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
   { key: "page",    label: "Random Page" },
   { key: "age",     label: "Random Tuổi" },
   { key: "gender",  label: "Random Giới tính" },
   { key: "budget",  label: "Random Ngân sách" },
   { key: "account", label: "Random TKQC" },
-  { key: "cta",     label: "Random tiêu đề CTA" },
 ];
 
 interface Props { connections: FbConnection[]; initialBatch: BatchData | null; }
@@ -199,6 +197,7 @@ const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65",
   gender: "", budgetMin: "", budgetMax: "", budgetStep: "",
   adStatus: "PAUSED",
+  ctaType: "LEARN_MORE",
 };
 
 function loadSavedAdsConfig(): BatchAdConfig {
@@ -355,6 +354,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           batchGender: adConfig.gender,
           batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
           autoAdsStatus: adConfig.adStatus,
+          batchCtaType: adConfig.ctaType,
           batchDefaultPageIds: JSON.stringify(defaultPageIds),
           batchScheduleMode: defaultScheduleMode, batchStepMinutes: defaultStepMinutes,
           batchPostsPerDay: defaultPostsPerDay, batchBaseTime: defaultBaseTime, batchEndTime: defaultEndTime,
@@ -397,6 +397,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         budgetMax:  cfg.batchBudgetMax  ?? saved.budgetMax,
         budgetStep: cfg.batchBudgetStep ?? saved.budgetStep,
         adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? saved.adStatus ?? "PAUSED",
+        ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? saved.ctaType ?? "LEARN_MORE",
       });
       if (cfg.batchDefaultPageIds) { try { setDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
       if (cfg.batchScheduleMode) setDefaultScheduleMode(cfg.batchScheduleMode as ScheduleMode);
@@ -470,6 +471,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(patch.budgetMax !== undefined ? { batchBudgetMax: patch.budgetMax } : {}),
       ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
+      ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
     });
   }
 
@@ -516,6 +518,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchGender: adConfig.gender,
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
       adStatus: adConfig.adStatus,
+      batchCtaType: adConfig.ctaType,
       commentEnabled: defaultCommentEnabled, commentUseCaption: defaultCommentUseCaption,
       commentCaptionAttachImage: defaultCommentCaptionAttachImage, commentCaptionImageUrls: defaultCommentCaptionImageUrls,
       commentCustomEntries: defaultCommentCustomEntries,
@@ -558,6 +561,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(d.batchBudgetMax ? { budgetMax: d.batchBudgetMax } : {}),
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
       ...(d.adStatus ? { adStatus: d.adStatus } : {}),
+      ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
     });
   }
 
@@ -1157,7 +1161,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     const targets = [...checkedIds];
     if (!targets.length) { onToast("Tích chọn bài trước", "error"); return; }
     if (randomFields.size === 0) { onToast("Chọn ít nhất 1 thông số để random", "error"); return; }
-    if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget") || randomFields.has("cta")) {
+    if (randomFields.has("age") || randomFields.has("gender") || randomFields.has("budget")) {
       setRowAdParams(prev => {
         const n = { ...prev };
         targets.forEach(id => {
@@ -1174,7 +1178,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
             ageMax: randomFields.has("age") ? fresh.ageMax : cur.ageMax,
             gender: randomFields.has("gender") ? fresh.gender : cur.gender,
             budget: randomFields.has("budget") ? freshBudget : cur.budget,
-            ctaHeadline: randomFields.has("cta") ? fresh.ctaHeadline : cur.ctaHeadline,
+            ctaHeadline: cur.ctaHeadline,
           };
         });
         return n;
@@ -1448,7 +1452,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           publishTargets: publishTargetsFor(id),
           templateId: runAdsForRow ? (adConfig.templateId || undefined) : undefined,
           ...(adConfig.postType === "dark" && rowOvr ? { publishToPage: true } : {}),
-          ...(adConfig.postType === "dark" && rp.ctaHeadline ? { ctaHeadline: rp.ctaHeadline } : {}),
+          ...(runAdsForRow ? { adCtaType: adConfig.ctaType } : {}),
           ...(runAdsForRow ? {
             ageMinFrom: String(rp.ageMin), ageMinTo: String(rp.ageMin),
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
@@ -1565,7 +1569,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         templateId,
         ...(runsAds ? { adPlacements: config.adConfig.placements } : {}),
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
-        ...(runsAds && postType === "dark" && params.ctaHeadline ? { ctaHeadline: params.ctaHeadline } : {}),
+        ...(runsAds ? { adCtaType: config.adConfig.ctaType } : {}),
         ...(comments.length ? { comments } : {}),
         storyEnabled: facebookEngagement ? config.engagement.storyEnabled : false,
         storyCount: facebookEngagement ? Number(config.engagement.storyCount) || 0 : 0,

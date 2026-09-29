@@ -4,11 +4,12 @@ import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { parseAdPlacementConfig } from "@/lib/adPlacements";
 import { BudgetPolicyError, validateBudgetForAccount } from "@/lib/adBudgetPolicy";
+import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 
 export async function POST(req: Request) {
 
   try {
-    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus } = (await req.json()) as {
+    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType } = (await req.json()) as {
       postId: string;
       templateCampaignId: string;
       adAccountId?: string;
@@ -17,6 +18,7 @@ export async function POST(req: Request) {
       ageMax?: number;
       gender?: string;
       adStatus?: "ACTIVE" | "PAUSED";
+      adCtaType?: AdCtaType;
     };
 
     const post = await prisma.post.findUnique({
@@ -91,9 +93,8 @@ export async function POST(req: Request) {
 
     // Extract utm_content from the first affiliate link as the campaign name.
     const affUrl = post.extractedLinks?.find((l) => l.myUrl)?.myUrl ?? "";
-    if (instagramOnly && !affUrl) {
-      return NextResponse.json({ error: "Quảng cáo Instagram cần ít nhất một link affiliate" }, { status: 400 });
-    }
+    const cta = validateAdCta({ ctaType: adCtaType, destinationUrl: affUrl, adsEnabled: true });
+    if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
     let campaignName = "";
     try {
       const parsed = new URL(affUrl);
@@ -104,8 +105,8 @@ export async function POST(req: Request) {
       portableTemplate.blueprint,
       post.pageId,
       instagramOnly
-        ? { platform: "instagram", igPostId: post.igPostId!, instagramUserId: fbConn.instagramUserId!, destinationUrl: affUrl }
-        : { platform: "facebook", fbPostId: post.fbPostId!, instagramUserId: fbConn.instagramUserId ?? undefined },
+        ? { platform: "instagram", igPostId: post.igPostId!, instagramUserId: fbConn.instagramUserId!, destinationUrl: affUrl, ctaType: cta.ctaType }
+        : { platform: "facebook", fbPostId: post.fbPostId!, instagramUserId: fbConn.instagramUserId ?? undefined, destinationUrl: affUrl || undefined, ctaType: cta.ctaType },
       rawAdAccountId,
       accessToken,
       verifiedBudget.amountMinor,
@@ -138,13 +139,13 @@ export async function POST(req: Request) {
 
     // Save campaign ID + ad params back to post so dashboard can show them
     await prisma.$executeRawUnsafe(
-      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adBudgetMinor" = $8, "adBudgetCurrency" = $9, "adAgeMin" = $10, "adAgeMax" = $11, "adGender" = $12, "adStatus" = 'done', "adAccountUsed" = $13, "errorMsg" = NULL, "adNextAttemptAt" = NULL WHERE "id" = $14`,
+      `UPDATE "Post" SET "adCampaignId" = $1, "adSetId" = $2, "adCreativeId" = $3, "adId" = $4, "adPlatform" = $5, "adDestinationUrl" = $6, "adBudget" = $7, "adBudgetMinor" = $8, "adBudgetCurrency" = $9, "adAgeMin" = $10, "adAgeMax" = $11, "adGender" = $12, "adStatus" = 'done', "adAccountUsed" = $13, "adCtaType" = $14, "errorMsg" = NULL, "adNextAttemptAt" = NULL WHERE "id" = $15`,
       result.campaignId,
       result.adSetId,
       result.creativeId,
       result.adId,
       instagramOnly ? "instagram" : "facebook",
-      instagramOnly ? affUrl : null,
+      affUrl || null,
       verifiedBudget.amountMajor,
       verifiedBudget.amountMinor,
       verifiedBudget.currency,
@@ -152,6 +153,7 @@ export async function POST(req: Request) {
       ageMax ?? null,
       gender ?? "",
       resolvedAdAccountId,
+      cta.ctaType,
       postId,
     );
 

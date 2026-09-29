@@ -44,7 +44,7 @@ type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostCom
 const EMPTY_AD_CONFIG: BatchAdConfig = {
   templateId: "", templateName: "", postType: "published", overridePublish: false, runAds: true,
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65", gender: "",
-  budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED",
+  budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED", ctaType: "LEARN_MORE",
 };
 
 // Same "Cài đặt Ads" server config (/api/app-config, batch* + comment* keys) that
@@ -64,6 +64,7 @@ function buildAdConfigFromCfg(cfg: Record<string, string>, tpl?: CampaignTemplat
     budgetMin: cfg.batchBudgetMin ?? EMPTY_AD_CONFIG.budgetMin, budgetMax: cfg.batchBudgetMax ?? EMPTY_AD_CONFIG.budgetMax,
     budgetStep: cfg.batchBudgetStep ?? EMPTY_AD_CONFIG.budgetStep,
     adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? EMPTY_AD_CONFIG.adStatus,
+    ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? EMPTY_AD_CONFIG.ctaType,
   };
 }
 
@@ -258,6 +259,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           batchGender: drawerAdConfig.gender,
           batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
           autoAdsStatus: drawerAdConfig.adStatus,
+          batchCtaType: drawerAdConfig.ctaType,
           batchDefaultPageIds: JSON.stringify(selectedPageIds),
           commentEnabled: String(drawerCommentEnabled), commentUseCaption: String(drawerCommentUseCaption),
           commentCaptionAttachImage: String(drawerCommentCaptionAttachImage),
@@ -334,6 +336,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(patch.budgetMax !== undefined ? { batchBudgetMax: patch.budgetMax } : {}),
       ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
+      ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
     });
   }
   // Adding/removing a row re-splits % evenly across all rows (1→100%,
@@ -411,6 +414,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       batchGender: drawerAdConfig.gender,
       batchBudgetMin: drawerAdConfig.budgetMin, batchBudgetMax: drawerAdConfig.budgetMax, batchBudgetStep: drawerAdConfig.budgetStep,
       adStatus: drawerAdConfig.adStatus,
+      batchCtaType: drawerAdConfig.ctaType,
       commentEnabled: drawerCommentEnabled, commentUseCaption: drawerCommentUseCaption,
       commentCaptionAttachImage: drawerCommentCaptionAttachImage, commentCaptionImageUrls: drawerCommentCaptionImageUrls,
       commentCustomEntries: drawerCommentEntries, commentSharedImageUrls: drawerCommentSharedImageUrls,
@@ -446,6 +450,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
       ...(d.batchBudgetMax ? { budgetMax: d.batchBudgetMax } : {}),
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
       ...(d.adStatus ? { adStatus: d.adStatus } : {}),
+      ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
     });
   }
 
@@ -523,6 +528,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
               budget: { amount: String(budget), currency: row?.budgetCurrency },
               adAccountId: accountId,
               adStatus: drawerAdConfig.adStatus,
+              adCtaType: drawerAdConfig.ctaType,
               comments: comments.length ? comments : undefined,
               storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
               publishTargets: [p.publishToFacebook ? "facebook" : null, p.publishToInstagram ? "instagram" : null].filter(Boolean),
@@ -545,7 +551,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                 postId: p.id,
                 templateCampaignId: drawerAdConfig.templateId,
                 adAccountId: accountId,
-                budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus,
+                budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus, adCtaType: drawerAdConfig.ctaType,
               }),
             });
             stepOk = res.ok;
@@ -1362,6 +1368,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
             <AdsConfigPanel
               adConfig={drawerAdConfig} templates={templates} adAccounts={adAccountsFull} accountRows={drawerAccountRows}
               onPatch={patchDrawerAdConfig} onPatchRow={patchDrawerRow} onDeleteRow={deleteDrawerRow} onAddRow={addDrawerRow}
+              hasFacebook={settingsOnlyOpen || drawerPostIds.some((id) => localPosts.find((post) => post.id === id)?.publishToFacebook)}
             />
 
             <CommentSettingsPanel

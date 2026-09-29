@@ -18,6 +18,7 @@ import {
   facebookObjectStoryIdCandidate,
   facebookPromotableStoryId,
 } from "@/lib/adSourceReadiness";
+import type { AdCtaType } from "@/lib/adCta";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -220,8 +221,8 @@ export async function getAdAccounts(
 }
 
 export type AdPostSource =
-  | { platform: "facebook"; fbPostId: string; instagramUserId?: string }
-  | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string };
+  | { platform: "facebook"; fbPostId: string; instagramUserId?: string; destinationUrl?: string; ctaType: AdCtaType }
+  | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string; ctaType: AdCtaType };
 
 export interface AdCreationState {
   campaignId?: string | null;
@@ -582,11 +583,14 @@ export async function cloneAdCampaign(
               instagramUserId: source.instagramUserId,
               igPostId: source.igPostId,
               destinationUrl: source.destinationUrl,
+              ctaType: source.ctaType,
               accessToken: creativeAccessToken,
             })
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
               objectStoryId,
+              destinationUrl: source.destinationUrl,
+              ctaType: source.ctaType,
               accessToken: creativeAccessToken,
             });
       const creative = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/adcreatives`, {

@@ -3,13 +3,13 @@
 import { Megaphone } from "lucide-react";
 import { randomInteger } from "@/lib/adSettings";
 import { randomMajorStep } from "@/lib/adMoney";
-import { randomCtaPhrase } from "@/lib/ctaPhrases";
 import { AdParametersForm } from "@/components/AdParametersForm";
 import { CampaignTemplateSelect } from "@/components/CampaignTemplateSelect";
 import { AutoAdsAccountEditor, type AdAccountLike, type AutoAdsAccountRowLike } from "@/components/AutoAdsAccountEditor";
 import { adsPanel } from "@/lib/ui-classes";
 import { AdPlacementSelector } from "@/components/AdPlacementSelector";
 import type { AdPlacementConfig } from "@/lib/adPlacements";
+import type { AdCtaType } from "@/lib/adCta";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
 
@@ -26,6 +26,7 @@ export interface BatchAdConfig {
   // a budget; every amount comes from a currency-labelled TKQC row.
   budgetMin: string; budgetMax: string; budgetStep: string;
   adStatus: "ACTIVE" | "PAUSED";
+  ctaType: AdCtaType;
   placements?: AdPlacementConfig;
 }
 
@@ -37,7 +38,7 @@ export interface RowAdParams { ageMin: number; ageMax: number; budget: number; g
 export function genRowParams(cfg: BatchAdConfig): Omit<RowAdParams, "budget"> {
   const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
   const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
-  return { ageMin, ageMax, gender: cfg.gender, ctaHeadline: randomCtaPhrase() };
+  return { ageMin, ageMax, gender: cfg.gender, ctaHeadline: "" };
 }
 
 // Simple weighted-random TKQC account pick for the batch preview table (the
@@ -83,9 +84,10 @@ interface AdsConfigPanelProps {
   showPlacements?: boolean;
   instagramOnly?: boolean;
   hasInstagram?: boolean;
+  hasFacebook?: boolean;
 }
 
-export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true }: AdsConfigPanelProps) {
+export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true }: AdsConfigPanelProps) {
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
@@ -133,6 +135,29 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
               Chạy ngay
             </button>
           </div>
+        </div>
+      )}
+
+      {adConfig.runAds && (
+        <div className="space-y-2 rounded-xl border bg-white p-3 dark:bg-slate-800">
+          <div>
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Nút kêu gọi hành động</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">Dùng link affiliate đầu tiên của mỗi bài · không tạo headline.</p>
+          </div>
+          <div className="grid grid-cols-3 overflow-hidden rounded-lg border">
+            {([
+              ["NO_BUTTON", "Không có nút"],
+              ["LEARN_MORE", "Xem chi tiết"],
+              ["SHOP_NOW", "Mua ngay"],
+            ] as Array<[AdCtaType, string]>).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => onPatch({ ctaType: value })}
+                className={`border-r px-2 py-2 text-[11px] font-medium last:border-r-0 ${adConfig.ctaType === value ? "bg-violet-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {hasFacebook && adConfig.ctaType !== "NO_BUTTON" && <p className="text-[10px] leading-4 text-amber-600">Facebook có thể cập nhật nút trên bài gốc khi dùng đúng Post ID. Tắt CTA nếu không muốn thay đổi bài gốc.</p>}
+          {!hasFacebook && adConfig.ctaType !== "NO_BUTTON" && <p className="text-[10px] leading-4 text-pink-600">CTA chỉ xuất hiện trên quảng cáo Instagram; bài organic không bị sửa.</p>}
         </div>
       )}
 
