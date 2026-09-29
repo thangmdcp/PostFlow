@@ -7,6 +7,8 @@ test("Facebook original CTA uses the saved native video id and remains independe
   const runner = await readFile(new URL("../lib/autoAdsRunner.ts", import.meta.url), "utf8");
   assert.match(facebook, /updateFacebookVideoCallToAction/);
   assert.match(facebook, /application\/x-www-form-urlencoded/);
+  assert.match(facebook, /link_format:\s*"VIDEO_LPP"/);
+  assert.match(facebook, /link_caption:\s*linkCaption/);
   assert.match(facebook, /readFacebookOriginalCta/);
   assert.match(runner, /post\.fbMediaId/);
   assert.match(runner, /isFacebookOriginalCtaVerified/);

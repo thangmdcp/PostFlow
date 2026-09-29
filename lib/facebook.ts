@@ -136,8 +136,16 @@ export async function updateFacebookVideoCallToAction(
   ctaType: Exclude<AdCtaType, "NO_BUTTON">,
   destinationUrl: string,
 ): Promise<void> {
+  const linkCaption = new URL(destinationUrl).hostname.toUpperCase();
   const params = new URLSearchParams({
-    call_to_action: JSON.stringify(adCallToAction(ctaType, destinationUrl)),
+    // VIDEO_LPP is the direct-response format used by Ads Manager's
+    // “Cập nhật bài viết” action. Without these two value fields Meta stores
+    // call_to_action but leaves the attachment as video_inline, so no public
+    // Shopee card/button is rendered on the Page post.
+    call_to_action: JSON.stringify({
+      type: ctaType,
+      value: { link: destinationUrl, link_caption: linkCaption, link_format: "VIDEO_LPP" },
+    }),
     access_token: accessToken,
   });
   await metaJson<{ success?: boolean }>(`${FB_API}/${videoId}`, {
