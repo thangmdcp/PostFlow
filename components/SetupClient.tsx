@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS "Post" (
   "title" TEXT,
   "rawCaption" TEXT,
   "finalCaption" TEXT,
+  "sponsoredContentTagEnabled" BOOLEAN,
   "cloudinaryId" TEXT,
   "stableMediaUrl" TEXT,
   "mediaType" TEXT,
@@ -88,6 +89,7 @@ ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUserId" TEXT;
 ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUsername" TEXT;
 ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramProfilePicture" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "sponsoredContentTagEnabled" BOOLEAN;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToInstagram" BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbPublishStatus" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbErrorMsg" TEXT;

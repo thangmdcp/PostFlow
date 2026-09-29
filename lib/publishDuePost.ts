@@ -10,6 +10,7 @@ import { parseAdAdvantageConfig } from "@/lib/adAdvantage";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 import { MetaApiError } from "@/lib/metaApiClient";
+import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
 
 export interface PublishDuePostResult {
   id: string;
@@ -45,7 +46,16 @@ export async function publishDuePost(
     if (!post.pageId || !post.finalCaption) throw new Error("Missing pageId or finalCaption");
     if (!post.publishToFacebook && !post.publishToInstagram) throw new Error("Phải chọn ít nhất một nền tảng");
     const pageId = post.pageId;
-    const finalCaption = post.finalCaption;
+    const finalCaption = ensureSponsoredContentHashtag(
+      post.finalCaption,
+      post.sponsoredContentTagEnabled === true,
+    );
+    if (finalCaption !== post.finalCaption) {
+      post = await prisma.post.update({
+        where: { id: post.id },
+        data: { finalCaption },
+      });
+    }
 
     const connection = await prisma.fbConnection.findUnique({ where: { pageId } });
     if (!connection) throw new Error(`No FB connection for page ${pageId}`);

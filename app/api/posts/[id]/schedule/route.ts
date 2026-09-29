@@ -12,6 +12,7 @@ import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
+import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
 
 export async function PATCH(
   req: Request,
@@ -87,6 +88,8 @@ export async function PATCH(
       where: { id: params.id },
       data: {
         pageId,
+        finalCaption: ensureSponsoredContentHashtag(post.finalCaption),
+        sponsoredContentTagEnabled: true,
         scheduledAt: new Date(scheduledAt),
         status: "pending",
         publishToFacebook: targets.includes("facebook"),

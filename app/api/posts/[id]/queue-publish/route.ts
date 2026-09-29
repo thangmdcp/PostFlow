@@ -12,6 +12,7 @@ import { validateAdCta, type AdCtaType } from "@/lib/adCta";
 import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
+import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
 
 type QueuePublishBody = {
   pageId: string;
@@ -93,6 +94,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       where: { id: post.id, status: { in: ["ready", "failed", "partial", "pending"] } },
       data: {
         pageId: body.pageId,
+        finalCaption: ensureSponsoredContentHashtag(post.finalCaption),
+        sponsoredContentTagEnabled: true,
         status: "queued",
         errorMsg: null,
         publishToFacebook,

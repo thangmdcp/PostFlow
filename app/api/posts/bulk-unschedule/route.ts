@@ -50,6 +50,7 @@ export async function POST(request: Request) {
           status: "ready",
           pageId: null,
           scheduledAt: null,
+          sponsoredContentTagEnabled: null,
           publishToFacebook: true,
           publishToInstagram: false,
           fbPublishStatus: null,

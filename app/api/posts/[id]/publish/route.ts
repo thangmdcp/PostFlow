@@ -7,6 +7,7 @@ import { validateAdSelection } from "@/lib/adSelection";
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
 
 export const maxDuration = 90;
 
@@ -61,6 +62,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const queued = await prisma.post.update({ where: { id: post.id }, data: {
       pageId: body.pageId,
+      finalCaption: ensureSponsoredContentHashtag(post.finalCaption),
+      sponsoredContentTagEnabled: true,
       status: "queued",
       publishToFacebook: targets.includes("facebook"),
       publishToInstagram: targets.includes("instagram"),
