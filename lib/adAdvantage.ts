@@ -93,8 +93,17 @@ export function applyAdvantageAudience(
   targeting: Record<string, unknown>,
   enabled: boolean,
 ): Record<string, unknown> {
+  const next = { ...targeting };
+  // With Advantage+ Audience, Meta only accepts age_min as a hard age
+  // control. A lower age_max and gender are audience suggestions in Ads
+  // Manager, not strict targeting fields in the Marketing API. Sending them
+  // here makes Ad Set creation fail with subcode 1870189.
+  if (enabled) {
+    delete next.age_max;
+    delete next.genders;
+  }
   return {
-    ...targeting,
+    ...next,
     targeting_automation: { advantage_audience: enabled ? 1 : 0 },
   };
 }

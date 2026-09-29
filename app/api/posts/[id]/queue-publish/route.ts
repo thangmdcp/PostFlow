@@ -118,8 +118,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
         ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}),
         ...(body.adStatus ? { adPublishStatus: body.adStatus } : {}),
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),
-        ...(body.ageMaxFrom !== undefined ? { adAgeMax: Number(body.ageMaxFrom) } : {}),
-        ...(body.gender !== undefined ? { adGender: body.gender } : {}),
+        ...(body.templateId && advantageSnapshot?.audienceEnabled
+          ? { adAgeMax: null, adGender: null }
+          : {
+              ...(body.ageMaxFrom !== undefined ? { adAgeMax: Number(body.ageMaxFrom) } : {}),
+              ...(body.gender !== undefined ? { adGender: body.gender } : {}),
+            }),
         ...(budgetSnapshot ? {
           adBudget: budgetSnapshot.amountMajor,
           adBudgetMinor: budgetSnapshot.amountMinor,

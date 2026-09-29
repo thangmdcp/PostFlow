@@ -12,6 +12,7 @@ export interface AdParametersFormProps {
   onAgeMinFromChange: (v: string) => void; onAgeMinToChange: (v: string) => void;
   onAgeMaxFromChange: (v: string) => void; onAgeMaxToChange: (v: string) => void;
   gender: string; onGenderChange: (v: string) => void;
+  advantageAudience?: boolean;
   /** "blue" (BatchImportClient's AdsConfigPanel) or "violet" (AdSettingsClient) accent for the gender toggle buttons */
   accent?: "blue" | "violet";
 }
@@ -20,6 +21,7 @@ export function AdParametersForm({
   ageMinFrom, ageMinTo, ageMaxFrom, ageMaxTo,
   onAgeMinFromChange, onAgeMinToChange, onAgeMaxFromChange, onAgeMaxToChange,
   gender, onGenderChange,
+  advantageAudience = false,
   accent = "violet",
 }: AdParametersFormProps) {
   const ring = accent === "blue" ? "focus:ring-blue-500" : "focus:ring-violet-500";
@@ -39,26 +41,37 @@ export function AdParametersForm({
           <span className="text-slate-300 text-[10px] shrink-0">–</span>
           <input type="number" value={ageMinTo} min={13} max={65} onChange={e => onAgeMinToChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
         </div>
-        <div className="flex items-center gap-1 min-w-0">
-          <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">Tuổi max</span>
-          <input type="number" value={ageMaxFrom} min={13} max={65} onChange={e => onAgeMaxFromChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
-          <span className="text-slate-300 text-[10px] shrink-0">–</span>
-          <input type="number" value={ageMaxTo} min={13} max={65} onChange={e => onAgeMaxToChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
-        </div>
+        {advantageAudience ? (
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">Tuổi max</span>
+            <span className="flex-1 rounded-lg border bg-slate-50 px-2.5 py-1.5 text-center text-xs text-slate-500 dark:bg-slate-900">65+ · Meta mở rộng</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">Tuổi max</span>
+            <input type="number" value={ageMaxFrom} min={13} max={65} onChange={e => onAgeMaxFromChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
+            <span className="text-slate-300 text-[10px] shrink-0">–</span>
+            <input type="number" value={ageMaxTo} min={13} max={65} onChange={e => onAgeMaxToChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
+          </div>
+        )}
       </div>
 
       {/* Gender */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">Giới tính</span>
-        <div className="flex gap-1 flex-1 min-w-0">
-          {GENDER_OPTIONS.map(o => (
-            <button key={o.value} type="button" onClick={() => onGenderChange(o.value)}
-              className={["flex-1 rounded-md border py-1 text-xs font-medium transition-all",
-                gender === o.value ? activeGender : inactiveGender].join(" ")}>
-              {o.label}
-            </button>
-          ))}
-        </div>
+        {advantageAudience ? (
+          <span className="flex-1 rounded-lg border bg-slate-50 px-2.5 py-1.5 text-center text-xs text-slate-500 dark:bg-slate-900">Tất cả · Meta mở rộng</span>
+        ) : (
+          <div className="flex gap-1 flex-1 min-w-0">
+            {GENDER_OPTIONS.map(o => (
+              <button key={o.value} type="button" onClick={() => onGenderChange(o.value)}
+                className={["flex-1 rounded-md border py-1 text-xs font-medium transition-all",
+                  gender === o.value ? activeGender : inactiveGender].join(" ")}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -39,8 +39,10 @@ export interface RowAdParams { ageMin: number; ageMax: number; budget: number; g
 // together with the account pick via pickAccountAndBudget below, not here.
 export function genRowParams(cfg: BatchAdConfig): Omit<RowAdParams, "budget"> {
   const ageMin = randomInteger(Number(cfg.ageMinFrom), Number(cfg.ageMinTo));
-  const ageMax = randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
-  return { ageMin, ageMax, gender: cfg.gender, ctaHeadline: "" };
+  const ageMax = cfg.advantage.audienceEnabled
+    ? 65
+    : randomInteger(Math.max(Number(cfg.ageMaxFrom), ageMin + 1), Number(cfg.ageMaxTo));
+  return { ageMin, ageMax, gender: cfg.advantage.audienceEnabled ? "" : cfg.gender, ctaHeadline: "" };
 }
 
 // Simple weighted-random TKQC account pick for the batch preview table (the
@@ -234,6 +236,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
             onAgeMinFromChange={v => onPatch({ ageMinFrom: v })} onAgeMinToChange={v => onPatch({ ageMinTo: v })}
             onAgeMaxFromChange={v => onPatch({ ageMaxFrom: v })} onAgeMaxToChange={v => onPatch({ ageMaxTo: v })}
             gender={adConfig.gender} onGenderChange={v => onPatch({ gender: v })}
+            advantageAudience={adConfig.advantage.audienceEnabled}
           />
         </div>
       )}

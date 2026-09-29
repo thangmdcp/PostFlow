@@ -121,8 +121,12 @@ export async function PATCH(
         // (once this post actually publishes) uses the exact same values
         // instead of re-rolling its own from the TKQC account's range.
         ...(adAgeMin !== undefined ? { adAgeMin } : {}),
-        ...(adAgeMax !== undefined ? { adAgeMax } : {}),
-        ...(adGender !== undefined ? { adGender } : {}),
+        ...(templateId && advantageSnapshot?.audienceEnabled
+          ? { adAgeMax: null, adGender: null }
+          : {
+              ...(adAgeMax !== undefined ? { adAgeMax } : {}),
+              ...(adGender !== undefined ? { adGender } : {}),
+            }),
         ...(budgetSnapshot ? {
           adBudget: budgetSnapshot.amountMajor,
           adBudgetMinor: budgetSnapshot.amountMinor,

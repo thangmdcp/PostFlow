@@ -47,6 +47,7 @@ test("adaptive spacing follows 60/80/90 usage thresholds", () => {
 });
 
 test("maps stored Meta failures to actionable Vietnamese labels", () => {
+  assert.equal(metaErrorDisplay("[Meta code=100 subcode=1870189]").label, "Tuổi tối đa không tương thích Advantage+ Audience");
   assert.equal(metaErrorDisplay("[quota] code=613").label, "Meta đang giới hạn TKQC/Page");
   assert.equal(metaErrorDisplay("OAuthException code=190").label, "Token hết hạn");
   assert.equal(metaErrorDisplay("Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.").label, "Thiếu quyền quảng bá Page");

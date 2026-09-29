@@ -43,8 +43,25 @@ test("Advantage+ placements remove every manual placement family", () => {
 });
 
 test("Audience and Creative explicitly opt in or out", () => {
-  assert.deepEqual(applyAdvantageAudience({}, false), { targeting_automation: { advantage_audience: 0 } });
-  assert.deepEqual(applyAdvantageAudience({}, true), { targeting_automation: { advantage_audience: 1 } });
+  const targeting = {
+    age_min: 20,
+    age_max: 43,
+    genders: [2],
+    geo_locations: { countries: ["VN"] },
+    locales: [6],
+  };
+  assert.deepEqual(applyAdvantageAudience(targeting, false), {
+    ...targeting,
+    targeting_automation: { advantage_audience: 0 },
+  });
+  assert.deepEqual(applyAdvantageAudience(targeting, true), {
+    age_min: 20,
+    geo_locations: { countries: ["VN"] },
+    locales: [6],
+    targeting_automation: { advantage_audience: 1 },
+  });
+  assert.equal(targeting.age_max, 43, "sanitizing must not mutate the saved template targeting");
+  assert.deepEqual(targeting.genders, [2]);
   assert.deepEqual(advantageCreativeSpec(false), { creative_features_spec: { standard_enhancements: { enroll_status: "OPT_OUT" } } });
   assert.deepEqual(advantageCreativeSpec(true), { creative_features_spec: { standard_enhancements: { enroll_status: "OPT_IN" } } });
 });
