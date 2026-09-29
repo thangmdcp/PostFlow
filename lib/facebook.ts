@@ -10,7 +10,7 @@ import {
   templateBlueprintFromSettings,
   type AdTemplateBlueprint,
 } from "@/lib/adTemplateBlueprint";
-import { applyAdPlacements, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
+import { applyAdPlacements, placementSoftOptOutFromConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { metaRequestJson, MetaApiError } from "@/lib/metaApiClient";
 import type { MetaRequestContext } from "@/lib/metaUsage";
 import { prisma } from "@/lib/prisma";
@@ -467,7 +467,6 @@ export async function cloneAdCampaign(
 
   // Detect if template uses CBO (campaign-level budget)
   const useCBO = advantageOverride?.campaignBudgetEnabled ?? template.useCampaignBudget;
-
   // 2. Create campaign
   // is_adset_budget_sharing_enabled is a distinct, mutually-exclusive
   // alternative to setting daily_budget directly on the campaign (classic
@@ -564,6 +563,12 @@ export async function cloneAdCampaign(
     if (!useCBO) {
       adSetBody.daily_budget = dailyBudgetMinor;
       adSetBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+    }
+    if (advantageOverride?.limitedSpendEnabled && placementOverride) {
+      const placementSoftOptOut = placementSoftOptOutFromConfig(placementOverride, {
+        hasInstagram: Boolean(instagramIdentityId),
+      });
+      if (placementSoftOptOut) adSetBody.placement_soft_opt_out = placementSoftOptOut;
     }
     if (startTime) adSetBody.start_time = startTime.toISOString();
 

@@ -1,4 +1,4 @@
-export const AD_ADVANTAGE_VERSION = 1 as const;
+export const AD_ADVANTAGE_VERSION = 2 as const;
 
 export type CampaignBudgetMode = "template" | "enabled" | "disabled";
 
@@ -6,6 +6,7 @@ export type CampaignBudgetMode = "template" | "enabled" | "disabled";
 export interface BatchAdvantageConfig {
   audienceEnabled: boolean;
   placementsEnabled: boolean;
+  limitedSpendEnabled: boolean;
   creativeEnabled: boolean;
   campaignBudgetMode: CampaignBudgetMode;
 }
@@ -15,6 +16,7 @@ export interface AdAdvantageConfig {
   version: typeof AD_ADVANTAGE_VERSION;
   audienceEnabled: boolean;
   placementsEnabled: boolean;
+  limitedSpendEnabled: boolean;
   creativeEnabled: boolean;
   campaignBudgetEnabled: boolean;
 }
@@ -22,6 +24,7 @@ export interface AdAdvantageConfig {
 export const DEFAULT_BATCH_ADVANTAGE: BatchAdvantageConfig = {
   audienceEnabled: false,
   placementsEnabled: true,
+  limitedSpendEnabled: false,
   creativeEnabled: false,
   campaignBudgetMode: "template",
 };
@@ -38,6 +41,7 @@ export function parseBatchAdvantageConfig(value: unknown): BatchAdvantageConfig 
   return {
     audienceEnabled: source?.audienceEnabled === true,
     placementsEnabled: source?.placementsEnabled !== false,
+    limitedSpendEnabled: source?.limitedSpendEnabled === true,
     creativeEnabled: source?.creativeEnabled === true,
     campaignBudgetMode: mode === "enabled" || mode === "disabled" ? mode : "template",
   };
@@ -51,7 +55,7 @@ export function parseStoredBatchAdvantage(value: unknown, fallback?: unknown): B
 
 export function parseAdAdvantageConfig(value: unknown): AdAdvantageConfig | null {
   const source = record(value);
-  if (source?.version !== AD_ADVANTAGE_VERSION) return null;
+  if (source?.version !== 1 && source?.version !== AD_ADVANTAGE_VERSION) return null;
   if (
     typeof source.audienceEnabled !== "boolean"
     || typeof source.placementsEnabled !== "boolean"
@@ -62,6 +66,7 @@ export function parseAdAdvantageConfig(value: unknown): AdAdvantageConfig | null
     version: AD_ADVANTAGE_VERSION,
     audienceEnabled: source.audienceEnabled,
     placementsEnabled: source.placementsEnabled,
+    limitedSpendEnabled: source.version === 1 ? false : source.limitedSpendEnabled === true,
     creativeEnabled: source.creativeEnabled,
     campaignBudgetEnabled: source.campaignBudgetEnabled,
   };
@@ -76,6 +81,7 @@ export function resolveAdAdvantageConfig(
     version: AD_ADVANTAGE_VERSION,
     audienceEnabled: config.audienceEnabled,
     placementsEnabled: config.placementsEnabled,
+    limitedSpendEnabled: !config.placementsEnabled && config.limitedSpendEnabled,
     creativeEnabled: config.creativeEnabled,
     campaignBudgetEnabled: config.campaignBudgetMode === "template"
       ? templateUsesCampaignBudget

@@ -200,7 +200,16 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
           </div>
 
           <AdvantageToggle title="Advantage+ Audience" description="Cho Meta mở rộng ngoài gợi ý đối tượng." checked={adConfig.advantage.audienceEnabled} onChange={(audienceEnabled) => patchAdvantage({ audienceEnabled })} />
-          <AdvantageToggle title="Advantage+ Placements" description="Meta tự chọn mọi nền tảng, thiết bị và vị trí hợp lệ." checked={adConfig.advantage.placementsEnabled} onChange={(placementsEnabled) => patchAdvantage({ placementsEnabled })} />
+          <AdvantageToggle title="Advantage+ Placements" description="Meta tự chọn mọi nền tảng, thiết bị và vị trí hợp lệ." checked={adConfig.advantage.placementsEnabled} onChange={(placementsEnabled) => patchAdvantage({ placementsEnabled, ...(placementsEnabled ? { limitedSpendEnabled: false } : {}) })} />
+          {!adConfig.advantage.placementsEnabled && (
+            <AdvantageToggle
+              title="Cho phép chi tiêu giới hạn ở vị trí đã loại trừ"
+              description="Meta có thể chi tối đa khoảng 5% ngân sách cho mỗi vị trí bị loại trừ khi tài khoản và mục tiêu hỗ trợ."
+              checked={adConfig.advantage.limitedSpendEnabled}
+              onChange={(limitedSpendEnabled) => patchAdvantage({ limitedSpendEnabled })}
+              warning={adConfig.advantage.limitedSpendEnabled ? "Các vị trí đã bỏ chọn vẫn có thể nhận ngân sách; tắt để loại trừ tuyệt đối." : undefined}
+            />
+          )}
           <AdvantageToggle title="Advantage+ Creative" description="Meta có thể crop, chỉnh cách trình bày hoặc tạo biến thể; PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể thay đổi cách creative hiển thị ở từng placement." : undefined} />
 
           <LockedAdvantageRow title="Advantage+ Catalog Ads" description="Cần Meta Catalog và Product ID; link Shopee affiliate chưa hỗ trợ." />

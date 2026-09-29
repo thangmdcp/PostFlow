@@ -15,6 +15,7 @@ test("Advantage+ defaults match the Shopee affiliate policy", () => {
   assert.deepEqual(DEFAULT_BATCH_ADVANTAGE, {
     audienceEnabled: false,
     placementsEnabled: true,
+    limitedSpendEnabled: false,
     creativeEnabled: false,
     campaignBudgetMode: "template",
   });
@@ -52,4 +53,34 @@ test("invalid and legacy snapshot shapes do not silently become new snapshots", 
   assert.equal(parseAdAdvantageConfig(null), null);
   assert.equal(parseAdAdvantageConfig({ version: 1, placementsEnabled: true }), null);
   assert.equal(parseAdAdvantageConfig({ version: 0, audienceEnabled: false, placementsEnabled: true, creativeEnabled: false, campaignBudgetEnabled: false }), null);
+});
+
+test("limited excluded-placement spend defaults off and cannot coexist with automatic placements", () => {
+  assert.equal(resolveAdAdvantageConfig({
+    ...DEFAULT_BATCH_ADVANTAGE,
+    placementsEnabled: false,
+    limitedSpendEnabled: true,
+  }, false).limitedSpendEnabled, true);
+  assert.equal(resolveAdAdvantageConfig({
+    ...DEFAULT_BATCH_ADVANTAGE,
+    placementsEnabled: true,
+    limitedSpendEnabled: true,
+  }, false).limitedSpendEnabled, false);
+});
+
+test("v1 snapshots remain retry-compatible with limited spend disabled", () => {
+  assert.deepEqual(parseAdAdvantageConfig({
+    version: 1,
+    audienceEnabled: false,
+    placementsEnabled: false,
+    creativeEnabled: false,
+    campaignBudgetEnabled: false,
+  }), {
+    version: 2,
+    audienceEnabled: false,
+    placementsEnabled: false,
+    limitedSpendEnabled: false,
+    creativeEnabled: false,
+    campaignBudgetEnabled: false,
+  });
 });

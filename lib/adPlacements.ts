@@ -12,7 +12,7 @@ export type AdPublisherPlatform = (typeof AD_PUBLISHER_PLATFORMS)[number];
 export type AdDevicePlatform = (typeof AD_DEVICE_PLATFORMS)[number];
 
 export const AD_POSITIONS = {
-  facebook: ["feed", "right_hand_column", "marketplace", "video_feeds", "story", "search", "instream_video", "facebook_reels", "facebook_reels_overlay", "profile_feed", "notification"],
+  facebook: ["feed", "right_hand_column", "marketplace", "story", "search", "instream_video", "facebook_reels", "facebook_reels_overlay", "profile_feed", "notification"],
   instagram: ["stream", "story", "explore", "explore_home", "reels", "profile_feed", "ig_search", "profile_reels"],
   messenger: ["messenger_home", "sponsored_messages", "story"],
   audience_network: ["classic", "rewarded_video"],
@@ -27,6 +27,14 @@ export interface AdPlacementConfig {
   messengerPositions: string[];
   audienceNetworkPositions: string[];
   threadsPositions: string[];
+}
+
+export interface PlacementSoftOptOut {
+  facebook_positions?: string[];
+  instagram_positions?: string[];
+  messenger_positions?: string[];
+  audience_network_positions?: string[];
+  threads_positions?: string[];
 }
 
 export const EMPTY_AD_PLACEMENTS: AdPlacementConfig = {
@@ -45,6 +53,14 @@ const POSITION_FIELD: Record<AdPublisherPlatform, keyof AdPlacementConfig> = {
   messenger: "messengerPositions",
   audience_network: "audienceNetworkPositions",
   threads: "threadsPositions",
+};
+
+const META_POSITION_FIELD: Record<AdPublisherPlatform, keyof PlacementSoftOptOut> = {
+  facebook: "facebook_positions",
+  instagram: "instagram_positions",
+  messenger: "messenger_positions",
+  audience_network: "audience_network_positions",
+  threads: "threads_positions",
 };
 
 function uniqueStrings(value: unknown): string[] {
@@ -119,6 +135,30 @@ export function applyAdPlacements(
   if (config.publisherPlatforms.includes("audience_network")) next.audience_network_positions = config.audienceNetworkPositions;
   if (config.publisherPlatforms.includes("threads")) next.threads_positions = config.threadsPositions;
   return next;
+}
+
+/**
+ * Meta v24+ accepts the manual positions that may receive up to 5% spend even
+ * though they are excluded from targeting. Missing Instagram identity keeps
+ * Instagram/Threads as hard exclusions because those surfaces cannot render
+ * a valid identity for this ad.
+ */
+export function placementSoftOptOutFromConfig(
+  value: AdPlacementConfig,
+  options: { hasInstagram?: boolean } = {},
+): PlacementSoftOptOut | null {
+  const config = parseAdPlacementConfig(value);
+  if (!config) return null;
+  const result: PlacementSoftOptOut = {};
+  for (const platform of AD_PUBLISHER_PLATFORMS) {
+    if ((platform === "instagram" || platform === "threads") && !options.hasInstagram) continue;
+    const selected = config.publisherPlatforms.includes(platform)
+      ? config[POSITION_FIELD[platform]] as string[]
+      : [];
+    const excluded = AD_POSITIONS[platform].filter((position) => !selected.includes(position));
+    if (excluded.length) result[META_POSITION_FIELD[platform]] = [...excluded];
+  }
+  return Object.keys(result).length ? result : null;
 }
 
 export function placementConfigFromTargeting(targeting: unknown): AdPlacementConfig | null {

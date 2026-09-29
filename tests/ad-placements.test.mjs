@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyAdPlacements,
   parseAdPlacementConfig,
+  placementSoftOptOutFromConfig,
   validateAdPlacements,
 } from "../lib/adPlacements.ts";
 
@@ -50,6 +51,11 @@ test("invalid and unsupported placement values are filtered", () => {
   assert.deepEqual(parsed?.facebookPositions, ["feed"]);
 });
 
+test("deprecated Facebook video feeds placement is no longer accepted", () => {
+  const parsed = parseAdPlacementConfig({ ...manual, facebookPositions: ["feed", "video_feeds"] });
+  assert.deepEqual(parsed?.facebookPositions, ["feed"]);
+});
+
 test("each selected platform needs a position", () => {
   assert.match(validateAdPlacements({ ...manual, threadsPositions: [] }, { hasInstagram: true }) ?? "", /threads/);
   assert.equal(validateAdPlacements(manual, { hasInstagram: true }), null);
@@ -74,4 +80,26 @@ test("Instagram Explore home requires the main Explore placement", () => {
     publisherPlatforms: ["instagram"],
     instagramPositions: ["explore_home"],
   }, { hasInstagram: true }) ?? "", /Khám phá/);
+});
+
+test("limited spend contains only excluded manual positions", () => {
+  const result = placementSoftOptOutFromConfig(manual, { hasInstagram: true });
+  assert.equal(result?.facebook_positions?.includes("feed"), false);
+  assert.equal(result?.facebook_positions?.includes("marketplace"), true);
+  assert.equal(result?.instagram_positions?.includes("stream"), false);
+  assert.equal(result?.instagram_positions?.includes("story"), true);
+  assert.equal(result?.threads_positions, undefined);
+});
+
+test("limited spend keeps Instagram and Threads hard-excluded without an IG identity", () => {
+  const result = placementSoftOptOutFromConfig({
+    ...manual,
+    publisherPlatforms: ["facebook"],
+    facebookPositions: ["feed"],
+    instagramPositions: [],
+    threadsPositions: [],
+  }, { hasInstagram: false });
+  assert.equal(result?.instagram_positions, undefined);
+  assert.equal(result?.threads_positions, undefined);
+  assert.equal(result?.audience_network_positions?.length > 0, true);
 });
