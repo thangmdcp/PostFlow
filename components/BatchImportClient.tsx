@@ -633,22 +633,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   }
 
   if (!batchId || !batch || !("posts" in batch)) {
-    const LINES_PER_COL = 20;
-    const allLines = urlText === "" ? [""] : urlText.split("\n");
-    const numCols = Math.min(3, Math.max(1, Math.ceil(urlCount / LINES_PER_COL)));
-    const linesPerCol = Math.ceil(allLines.length / numCols);
-    const colLines = Array.from({ length: numCols }, (_, i) =>
-      allLines.slice(i * linesPerCol, (i + 1) * linesPerCol)
-    );
-    const colUrlCounts = colLines.map(lines => lines.filter(l => extractUrl(l)).length);
-
-    function handleColChange(colIdx: number, val: string) {
-      const next = [...colLines];
-      next[colIdx] = val.split("\n");
-      setUrlText(next.map(col => col.join("\n")).join("\n").replace(/\n{3,}/g, "\n\n"));
-    }
-
-    const gridCls = numCols === 1 ? "grid-cols-1" : numCols === 2 ? "grid-cols-2" : "grid-cols-3";
+    const lineCount = urlText === "" ? 1 : urlText.split("\n").length;
+    const composerRows = Math.min(22, Math.max(10, lineCount + 2));
 
     return (
       <div className="w-full flex flex-col gap-0">
@@ -676,28 +662,13 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         {/* Batch composer stays focused on source links. */}
         <div className="flex items-start">
           <div className="min-w-0 flex-1">
-            <div className={`grid ${gridCls} gap-3`}>
-              {colLines.map((lines, ci) => (
-                <div key={ci} className="flex flex-col gap-1.5">
-                  {numCols > 1 && (
-                    <div className="flex items-center justify-between px-1">
-                      <span className="text-xs font-medium text-slate-500">Nhóm {ci + 1}</span>
-                      {colUrlCounts[ci] > 0 && (
-                        <span className="text-[11px] text-blue-600 bg-blue-50 dark:bg-blue-900/30 rounded-full px-2 py-0.5 border border-blue-100">
-                          {colUrlCounts[ci]} link
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <textarea
-                    value={lines.join("\n")}
-                    onChange={e => handleColChange(ci, e.target.value)}
-                    rows={Math.max(10, lines.length + 2)}
-                    className="w-full rounded-xl border bg-white dark:bg-slate-800 px-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-5"
-                  />
-                </div>
-              ))}
-            </div>
+            <textarea
+              aria-label="Danh sách link tạo batch"
+              value={urlText}
+              onChange={event => setUrlText(event.target.value)}
+              rows={composerRows}
+              className="w-full overflow-y-auto rounded-xl border bg-white px-3 py-2.5 font-mono text-xs leading-5 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none dark:bg-slate-800"
+            />
             {urlCount === 0 && (
               <p className="text-center text-sm text-slate-400 mt-8">Chưa có link nào — dán vào ô trên để bắt đầu</p>
             )}
