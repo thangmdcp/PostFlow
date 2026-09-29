@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_BATCH_ADVANTAGE,
+  ADVANTAGE_CREATIVE_FEATURES,
   advantageCreativeSpec,
   applyAdvantageAudience,
   applyAdvantagePlacements,
@@ -62,8 +63,14 @@ test("Audience and Creative explicitly opt in or out", () => {
   });
   assert.equal(targeting.age_max, 43, "sanitizing must not mutate the saved template targeting");
   assert.deepEqual(targeting.genders, [2]);
-  assert.deepEqual(advantageCreativeSpec(false), { creative_features_spec: { standard_enhancements: { enroll_status: "OPT_OUT" } } });
-  assert.deepEqual(advantageCreativeSpec(true), { creative_features_spec: { standard_enhancements: { enroll_status: "OPT_IN" } } });
+  const optedOut = advantageCreativeSpec(false).creative_features_spec;
+  const optedIn = advantageCreativeSpec(true).creative_features_spec;
+  assert.equal("standard_enhancements" in optedOut, false);
+  assert.deepEqual(Object.keys(optedOut), [...ADVANTAGE_CREATIVE_FEATURES]);
+  for (const feature of ADVANTAGE_CREATIVE_FEATURES) {
+    assert.deepEqual(optedOut[feature], { enroll_status: "OPT_OUT" });
+    assert.deepEqual(optedIn[feature], { enroll_status: "OPT_IN" });
+  }
 });
 
 test("invalid and legacy snapshot shapes do not silently become new snapshots", () => {

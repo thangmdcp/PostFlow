@@ -126,10 +126,32 @@ export function applyAdvantagePlacements(targeting: Record<string, unknown>): Re
   return next;
 }
 
+// Meta retired the aggregate `standard_enhancements` switch. Graph API now
+// rejects it with subcode 3858504 and requires each user-facing enhancement
+// to be enrolled explicitly. Keep this list deliberately limited to the
+// portable controls accepted for existing-post image/video creatives.
+export const ADVANTAGE_CREATIVE_FEATURES = [
+  "adapt_to_placement",
+  "add_text_overlay",
+  "description_automation",
+  "enhance_cta",
+  "image_background_gen",
+  "image_templates",
+  "image_touchups",
+  "image_uncrop",
+  "inline_comment",
+  "product_extensions",
+  "reveal_details_over_time",
+  "text_optimizations",
+  "text_translation",
+  "video_auto_crop",
+] as const;
+
 export function advantageCreativeSpec(enabled: boolean): Record<string, unknown> {
+  const enroll_status = enabled ? "OPT_IN" : "OPT_OUT";
   return {
-    creative_features_spec: {
-      standard_enhancements: { enroll_status: enabled ? "OPT_IN" : "OPT_OUT" },
-    },
+    creative_features_spec: Object.fromEntries(
+      ADVANTAGE_CREATIVE_FEATURES.map((feature) => [feature, { enroll_status }]),
+    ),
   };
 }

@@ -9,6 +9,9 @@ export function metaErrorDisplay(message?: string | null): MetaErrorDisplay {
   if (/subcode=1870189\b/.test(normalized)) {
     return { label: "Tuổi tối đa không tương thích Advantage+ Audience", kind: "other" };
   }
+  if (/subcode=3858504\b/.test(normalized)) {
+    return { label: "Cấu hình Advantage+ Creative đã ngừng hỗ trợ", kind: "other" };
+  }
   if (/\[quota\]|request limit|rate limit|code=(4|17|32|613|80001|80002|80004)\b/.test(normalized)) {
     return { label: "Meta đang giới hạn TKQC/Page", kind: "quota" };
   }

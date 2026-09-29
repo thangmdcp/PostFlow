@@ -25,7 +25,8 @@ test("batch row values and UI stop presenting hard max-age/gender controls while
   assert.match(form, /Tất cả · Meta mở rộng/);
 });
 
-test("Meta subcode 1870189 is a permanent Ads configuration error", () => {
+test("Meta Advantage configuration subcodes are permanent Ads errors", () => {
   const runner = read("lib/autoAdsRunner.ts");
   assert.match(runner, /isConfigurationError[^;]+1870189/s);
+  assert.match(runner, /isConfigurationError[^;]+3858504/s);
 });

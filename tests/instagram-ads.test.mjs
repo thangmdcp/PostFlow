@@ -100,7 +100,7 @@ test("NO_BUTTON omits CTA without disabling deep linking", () => {
   assert.equal(instagram.applink_treatment, APP_DEEP_LINK_TREATMENT);
 });
 
-test("Advantage+ Creative is explicitly opted out for Facebook without adding a headline", () => {
+test("Advantage+ Creative is explicitly opted out per feature for Facebook without adding a headline", () => {
   const creative = buildFacebookExistingPostCreative({
     name: "Preserve existing post",
     objectStoryId: "page-1_post-3",
@@ -110,11 +110,10 @@ test("Advantage+ Creative is explicitly opted out for Facebook without adding a 
     creativeEnhancements: false,
   });
 
-  assert.deepEqual(creative.degrees_of_freedom_spec, {
-    creative_features_spec: {
-      standard_enhancements: { enroll_status: "OPT_OUT" },
-    },
-  });
+  const features = creative.degrees_of_freedom_spec.creative_features_spec;
+  assert.equal("standard_enhancements" in features, false);
+  assert.ok(Object.keys(features).length > 1);
+  for (const value of Object.values(features)) assert.deepEqual(value, { enroll_status: "OPT_OUT" });
   assert.equal("title" in creative, false);
   assert.equal("headline" in creative, false);
 });
@@ -131,11 +130,10 @@ test("Advantage+ Creative can be opted in for an existing Instagram post", () =>
     creativeEnhancements: true,
   });
 
-  assert.deepEqual(creative.degrees_of_freedom_spec, {
-    creative_features_spec: {
-      standard_enhancements: { enroll_status: "OPT_IN" },
-    },
-  });
+  const features = creative.degrees_of_freedom_spec.creative_features_spec;
+  assert.equal("standard_enhancements" in features, false);
+  assert.ok(Object.keys(features).length > 1);
+  for (const value of Object.values(features)) assert.deepEqual(value, { enroll_status: "OPT_IN" });
   assert.equal("title" in creative, false);
   assert.equal("headline" in creative, false);
 });
