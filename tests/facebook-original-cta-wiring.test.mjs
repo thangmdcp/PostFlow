@@ -6,8 +6,11 @@ test("Facebook original CTA uses the saved native video id and remains independe
   const facebook = await readFile(new URL("../lib/facebook.ts", import.meta.url), "utf8");
   const runner = await readFile(new URL("../lib/autoAdsRunner.ts", import.meta.url), "utf8");
   assert.match(facebook, /updateFacebookVideoCallToAction/);
-  assert.match(facebook, /call_to_action:\s*adCallToAction/);
+  assert.match(facebook, /application\/x-www-form-urlencoded/);
+  assert.match(facebook, /readFacebookOriginalCta/);
   assert.match(runner, /post\.fbMediaId/);
+  assert.match(runner, /isFacebookOriginalCtaVerified/);
+  assert.match(runner, /fbCtaVerifiedAt/);
   assert.match(runner, /Ads đã có CTA|fbCtaStatus:\s*"failed"/);
   assert.match(runner, /createAdCampaignForPost\(params\)/);
 });

@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true, adCtaScope: true, fbCtaStatus: true } });
   if (!post) return NextResponse.json({ ok: true });
   const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
-  const facebookCtaNeedsWork = post.adCtaScope === "AD_AND_FACEBOOK_POST" && post.fbCtaStatus === "pending";
+  const facebookCtaNeedsWork = post.adCtaScope === "AD_AND_FACEBOOK_POST" && ["pending", "verifying"].includes(post.fbCtaStatus ?? "");
   if (!adsNeedWork && !facebookCtaNeedsWork) return NextResponse.json({ ok: true });
   const placementPlatforms = post.adPlacementConfig && typeof post.adPlacementConfig === "object" && !Array.isArray(post.adPlacementConfig)
     ? (post.adPlacementConfig as Record<string, unknown>).publisherPlatforms
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       where: { id: postId },
       data: adsNeedWork
         ? { adStatus: "pending", adNextAttemptAt: nextAttemptAt, errorMsg: `[quota] ${gate.reason ?? "Chờ Meta hồi quota"}` }
-        : { fbCtaStatus: "pending", fbCtaNextAttemptAt: nextAttemptAt, fbCtaErrorMsg: gate.reason ?? "Chờ Meta hồi quota" },
+        : { fbCtaStatus: post.fbCtaStatus ?? "pending", fbCtaNextAttemptAt: nextAttemptAt, fbCtaErrorMsg: gate.reason ?? "Chờ Meta hồi quota" },
     });
     return NextResponse.json({ error: gate.reason ?? "Chờ Meta hồi quota", deferredReason: "quota", retryAfterSeconds: gate.retryAfterSeconds }, { status: 503 });
   }

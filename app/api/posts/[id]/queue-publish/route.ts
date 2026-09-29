@@ -118,6 +118,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         fbCtaErrorMsg: null,
         fbCtaNextAttemptAt: null,
         fbCtaAttempt: 0,
+        fbCtaVerifiedAt: null,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

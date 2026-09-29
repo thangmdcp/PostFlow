@@ -108,6 +108,7 @@ export async function PATCH(
         fbCtaErrorMsg: null,
         fbCtaNextAttemptAt: null,
         fbCtaAttempt: 0,
+        fbCtaVerifiedAt: null,
         adCampaignId: null,
         adSetId: null,
         adCreativeId: null,

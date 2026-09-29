@@ -1,6 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import type { Post } from "@prisma/client";
-import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint, updateFacebookVideoCallToAction } from "@/lib/facebook";
+import {
+  AdTemplateConfigurationError,
+  cloneAdCampaign,
+  fetchAdTemplateBlueprint,
+  readFacebookOriginalCta,
+  resolveFacebookPromotableStoryId,
+  updateFacebookVideoCallToAction,
+} from "@/lib/facebook";
 import { AdSourceNotReadyError, SOURCE_READY_RETRY_DELAYS_MS } from "@/lib/adSourceReadiness";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
 import { randomInteger } from "@/lib/adSettings";
@@ -11,6 +18,7 @@ import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 import { parseAdCtaType, resolveAdCtaScope, validateAdCta, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
+import { isFacebookOriginalCtaVerified } from "@/lib/facebookOriginalCta";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -26,7 +34,7 @@ const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 const DAY_MS = 86_400_000;
 const BATCH_AD_SPACING_MS = 20_000;
 const META_RATE_LIMIT_RETRY_MS = 5 * 60_000;
-const FACEBOOK_CTA_RETRY_DELAYS_MS = [30_000, 120_000, 300_000];
+const FACEBOOK_CTA_RETRY_DELAYS_MS = [10_000, 30_000, 120_000, 300_000, 900_000];
 
 function stableJitterMs(value: string, maxMs = 30_000): number {
   let hash = 0;
@@ -136,6 +144,7 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       fbCtaErrorMsg: null,
       fbCtaNextAttemptAt: null,
       fbCtaAttempt: 0,
+      fbCtaVerifiedAt: null,
       ...(params.templateId ? { adTemplateId: params.templateId } : {}),
       ...(params.adAccountId ? { adAccountUsed: params.adAccountId } : {}),
       ...(params.ageMinFrom ? { adAgeMin: Number(params.ageMinFrom) } : {}),
@@ -166,7 +175,7 @@ async function attemptFacebookOriginalCta(
   if (resolveAdCtaScope(post.adCtaScope) !== "AD_AND_FACEBOOK_POST" || ctaType === "NO_BUTTON") {
     return { retry: false };
   }
-  if (post.fbCtaStatus === "done" || post.fbCtaStatus === "failed") return { retry: false };
+  if ((post.fbCtaStatus === "done" && post.fbCtaVerifiedAt) || post.fbCtaStatus === "failed") return { retry: false };
   if (post.fbCtaNextAttemptAt && post.fbCtaNextAttemptAt.getTime() > Date.now()) {
     return { retry: true, retryAfterSeconds: Math.max(1, Math.ceil((post.fbCtaNextAttemptAt.getTime() - Date.now()) / 1000)) };
   }
@@ -184,10 +193,58 @@ async function attemptFacebookOriginalCta(
     return { retry: false };
   }
   try {
+    const objectStoryId = post.fbObjectStoryId
+      ?? await resolveFacebookPromotableStoryId(post.pageId, post.fbPostId!, pageAccessToken);
+    if (!post.fbObjectStoryId) {
+      await prisma.post.update({ where: { id: post.id }, data: { fbObjectStoryId: objectStoryId } });
+    }
+
+    // Always read first. This makes retries idempotent and lets PostFlow
+    // recover a response timeout where Meta applied the CTA successfully.
+    const before = await readFacebookOriginalCta(post.pageId, objectStoryId, pageAccessToken);
+    if (isFacebookOriginalCtaVerified(before, ctaType, post.adDestinationUrl)) {
+      await prisma.post.update({
+        where: { id: post.id },
+        data: {
+          fbCtaStatus: "done", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null,
+          fbCtaErrorMsg: null, fbCtaVerifiedAt: new Date(),
+        },
+      });
+      return { retry: false };
+    }
+
     await updateFacebookVideoCallToAction(post.pageId, post.fbMediaId, pageAccessToken, ctaType, post.adDestinationUrl);
+    const after = await readFacebookOriginalCta(post.pageId, objectStoryId, pageAccessToken);
+    if (isFacebookOriginalCtaVerified(after, ctaType, post.adDestinationUrl)) {
+      await prisma.post.update({
+        where: { id: post.id },
+        data: {
+          fbCtaStatus: "done", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null,
+          fbCtaErrorMsg: null, fbCtaVerifiedAt: new Date(),
+        },
+      });
+      return { retry: false };
+    }
+
+    if (attempt <= FACEBOOK_CTA_RETRY_DELAYS_MS.length) {
+      const delay = FACEBOOK_CTA_RETRY_DELAYS_MS[attempt - 1];
+      await prisma.post.update({
+        where: { id: post.id },
+        data: {
+          fbCtaStatus: "verifying", fbCtaAttempt: attempt,
+          fbCtaNextAttemptAt: new Date(Date.now() + delay), fbCtaVerifiedAt: null,
+          fbCtaErrorMsg: "Meta đã nhận CTA · đang xác minh trên bài Page.",
+        },
+      });
+      return { retry: true, retryAfterSeconds: Math.ceil(delay / 1000) };
+    }
     await prisma.post.update({
       where: { id: post.id },
-      data: { fbCtaStatus: "done", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null, fbCtaErrorMsg: null },
+      data: {
+        fbCtaStatus: "failed", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null,
+        fbCtaVerifiedAt: null,
+        fbCtaErrorMsg: "Meta đã nhận lệnh nhưng bài Page chưa hiển thị đúng CTA và link affiliate sau thời gian xác minh.",
+      },
     });
     return { retry: false };
   } catch (error) {
@@ -200,13 +257,13 @@ async function attemptFacebookOriginalCta(
       );
       await prisma.post.update({
         where: { id: post.id },
-        data: { fbCtaStatus: "pending", fbCtaAttempt: attempt, fbCtaNextAttemptAt: new Date(Date.now() + delay), fbCtaErrorMsg: message },
+        data: { fbCtaStatus: "pending", fbCtaAttempt: attempt, fbCtaNextAttemptAt: new Date(Date.now() + delay), fbCtaErrorMsg: message, fbCtaVerifiedAt: null },
       });
       return { retry: true, retryAfterSeconds: Math.ceil(delay / 1000) };
     }
     await prisma.post.update({
       where: { id: post.id },
-      data: { fbCtaStatus: "failed", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null, fbCtaErrorMsg: message },
+      data: { fbCtaStatus: "failed", fbCtaAttempt: attempt, fbCtaNextAttemptAt: null, fbCtaErrorMsg: message, fbCtaVerifiedAt: null },
     });
     return { retry: false };
   }
@@ -217,7 +274,8 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
   const post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post) return { retry: false };
   const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
-  const facebookCtaNeedsWork = resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST" && post.fbCtaStatus === "pending";
+  const facebookCtaNeedsWork = resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST"
+    && ["pending", "verifying"].includes(post.fbCtaStatus ?? "");
   if (!adsNeedWork && !facebookCtaNeedsWork) return { retry: false };
   if (post.adStatus === "creating") {
     if (post.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };
@@ -229,20 +287,17 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
   const failStructural = async (message: string) => {
     await prisma.post.update({
       where: { id: postId },
-      data: { adStatus: "failed", adNextAttemptAt: null, errorMsg: `[ads] ${message}` },
+      data: adsNeedWork
+        ? { adStatus: "failed", adNextAttemptAt: null, errorMsg: `[ads] ${message}` }
+        : { fbCtaStatus: "failed", fbCtaNextAttemptAt: null, fbCtaErrorMsg: message, fbCtaVerifiedAt: null },
     }).catch(() => {});
     return { retry: false };
   };
   if (!post.pageId) return failStructural("Bài chưa có Page để tạo quảng cáo");
-  if (!post.adAccountUsed || !post.adBudgetMinor || !post.adBudgetCurrency) {
-    return failStructural("Thiếu snapshot TKQC/currency/ngân sách an toàn; không được phép random lại khi retry");
-  }
   const fbConn = await prisma.fbConnection.findUnique({ where: { pageId: post.pageId } });
   if (!fbConn) return failStructural("Không tìm thấy kết nối Page");
   const adPlatform = post.adPlatform === "instagram" ? "instagram" : "facebook";
   if (adPlatform === "facebook" && !post.fbPostId) return failStructural("Bài Facebook chưa đăng thành công");
-  if (adPlatform === "instagram" && !post.igPostId) return failStructural("Bài Instagram chưa đăng thành công");
-  if (adPlatform === "instagram" && !fbConn.instagramUserId) return failStructural("Page chưa kết nối Instagram Professional");
   // Null is a legacy row from before CTA snapshots existed. Preserve the old
   // behavior even if a queued worker runs during the migration rollout.
   const ctaType = post.adCtaType === null
@@ -255,6 +310,11 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     ? await attemptFacebookOriginalCta(post, fbConn.accessToken, ctaType)
     : { retry: false };
   if (!adsNeedWork) return facebookCtaResult;
+  if (!post.adAccountUsed || !post.adBudgetMinor || !post.adBudgetCurrency) {
+    return failStructural("Thiếu snapshot TKQC/currency/ngân sách an toàn; không được phép random lại khi retry");
+  }
+  if (adPlatform === "instagram" && !post.igPostId) return failStructural("Bài Instagram chưa đăng thành công");
+  if (adPlatform === "instagram" && !fbConn.instagramUserId) return failStructural("Page chưa kết nối Instagram Professional");
   const attemptNumber = (post.adAttempt ?? 0) + 1;
   const params: AutoAdsRunParams = {
     postId: post.id, pageId: post.pageId, adPlatform,

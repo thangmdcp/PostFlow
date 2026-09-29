@@ -20,6 +20,7 @@ import {
   facebookPromotableStoryId,
 } from "@/lib/adSourceReadiness";
 import { adCallToAction, type AdCtaType } from "@/lib/adCta";
+import { facebookOriginalCtaState, type FacebookOriginalCtaState } from "@/lib/facebookOriginalCta";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -135,14 +136,48 @@ export async function updateFacebookVideoCallToAction(
   ctaType: Exclude<AdCtaType, "NO_BUTTON">,
   destinationUrl: string,
 ): Promise<void> {
+  const params = new URLSearchParams({
+    call_to_action: JSON.stringify(adCallToAction(ctaType, destinationUrl)),
+    access_token: accessToken,
+  });
   await metaJson<{ success?: boolean }>(`${FB_API}/${videoId}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      call_to_action: adCallToAction(ctaType, destinationUrl),
-      access_token: accessToken,
-    }),
+    // Match Meta's generated Business SDK serializer. A top-level JSON body
+    // can return {success:true} while silently leaving the Reel attachment as
+    // video_inline; call_to_action itself must be a JSON-encoded form field.
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
   }, { pageId });
+}
+
+export async function resolveFacebookPromotableStoryId(
+  pageId: string,
+  fbPostId: string,
+  accessToken: string,
+): Promise<string> {
+  const candidate = facebookObjectStoryIdCandidate(pageId, fbPostId);
+  const payload = await metaJson<{ id?: string; promotable_id?: string }>(
+    `${FB_API}/${candidate}?fields=id,promotable_id&access_token=${encodeURIComponent(accessToken)}`,
+    {},
+    { pageId },
+  );
+  const objectStoryId = facebookPromotableStoryId(payload);
+  if (!objectStoryId) throw new AdSourceNotReadyError("Facebook chưa trả về Story ID có thể quảng bá.");
+  return objectStoryId;
+}
+
+export async function readFacebookOriginalCta(
+  pageId: string,
+  objectStoryId: string,
+  accessToken: string,
+): Promise<FacebookOriginalCtaState> {
+  const fields = "call_to_action,attachments.limit(1){type,url,target{id}}";
+  const payload = await metaJson<Record<string, unknown>>(
+    `${FB_API}/${objectStoryId}?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(accessToken)}`,
+    {},
+    { pageId },
+  );
+  return facebookOriginalCtaState(payload);
 }
 
 // Facebook Stories are media-only via the Graph API — there is no caption/

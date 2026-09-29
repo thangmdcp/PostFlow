@@ -75,6 +75,7 @@ model Post {
   fbCtaErrorMsg  String?
   fbCtaNextAttemptAt DateTime?
   fbCtaAttempt   Int?             @default(0)
+  fbCtaVerifiedAt DateTime?
   ctaHeadline    String?
   campaignName   String?
   adStatus       String?

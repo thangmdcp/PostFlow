@@ -63,6 +63,16 @@ import {
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 type BatchData = { id: string; posts: PostWithLinks[] };
 
+function needsFacebookCtaRetry(post: PostWithLinks): boolean {
+  return post.adCtaScope === "AD_AND_FACEBOOK_POST"
+    && post.adCtaType !== "NO_BUTTON"
+    && !!post.fbPostId
+    && !!post.fbMediaId
+    && !!post.adDestinationUrl
+    && !post.fbCtaVerifiedAt
+    && ["failed", "done"].includes(post.fbCtaStatus ?? "");
+}
+
 type RandomField = "age" | "gender" | "budget" | "page" | "account";
 const RANDOM_FIELD_OPTIONS: { key: RandomField; label: string }[] = [
   { key: "page",    label: "Random Page" },
@@ -596,7 +606,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     {
       refreshInterval: (data) => data?.posts?.some((p) => p.status === "queued" || p.status === "fetching")
         ? 1000
-        : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating" || p.fbCtaStatus === "pending") ? 2000 : 0,
+        : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating" || ["pending", "verifying"].includes(p.fbCtaStatus ?? "")) ? 2000 : 0,
       fallbackData: initialBatch ?? undefined,
     }
   );
@@ -1094,11 +1104,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
   const scheduleTargets = batch.posts.filter((post) => checkedIds.has(post.id) && (post.status === "ready" || post.status === "failed"));
   const retryAdsTargets = batch.posts.filter((post) =>
     checkedIds.has(post.id)
-    && post.adStatus === "failed"
-    && !post.adId
-    && !!post.adAccountUsed
-    && !!post.adTemplateId
-    && (!!post.fbPostId || !!post.igPostId)
+    && (
+      (post.adStatus === "failed" && !post.adId && !!post.adAccountUsed && !!post.adTemplateId && (!!post.fbPostId || !!post.igPostId))
+      || needsFacebookCtaRetry(post)
+    )
   );
   const unscheduleTargets = batch.posts.filter((post) =>
     checkedIds.has(post.id)
@@ -1466,7 +1475,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
 
   async function handleBulkRetryAds() {
     if (!retryAdsTargets.length) {
-      onToast("Chọn ít nhất một bài đang lỗi Ads", "error");
+      onToast("Chọn ít nhất một bài cần retry Ads hoặc CTA", "error");
       return;
     }
     setBulkRunning(true);
@@ -1496,9 +1505,9 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
     setBulkRunning(false);
     await mutateBatch().catch(() => undefined);
     if (errors.length) {
-      onToast(`Đã xếp lại ${succeeded.length}/${retryAdsTargets.length} Ads · ${errors[0]}`, "error");
+      onToast(`Đã xếp lại ${succeeded.length}/${retryAdsTargets.length} Ads/CTA · ${errors[0]}`, "error");
     } else {
-      onToast(`Đã kiểm tra quyền và xếp lại riêng ${succeeded.length} Ads`, "success");
+      onToast(`Đã xếp lại ${succeeded.length} Ads/CTA, không đăng lại bài nguồn`, "success");
     }
   }
 
@@ -2226,6 +2235,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   const [status, setStatus] = useState(post.status);
   const [showCaption, setShowCaption] = useState(false);
   const [retryingAds, setRetryingAds] = useState(false);
+  const needsAdsRetry = post.adStatus === "failed" && !post.adId;
 
   useEffect(() => { setStatus(post.status); }, [post.status]);
   useEffect(() => { setLinks(post.extractedLinks); }, [post.extractedLinks]);
@@ -2257,7 +2267,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
   }
 
   async function retryAdsOnly() {
-    if (!post.adAccountUsed || !post.adTemplateId) {
+    if (needsAdsRetry && (!post.adAccountUsed || !post.adTemplateId)) {
       onToast("Bài chưa có snapshot TKQC/template để retry Ads", "error");
       return;
     }
@@ -2270,7 +2280,7 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
       });
       const payload = await response.json().catch(() => ({})) as { error?: string };
       if (!response.ok) throw new Error(payload.error || "Không thể retry Ads");
-      onToast("Đã kiểm tra quyền và xếp lại riêng Ads", "success");
+      onToast(needsAdsRetry ? "Đã kiểm tra quyền và xếp lại Ads/CTA" : "Đã xếp lại xác minh CTA trên bài Page", "success");
       if (post.batchId) await globalMutate(`/api/batches/${post.batchId}`);
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Không thể retry Ads", "error");
@@ -2362,17 +2372,24 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
           {post.fbCtaStatus === "pending" && (
             <span className="block text-[9px] leading-tight text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Đang cập nhật nút trên bài Page…</span>
           )}
+          {post.fbCtaStatus === "verifying" && (
+            <span className="block text-[9px] leading-tight text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Meta đã nhận CTA · đang xác minh…</span>
+          )}
           {post.fbCtaStatus === "failed" && (
             <span className="block text-[9px] leading-tight text-amber-700" title={post.fbCtaErrorMsg ?? undefined}>Ads đã có CTA · bài Page chưa cập nhật nút</span>
           )}
-          {post.fbCtaStatus === "done" && (
+          {post.fbCtaStatus === "done" && post.fbCtaVerifiedAt && (
             <span className="block text-[9px] leading-tight text-emerald-600">CTA đã cập nhật trên bài Page</span>
           )}
-          {post.adStatus === "failed" && !post.adId && post.adAccountUsed && post.adTemplateId && (post.fbPostId || post.igPostId) && (
+          {post.fbCtaStatus === "done" && !post.fbCtaVerifiedAt && (
+            <span className="block text-[9px] leading-tight text-amber-700">CTA cũ chưa được Graph API xác minh</span>
+          )}
+          {((post.adStatus === "failed" && !post.adId && post.adAccountUsed && post.adTemplateId && (post.fbPostId || post.igPostId))
+            || needsFacebookCtaRetry(post)) && (
             <button type="button" onClick={retryAdsOnly} disabled={retryingAds}
-              title="Kiểm tra lại quyền rồi retry riêng Ads; không đăng lại bài nguồn"
+              title="Retry riêng Ads hoặc xác minh CTA; không đăng lại bài nguồn"
               className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50">
-              {retryingAds ? <Loader2 size={8} className="animate-spin" /> : <RefreshCw size={8} />} Retry Ads
+              {retryingAds ? <Loader2 size={8} className="animate-spin" /> : <RefreshCw size={8} />} {needsAdsRetry ? "Retry Ads" : "Retry CTA"}
             </button>
           )}
         </div>

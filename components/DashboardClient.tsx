@@ -1256,8 +1256,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
                           fetchDiagnostics={post.fetchDiagnostics} />
                         {post.errorMsg && !post.fetchErrorCode && <p className="text-xs text-red-500 mt-0.5 truncate" title={post.errorMsg}>{post.adStatus === "failed" ? metaErrorDisplay(post.errorMsg).label : post.errorMsg}</p>}
                         {post.fbCtaStatus === "pending" && <p className="mt-0.5 truncate text-xs text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Đang cập nhật nút trên bài Page…</p>}
+                        {post.fbCtaStatus === "verifying" && <p className="mt-0.5 truncate text-xs text-amber-600" title={post.fbCtaErrorMsg ?? undefined}>Meta đã nhận CTA · đang xác minh…</p>}
                         {post.fbCtaStatus === "failed" && <p className="mt-0.5 truncate text-xs text-amber-700" title={post.fbCtaErrorMsg ?? undefined}>Ads đã có CTA · bài Page chưa cập nhật nút</p>}
-                        {post.fbCtaStatus === "done" && <p className="mt-0.5 text-xs text-emerald-600">CTA đã cập nhật trên bài Page</p>}
+                        {post.fbCtaStatus === "done" && post.fbCtaVerifiedAt && <p className="mt-0.5 text-xs text-emerald-600">CTA đã cập nhật trên bài Page</p>}
+                        {post.fbCtaStatus === "done" && !post.fbCtaVerifiedAt && <p className="mt-0.5 text-xs text-amber-700">CTA cũ chưa được Graph API xác minh</p>}
                       </td>
                     )}
 

@@ -186,6 +186,7 @@ export async function POST(req: Request) {
         fbCtaErrorMsg: null,
         fbCtaNextAttemptAt: null,
         fbCtaAttempt: 0,
+        fbCtaVerifiedAt: null,
         adPlacementConfig: placementSnapshot
           ? placementSnapshot as unknown as Prisma.InputJsonValue
           : Prisma.DbNull,
