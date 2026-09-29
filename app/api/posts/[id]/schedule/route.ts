@@ -9,13 +9,16 @@ import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } 
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
+import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
+import { AdTemplateConfigurationError } from "@/lib/facebook";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, ctaHeadline, adCtaType, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, ctaHeadline, adCtaType, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements, adAdvantage } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -32,6 +35,7 @@ export async function PATCH(
       storyEnabled?: boolean; storyCount?: number;
       publishTargets?: PublishTarget[];
       adPlacements?: AdPlacementConfig;
+      adAdvantage?: BatchAdvantageConfig;
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
@@ -69,8 +73,9 @@ export async function PATCH(
     const destinationUrl = templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
     const cta = validateAdCta({ ctaType: adCtaType, destinationUrl, adsEnabled: Boolean(templateId) });
     if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
-    const parsedPlacements = templateId ? parseAdPlacementConfig(adPlacements) : null;
-    if (templateId) {
+    const advantageSnapshot = await resolvePostAdAdvantage(templateId, adAccountId, adAdvantage);
+    const parsedPlacements = templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(adPlacements) : null;
+    if (templateId && !advantageSnapshot?.placementsEnabled) {
       const placementError = validateAdPlacements(parsedPlacements, {
         instagramOnly: targets.length === 1 && targets[0] === "instagram",
         hasInstagram: Boolean(connection.instagramUserId),
@@ -102,6 +107,7 @@ export async function PATCH(
         igErrorMsg: null,
         adTemplateId: templateId ?? null,
         adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+        adAdvantageConfig: advantageSnapshot ? advantageSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(ctaHeadline ? { ctaHeadline } : {}),
         ...(adStatus ? { adPublishStatus: adStatus } : {}),
         // A normal re-schedule intentionally clears preparation mode.
@@ -140,7 +146,7 @@ export async function PATCH(
     console.error("PATCH /api/posts/[id]/schedule error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal server error", ...(err instanceof BudgetPolicyError ? { code: err.code } : {}) },
-      { status: err instanceof BudgetPolicyError ? err.status : 500 },
+      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError ? 400 : 500 },
     );
   }
 }

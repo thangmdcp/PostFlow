@@ -1,6 +1,6 @@
 "use client";
 
-import { Megaphone } from "lucide-react";
+import { Megaphone, RotateCcw, Lock } from "lucide-react";
 import { randomInteger } from "@/lib/adSettings";
 import { randomMajorStep } from "@/lib/adMoney";
 import { AdParametersForm } from "@/components/AdParametersForm";
@@ -10,6 +10,7 @@ import { adsPanel } from "@/lib/ui-classes";
 import { AdPlacementSelector } from "@/components/AdPlacementSelector";
 import type { AdPlacementConfig } from "@/lib/adPlacements";
 import type { AdCtaType } from "@/lib/adCta";
+import { DEFAULT_BATCH_ADVANTAGE, type BatchAdvantageConfig, type CampaignBudgetMode } from "@/lib/adAdvantage";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
 
@@ -28,6 +29,7 @@ export interface BatchAdConfig {
   adStatus: "ACTIVE" | "PAUSED";
   ctaType: AdCtaType;
   placements?: AdPlacementConfig;
+  advantage: BatchAdvantageConfig;
 }
 
 export interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
@@ -88,6 +90,13 @@ interface AdsConfigPanelProps {
 }
 
 export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true }: AdsConfigPanelProps) {
+  const patchAdvantage = (patch: Partial<BatchAdvantageConfig>) => onPatch({
+    advantage: { ...adConfig.advantage, ...patch },
+  });
+  const resetAdvantage = () => onPatch({
+    advantage: { ...DEFAULT_BATCH_ADVANTAGE },
+    placements: undefined,
+  });
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
@@ -161,6 +170,43 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
         </div>
       )}
 
+      {adConfig.runAds && (
+        <div className="space-y-3 rounded-xl border border-blue-100 bg-white p-3 dark:border-blue-900/40 dark:bg-slate-800">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Meta Advantage+</p>
+              <p className="mt-0.5 text-[10px] text-slate-500">Tự động hoá áp dụng chung cho toàn bộ batch.</p>
+            </div>
+            <button type="button" onClick={resetAdvantage} title="Khôi phục mặc định Advantage+"
+              className="rounded-lg border p-1.5 text-slate-400 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950/30">
+              <RotateCcw size={13} />
+            </button>
+          </div>
+
+          <LockedAdvantageRow title="Advantage+ Sales Campaign" description="Cần Pixel/CAPI và tín hiệu mua hàng; link Shopee affiliate chưa hỗ trợ." />
+
+          <div className="rounded-lg border p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div><p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">Advantage Campaign Budget</p><p className="text-[9px] text-slate-400">Chọn cấp đặt ngân sách Campaign hoặc Ad Set.</p></div>
+            </div>
+            <div className="mt-2 grid grid-cols-3 overflow-hidden rounded-lg border">
+              {([['template', 'Theo template'], ['enabled', 'Bật'], ['disabled', 'Tắt']] as Array<[CampaignBudgetMode, string]>).map(([value, label]) => (
+                <button key={value} type="button" onClick={() => patchAdvantage({ campaignBudgetMode: value })}
+                  className={`border-r px-1.5 py-1.5 text-[10px] font-medium last:border-r-0 ${adConfig.advantage.campaignBudgetMode === value ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <AdvantageToggle title="Advantage+ Audience" description="Cho Meta mở rộng ngoài gợi ý đối tượng." checked={adConfig.advantage.audienceEnabled} onChange={(audienceEnabled) => patchAdvantage({ audienceEnabled })} />
+          <AdvantageToggle title="Advantage+ Placements" description="Meta tự chọn mọi nền tảng, thiết bị và vị trí hợp lệ." checked={adConfig.advantage.placementsEnabled} onChange={(placementsEnabled) => patchAdvantage({ placementsEnabled })} />
+          <AdvantageToggle title="Advantage+ Creative" description="Meta có thể crop, chỉnh cách trình bày hoặc tạo biến thể; PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể thay đổi cách creative hiển thị ở từng placement." : undefined} />
+
+          <LockedAdvantageRow title="Advantage+ Catalog Ads" description="Cần Meta Catalog và Product ID; link Shopee affiliate chưa hỗ trợ." />
+        </div>
+      )}
+
       {/* TKQC — editable when handlers are provided (batch drawer), summary-only otherwise (pre-batch panel) */}
       {adConfig.runAds && (
         onPatchRow && onDeleteRow && onAddRow
@@ -183,7 +229,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
         </div>
       )}
 
-      {adConfig.runAds && showPlacements && (
+      {adConfig.runAds && showPlacements && !adConfig.advantage.placementsEnabled && (
         <AdPlacementSelector
           value={adConfig.placements}
           onChange={(placements) => onPatch({ placements })}
@@ -193,4 +239,12 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
       )}
     </div>
   );
+}
+
+function AdvantageToggle({ title, description, checked, onChange, warning }: { title: string; description: string; checked: boolean; onChange: (value: boolean) => void; warning?: string }) {
+  return <div className="rounded-lg border p-2.5"><div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">{title}</p><p className="text-[9px] text-slate-400">{description}</p></div><button type="button" onClick={() => onChange(!checked)} aria-pressed={checked} className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-blue-600" : "bg-slate-200 dark:bg-slate-600"}`}><span className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : "translate-x-0"}`} /></button></div>{warning && <p className="mt-1.5 text-[9px] font-medium text-amber-600">{warning}</p>}</div>;
+}
+
+function LockedAdvantageRow({ title, description }: { title: string; description: string }) {
+  return <div className="flex items-center justify-between gap-3 rounded-lg border bg-slate-50 p-2.5 opacity-75 dark:bg-slate-900/50"><div><div className="flex items-center gap-1.5"><p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">{title}</p><Lock size={10} className="text-slate-400" /></div><p className="text-[9px] text-slate-400">{description}</p></div><span className="rounded-full bg-slate-200 px-2 py-0.5 text-[9px] font-semibold text-slate-500 dark:bg-slate-700">Tắt</span></div>;
 }

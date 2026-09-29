@@ -9,6 +9,7 @@ import { parseAdPlacementConfig, type AdPlacementConfig } from "@/lib/adPlacemen
 import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 import { parseAdCtaType, validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -74,6 +75,7 @@ export interface AutoAdsRunParams {
   adStatus?: "ACTIVE" | "PAUSED"; // campaign/adset/ad status once created — defaults to PAUSED
   adStartAt?: Date; // prepared campaigns are created before this time
   adPlacements?: AdPlacementConfig;
+  adAdvantage?: AdAdvantageConfig;
 }
 
 export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
@@ -135,6 +137,7 @@ export async function scheduleAutoAds(params: AutoAdsRunParams): Promise<void> {
       adBudgetMinor: verifiedBudget.amountMinor,
       adBudgetCurrency: verifiedBudget.currency,
       ...(resolvedAdStartAt ? { adStartAt: resolvedAdStartAt } : {}),
+      ...(params.adAdvantage ? { adAdvantageConfig: params.adAdvantage as unknown as import("@prisma/client").Prisma.InputJsonValue } : {}),
     },
   }).catch(() => {});
   if (!await enqueueAds(params.postId, Math.ceil(initialDelayMs / 1000))) {
@@ -197,6 +200,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     adStatus: (post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
     adStartAt: post.adStartAt ?? undefined,
     adPlacements: parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
+    adAdvantage: parseAdAdvantageConfig(post.adAdvantageConfig) ?? undefined,
   };
   // Record the attempt count BEFORE calling out to Facebook, not just on
   // completion — if the serverless invocation dies mid-call, the row is
@@ -225,7 +229,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError || err instanceof BudgetPolicyError || /targeting_optimization|1870197|1870227|advantage_audience|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || err instanceof BudgetPolicyError || /targeting_optimization|1870197|1870227|advantage_audience|degrees_of_freedom_spec|creative_features_spec|standard_enhancements|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = (err instanceof MetaApiError && err.category === "rate_limit") || isMetaRateLimited(msg);
     const permanentMetaError = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
@@ -462,6 +466,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     p.adStatus ?? (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? "PAUSED",
     p.adStartAt,
     p.adPlacements,
+    p.adAdvantage,
     {
       campaignId: postFull?.adCampaignId,
       adSetId: postFull?.adSetId,

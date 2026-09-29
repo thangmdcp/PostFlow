@@ -99,3 +99,43 @@ test("NO_BUTTON omits CTA without disabling deep linking", () => {
   assert.equal(facebook.applink_treatment, APP_DEEP_LINK_TREATMENT);
   assert.equal(instagram.applink_treatment, APP_DEEP_LINK_TREATMENT);
 });
+
+test("Advantage+ Creative is explicitly opted out for Facebook without adding a headline", () => {
+  const creative = buildFacebookExistingPostCreative({
+    name: "Preserve existing post",
+    objectStoryId: "page-1_post-3",
+    destinationUrl: "https://example.com/affiliate",
+    ctaType: "LEARN_MORE",
+    accessToken: "secret-token",
+    creativeEnhancements: false,
+  });
+
+  assert.deepEqual(creative.degrees_of_freedom_spec, {
+    creative_features_spec: {
+      standard_enhancements: { enroll_status: "OPT_OUT" },
+    },
+  });
+  assert.equal("title" in creative, false);
+  assert.equal("headline" in creative, false);
+});
+
+test("Advantage+ Creative can be opted in for an existing Instagram post", () => {
+  const creative = buildInstagramExistingPostCreative({
+    name: "Enhance existing Instagram post",
+    pageId: "page-1",
+    instagramUserId: "ig-user-1",
+    igPostId: "ig-media-3",
+    destinationUrl: "https://example.com/affiliate",
+    ctaType: "SHOP_NOW",
+    accessToken: "secret-token",
+    creativeEnhancements: true,
+  });
+
+  assert.deepEqual(creative.degrees_of_freedom_spec, {
+    creative_features_spec: {
+      standard_enhancements: { enroll_status: "OPT_IN" },
+    },
+  });
+  assert.equal("title" in creative, false);
+  assert.equal("headline" in creative, false);
+});

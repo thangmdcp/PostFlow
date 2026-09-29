@@ -28,6 +28,7 @@ import { dateToVnSchedule, scheduleValidation } from "@/lib/schedulePlan";
 import { templatePortability } from "@/lib/adTemplateBlueprint";
 import { EMPTY_AD_PLACEMENTS, parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
 import { currencyMajorInputStep } from "@/lib/adMoney";
+import { parseBatchAdvantageConfig } from "@/lib/adAdvantage";
 
 export interface BatchPageRow {
   pageId: string;
@@ -94,6 +95,7 @@ function mergeSaved(defaults: BatchActionConfig, saved: Partial<BatchActionConfi
       ...defaults.adConfig,
       ...(saved.adConfig ?? {}),
       placements: parseAdPlacementConfig(saved.adConfig?.placements) ?? defaults.adConfig.placements ?? EMPTY_AD_PLACEMENTS,
+      advantage: parseBatchAdvantageConfig(saved.adConfig?.advantage ?? defaults.adConfig.advantage),
     },
     accountRows: Array.isArray(saved.accountRows) ? saved.accountRows : defaults.accountRows,
     engagement: { ...defaults.engagement, ...(saved.engagement ?? {}) },
@@ -348,7 +350,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (runsAds && config.accountRows.some((row) => !row.budgetCurrency)) return "Mỗi TKQC phải xác nhận currency và trần ngân sách trước.";
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
     if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom))) return "Kiểm tra lại dải độ tuổi Ads.";
-    if (runsAds) {
+    if (runsAds && !config.adConfig.advantage.placementsEnabled) {
       const placementError = validateAdPlacements(config.adConfig.placements, { instagramOnly: instagramOnlyAds, hasInstagram: selectedPagesHaveInstagram });
       if (placementError) return placementError;
     }

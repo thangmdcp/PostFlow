@@ -2,14 +2,16 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
-import { parseAdPlacementConfig } from "@/lib/adPlacements";
+import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } from "@/lib/adPlacements";
 import { BudgetPolicyError, validateBudgetForAccount } from "@/lib/adBudgetPolicy";
 import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import { parseAdAdvantageConfig, resolveAdAdvantageConfig, type BatchAdvantageConfig } from "@/lib/adAdvantage";
+import { Prisma } from "@prisma/client";
 
 export async function POST(req: Request) {
 
   try {
-    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType } = (await req.json()) as {
+    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType, adAdvantage, adPlacements } = (await req.json()) as {
       postId: string;
       templateCampaignId: string;
       adAccountId?: string;
@@ -19,6 +21,8 @@ export async function POST(req: Request) {
       gender?: string;
       adStatus?: "ACTIVE" | "PAUSED";
       adCtaType?: AdCtaType;
+      adAdvantage?: BatchAdvantageConfig;
+      adPlacements?: AdPlacementConfig;
     };
 
     const post = await prisma.post.findUnique({
@@ -79,6 +83,18 @@ export async function POST(req: Request) {
       blueprint = await fetchAdTemplateBlueprint(templateCampaignId, accessToken);
     }
     const portableTemplate = portableTemplateBlueprint(blueprint, crossAccount);
+    const advantageSnapshot = parseAdAdvantageConfig(post.adAdvantageConfig)
+      ?? resolveAdAdvantageConfig(adAdvantage, portableTemplate.blueprint.useCampaignBudget);
+    const placementSnapshot = advantageSnapshot.placementsEnabled
+      ? null
+      : parseAdPlacementConfig(adPlacements) ?? parseAdPlacementConfig(post.adPlacementConfig);
+    if (!advantageSnapshot.placementsEnabled) {
+      const placementError = validateAdPlacements(placementSnapshot, {
+        instagramOnly,
+        hasInstagram: Boolean(fbConn.instagramUserId),
+      });
+      if (placementError) return NextResponse.json({ error: placementError }, { status: 400 });
+    }
 
     // facebook.ts prepends act_ internally, so strip it here if present
     const rawAdAccountId = resolvedAdAccountId.replace(/^act_/, "");
@@ -117,7 +133,8 @@ export async function POST(req: Request) {
       gender,
       adStatus ?? "PAUSED",
       undefined,
-      parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
+      placementSnapshot ?? undefined,
+      advantageSnapshot,
       {
         campaignId: post.adCampaignId,
         adSetId: post.adSetId,
@@ -156,6 +173,15 @@ export async function POST(req: Request) {
       cta.ctaType,
       postId,
     );
+    await prisma.post.update({
+      where: { id: postId },
+      data: {
+        adAdvantageConfig: advantageSnapshot as unknown as Prisma.InputJsonValue,
+        adPlacementConfig: placementSnapshot
+          ? placementSnapshot as unknown as Prisma.InputJsonValue
+          : Prisma.DbNull,
+      },
+    });
 
     return NextResponse.json(result);
   } catch (err: unknown) {

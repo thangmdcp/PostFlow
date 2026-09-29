@@ -1,4 +1,5 @@
 import { adCallToAction, type AdCtaType } from "./adCta.ts";
+import { advantageCreativeSpec } from "./adAdvantage.ts";
 
 export const APP_DEEP_LINK_TREATMENT = "deeplink_with_web_fallback" as const;
 
@@ -40,6 +41,7 @@ export function buildFacebookExistingPostCreative(input: {
   destinationUrl?: string;
   ctaType: AdCtaType;
   accessToken: string;
+  creativeEnhancements?: boolean;
 }): Record<string, unknown> {
   const callToAction = adCallToAction(input.ctaType, input.destinationUrl);
   return {
@@ -49,6 +51,7 @@ export function buildFacebookExistingPostCreative(input: {
     // destination app when installed, otherwise keep the website fallback.
     applink_treatment: APP_DEEP_LINK_TREATMENT,
     ...(callToAction ? { call_to_action: callToAction } : {}),
+    ...(input.creativeEnhancements !== undefined ? { degrees_of_freedom_spec: advantageCreativeSpec(input.creativeEnhancements) } : {}),
     access_token: input.accessToken,
   };
 }
@@ -61,6 +64,7 @@ export function buildInstagramExistingPostCreative(input: {
   destinationUrl: string;
   ctaType: AdCtaType;
   accessToken: string;
+  creativeEnhancements?: boolean;
 }): Record<string, unknown> {
   const callToAction = adCallToAction(input.ctaType, input.destinationUrl);
   return {
@@ -70,6 +74,7 @@ export function buildInstagramExistingPostCreative(input: {
     source_instagram_media_id: input.igPostId,
     applink_treatment: APP_DEEP_LINK_TREATMENT,
     ...(callToAction ? { call_to_action: callToAction } : {}),
+    ...(input.creativeEnhancements !== undefined ? { degrees_of_freedom_spec: advantageCreativeSpec(input.creativeEnhancements) } : {}),
     access_token: input.accessToken,
   };
 }

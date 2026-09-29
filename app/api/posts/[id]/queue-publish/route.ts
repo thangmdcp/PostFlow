@@ -9,6 +9,9 @@ import { parseAdPlacementConfig, validateAdPlacements, type AdPlacementConfig } 
 import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetRequest";
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 import { validateAdCta, type AdCtaType } from "@/lib/adCta";
+import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
+import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
+import { AdTemplateConfigurationError } from "@/lib/facebook";
 
 type QueuePublishBody = {
   pageId: string;
@@ -27,6 +30,7 @@ type QueuePublishBody = {
   publishTargets?: PublishTarget[];
   adPlacements?: AdPlacementConfig;
   adCtaType?: AdCtaType;
+  adAdvantage?: BatchAdvantageConfig;
 };
 
 // The browser only records the user's choices and asks the trusted Vercel
@@ -73,8 +77,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const destinationUrl = body.templateId ? post.extractedLinks.find((link) => link.myUrl)?.myUrl ?? null : null;
     const cta = validateAdCta({ ctaType: body.adCtaType, destinationUrl, adsEnabled: Boolean(body.templateId) });
     if (cta.error) return NextResponse.json({ error: cta.error }, { status: 400 });
-    const parsedPlacements = body.templateId ? parseAdPlacementConfig(body.adPlacements) : null;
-    if (body.templateId) {
+    const advantageSnapshot = await resolvePostAdAdvantage(body.templateId, body.adAccountId, body.adAdvantage);
+    const parsedPlacements = body.templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(body.adPlacements) : null;
+    if (body.templateId && !advantageSnapshot?.placementsEnabled) {
       const placementError = validateAdPlacements(parsedPlacements, {
         instagramOnly: publishTargets.length === 1 && publishTargets[0] === "instagram",
         hasInstagram: Boolean(connection.instagramUserId),
@@ -106,6 +111,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         ...(publishToInstagram && !post.igPostId ? { igPublishStatus: "pending", igErrorMsg: null } : {}),
         adTemplateId: body.templateId ?? null,
         adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+        adAdvantageConfig: advantageSnapshot ? advantageSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}),
         ...(body.adStatus ? { adPublishStatus: body.adStatus } : {}),
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),
@@ -138,7 +144,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     console.error("POST /api/posts/[id]/queue-publish error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Không thể xếp hàng đăng bài", ...(error instanceof BudgetPolicyError ? { code: error.code } : {}) },
-      { status: error instanceof BudgetPolicyError ? error.status : 500 },
+      { status: error instanceof BudgetPolicyError ? error.status : error instanceof AdTemplateConfigurationError ? 400 : 500 },
     );
   }
 }

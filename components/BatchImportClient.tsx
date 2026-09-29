@@ -32,6 +32,7 @@ import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
+import { DEFAULT_BATCH_ADVANTAGE, parseBatchAdvantageConfig, parseStoredBatchAdvantage } from "@/lib/adAdvantage";
 import { BatchActionDialog, type BatchActionConfig, type BatchEngagementConfig } from "@/components/BatchActionDialog";
 import { SubIdPresetPicker } from "@/components/SubIdPresetPicker";
 import {
@@ -198,12 +199,13 @@ const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   gender: "", budgetMin: "", budgetMax: "", budgetStep: "",
   adStatus: "PAUSED",
   ctaType: "LEARN_MORE",
+  advantage: { ...DEFAULT_BATCH_ADVANTAGE },
 };
 
 function loadSavedAdsConfig(): BatchAdConfig {
   try {
     const saved = JSON.parse(localStorage.getItem(ADS_CONFIG_KEY) ?? "{}");
-    return { ...DEFAULT_ADS_CONFIG, ...saved };
+    return { ...DEFAULT_ADS_CONFIG, ...saved, advantage: parseBatchAdvantageConfig(saved.advantage) };
   } catch { return DEFAULT_ADS_CONFIG; }
 }
 
@@ -355,6 +357,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
           autoAdsStatus: adConfig.adStatus,
           batchCtaType: adConfig.ctaType,
+          batchAdvantageConfig: JSON.stringify(adConfig.advantage),
           batchDefaultPageIds: JSON.stringify(defaultPageIds),
           batchScheduleMode: defaultScheduleMode, batchStepMinutes: defaultStepMinutes,
           batchPostsPerDay: defaultPostsPerDay, batchBaseTime: defaultBaseTime, batchEndTime: defaultEndTime,
@@ -398,6 +401,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         budgetStep: cfg.batchBudgetStep ?? saved.budgetStep,
         adStatus: (cfg.autoAdsStatus as "ACTIVE" | "PAUSED") ?? saved.adStatus ?? "PAUSED",
         ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? saved.ctaType ?? "LEARN_MORE",
+        advantage: parseStoredBatchAdvantage(cfg.batchAdvantageConfig, saved.advantage),
       });
       if (cfg.batchDefaultPageIds) { try { setDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
       if (cfg.batchScheduleMode) setDefaultScheduleMode(cfg.batchScheduleMode as ScheduleMode);
@@ -472,6 +476,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(patch.budgetStep !== undefined ? { batchBudgetStep: patch.budgetStep } : {}),
       ...(patch.adStatus !== undefined ? { autoAdsStatus: patch.adStatus } : {}),
       ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
+      ...(patch.advantage !== undefined ? { batchAdvantageConfig: JSON.stringify(patch.advantage) } : {}),
     });
   }
 
@@ -519,6 +524,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchBudgetMin: adConfig.budgetMin, batchBudgetMax: adConfig.budgetMax, batchBudgetStep: adConfig.budgetStep,
       adStatus: adConfig.adStatus,
       batchCtaType: adConfig.ctaType,
+      batchAdvantageConfig: adConfig.advantage,
       commentEnabled: defaultCommentEnabled, commentUseCaption: defaultCommentUseCaption,
       commentCaptionAttachImage: defaultCommentCaptionAttachImage, commentCaptionImageUrls: defaultCommentCaptionImageUrls,
       commentCustomEntries: defaultCommentCustomEntries,
@@ -562,6 +568,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(d.batchBudgetStep ? { budgetStep: d.batchBudgetStep } : {}),
       ...(d.adStatus ? { adStatus: d.adStatus } : {}),
       ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
+      ...(d.batchAdvantageConfig ? { advantage: parseBatchAdvantageConfig(d.batchAdvantageConfig) } : {}),
     });
   }
 
@@ -1454,6 +1461,8 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ...(adConfig.postType === "dark" && rowOvr ? { publishToPage: true } : {}),
           ...(runAdsForRow ? { adCtaType: adConfig.ctaType } : {}),
           ...(runAdsForRow ? {
+            adAdvantage: adConfig.advantage,
+            adPlacements: adConfig.advantage.placementsEnabled ? undefined : adConfig.placements,
             ageMinFrom: String(rp.ageMin), ageMinTo: String(rp.ageMin),
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
             gender: rp.gender,
@@ -1567,7 +1576,10 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         pageId,
         publishTargets: config.publishTargets,
         templateId,
-        ...(runsAds ? { adPlacements: config.adConfig.placements } : {}),
+        ...(runsAds ? {
+          adPlacements: config.adConfig.advantage.placementsEnabled ? undefined : config.adConfig.placements,
+          adAdvantage: config.adConfig.advantage,
+        } : {}),
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
         ...(runsAds ? { adCtaType: config.adConfig.ctaType } : {}),
         ...(comments.length ? { comments } : {}),

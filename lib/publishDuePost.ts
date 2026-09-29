@@ -6,6 +6,7 @@ import { prepareInstagramMedia, cleanupInstagramMedia } from "@/lib/instagramMed
 import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
 import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
+import { parseAdAdvantageConfig } from "@/lib/adAdvantage";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 import { MetaApiError } from "@/lib/metaApiClient";
@@ -179,7 +180,7 @@ export async function publishDuePost(
           adPlatform: instagramOnlyAds ? "instagram" : "facebook",
           fbPostId: instagramOnlyAds ? undefined : fbPostId,
           igPostId: instagramOnlyAds ? fresh.igPostId ?? undefined : undefined,
-          instagramUserId: instagramOnlyAds ? connection.instagramUserId ?? undefined : undefined,
+          instagramUserId: connection.instagramUserId ?? undefined,
           destinationUrl,
           ctaType: (fresh.adCtaType as "LEARN_MORE" | "SHOP_NOW" | "NO_BUTTON" | null) ?? (instagramOnlyAds ? "LEARN_MORE" : "NO_BUTTON"),
           fbConnAccessToken: connection.accessToken,
@@ -193,6 +194,7 @@ export async function publishDuePost(
           ...(post.adGender != null ? { gender: post.adGender } : {}),
           ...(post.adBudgetMinor != null ? { budgetMinor: post.adBudgetMinor } : {}),
           ...(post.adBudgetCurrency != null ? { budgetCurrency: post.adBudgetCurrency } : {}),
+          adAdvantage: parseAdAdvantageConfig(post.adAdvantageConfig) ?? undefined,
         });
         adsScheduledNow = true;
       } catch (error) {

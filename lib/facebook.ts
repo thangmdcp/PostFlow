@@ -1,4 +1,5 @@
 import { META_GRAPH_API as FB_API, META_GRAPH_VIDEO_API as FB_VIDEO_API } from "@/lib/meta";
+import { applyAdvantageAudience, applyAdvantagePlacements, type AdAdvantageConfig } from "@/lib/adAdvantage";
 import {
   buildFacebookExistingPostCreative,
   buildInstagramExistingPostCreative,
@@ -406,6 +407,7 @@ export async function cloneAdCampaign(
   adStatus: "ACTIVE" | "PAUSED" = "PAUSED",
   startTime?: Date,
   placementOverride?: AdPlacementConfig,
+  advantageOverride?: AdAdvantageConfig,
   existing: AdCreationState = {},
   onProgress?: (progress: AdCreationProgress) => Promise<void>
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
@@ -428,7 +430,9 @@ export async function cloneAdCampaign(
   }
 
   let targeting = sanitizeMetaTargeting(template.targeting);
-  if (placementOverride) {
+  if (advantageOverride?.placementsEnabled) {
+    targeting = applyAdvantagePlacements(targeting);
+  } else if (placementOverride) {
     const placementError = validateAdPlacements(placementOverride, {
       instagramOnly: source.platform === "instagram",
       hasInstagram: true,
@@ -436,7 +440,7 @@ export async function cloneAdCampaign(
     if (placementError) throw new AdTemplateConfigurationError(placementError);
     targeting = applyAdPlacements(targeting, placementOverride);
   }
-  if (source.platform === "instagram") {
+  if (source.platform === "instagram" && !advantageOverride?.placementsEnabled) {
     // Keep template instagram_positions when present, but hard-limit delivery
     // to Instagram and remove placement families belonging to other surfaces.
     targeting = restrictTargetingToInstagram(targeting);
@@ -457,10 +461,12 @@ export async function cloneAdCampaign(
   // Since Marketing API v24+, this flag is mandatory INSIDE the targeting
   // object. Sending it as an Ad Set sibling is accepted by neither v24 nor
   // v25 and results in OAuth subcode 1870227.
-  targeting.targeting_automation = template.targetingAutomation;
+  targeting = advantageOverride
+    ? applyAdvantageAudience(targeting, advantageOverride.audienceEnabled)
+    : { ...targeting, targeting_automation: template.targetingAutomation };
 
   // Detect if template uses CBO (campaign-level budget)
-  const useCBO = template.useCampaignBudget;
+  const useCBO = advantageOverride?.campaignBudgetEnabled ?? template.useCampaignBudget;
 
   // 2. Create campaign
   // is_adset_budget_sharing_enabled is a distinct, mutually-exclusive
@@ -585,6 +591,7 @@ export async function cloneAdCampaign(
               destinationUrl: source.destinationUrl,
               ctaType: source.ctaType,
               accessToken: creativeAccessToken,
+              creativeEnhancements: advantageOverride?.creativeEnabled,
             })
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
@@ -592,6 +599,7 @@ export async function cloneAdCampaign(
               destinationUrl: source.destinationUrl,
               ctaType: source.ctaType,
               accessToken: creativeAccessToken,
+              creativeEnhancements: advantageOverride?.creativeEnabled,
             });
       const creative = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/adcreatives`, {
           method: "POST",

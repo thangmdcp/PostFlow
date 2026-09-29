@@ -73,6 +73,7 @@ export async function POST(request: Request) {
           adAgeMax: null,
           adGender: null,
           adPlacementConfig: Prisma.DbNull,
+          adAdvantageConfig: Prisma.DbNull,
           ctaHeadline: null,
           adStatus: null,
           adPublishStatus: null,
