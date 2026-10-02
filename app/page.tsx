@@ -2,34 +2,18 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { DashboardClient } from "@/components/DashboardClient";
 import { publicFbAdAccountSelect, publicFbConnectionSelect } from "@/lib/publicFacebook";
+import { queryDashboard } from "@/lib/dashboardQuery";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   try {
-    const [rawPosts, connections, adAccounts] = await Promise.all([
-      prisma.post.findMany({
-        where: { status: { in: ["pending", "queued", "publishing", "done", "partial", "failed"] } },
-        orderBy: { createdAt: "desc" },
-        include: { extractedLinks: true, comments: true },
-        take: 100,
-      }),
+    const [dashboard, connections, adAccounts] = await Promise.all([
+      queryDashboard(new URLSearchParams()),
       prisma.fbConnection.findMany({ select: publicFbConnectionSelect, orderBy: { createdAt: "desc" } }),
       prisma.fbAdAccount.findMany({ select: publicFbAdAccountSelect, orderBy: { createdAt: "desc" } }),
     ]);
-    // Display order: newest scheduled/posted DAY on top; within the same day,
-    // the earliest time of day goes first (VN, UTC+7 — no DST).
-    const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
-    const vnDayKey = (d: Date) => Math.floor((d.getTime() + VN_OFFSET_MS) / 86400000);
-    const vnMinuteOfDay = (d: Date) => Math.floor(((d.getTime() + VN_OFFSET_MS) % 86400000) / 60000);
-    const posts = [...rawPosts].sort((a, b) => {
-      const at = a.scheduledAt ?? a.createdAt;
-      const bt = b.scheduledAt ?? b.createdAt;
-      const dayDiff = vnDayKey(bt) - vnDayKey(at);
-      if (dayDiff !== 0) return dayDiff;
-      return vnMinuteOfDay(at) - vnMinuteOfDay(bt);
-    });
-    return <DashboardClient posts={posts} connections={connections} adAccounts={adAccounts} />;
+    return <DashboardClient initialDashboard={dashboard} connections={connections} adAccounts={adAccounts} />;
   } catch {
     redirect("/settings/setup");
   }

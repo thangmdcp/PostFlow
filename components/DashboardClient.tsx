@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { useRouter } from "next/navigation";
+import useSWR from "swr";
+import type { DashboardResult } from "@/lib/dashboardQuery";
 import Link from "next/link";
 import type { Post, ExtractedLink, PostComment } from "@prisma/client";
 import { hasConfirmedBudgetPolicy, type PublicFbConnection as FbConnection, type PublicFbAdAccount as FbAdAccount } from "@/lib/publicFacebook";
@@ -79,7 +80,7 @@ function resolveDrawerImage(attach: boolean, own: string[], shared: string[]): s
 }
 
 interface Props {
-  posts: PostWithLinks[];
+  initialDashboard: DashboardResult;
   connections: FbConnection[];
   adAccounts: FbAdAccount[];
 }
@@ -119,8 +120,7 @@ const COLUMN_DEFS: { key: ColKey; label: string; defaultWidth: number; minWidth:
 
 const COLS_STORAGE_KEY = "postflow_dashboard_cols_v1";
 
-export function DashboardClient({ posts, connections, adAccounts }: Props) {
-  const router = useRouter();
+export function DashboardClient({ initialDashboard, connections, adAccounts }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [pageFilterIds, setPageFilterIds] = useState<Set<string>>(new Set());
@@ -130,14 +130,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   const pageFilterRef = useRef<HTMLDivElement>(null);
   const tkqcFilterRef = useRef<HTMLDivElement>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [localPosts, setLocalPosts] = useState(posts);
-  // `posts` only seeds initial state — router.refresh() re-renders this
-  // component with a fresh `posts` prop, but useState's initializer is only
-  // used on first mount, so without this the table stayed stuck on whatever
-  // it had at mount time no matter how many times router.refresh() ran
-  // (only a full page reload picked up new data). This is what actually
-  // makes every refresh() call in this file effective.
-  useEffect(() => { setLocalPosts(posts); }, [posts]);
+  const [localPosts, setLocalPosts] = useState(initialDashboard.posts);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [selectedPageIds, setSelectedPageIdsRaw] = useState<string[]>(
@@ -164,7 +157,6 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   }, []);
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
   const { show, ToastComponent } = useToast();
-  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Ads drawer (single-post or bulk "Tạo ads", editable before applying) ────
   const [adAccountsFull, setAdAccountsFull] = useState<FbAdAccount[]>(adAccounts);
@@ -315,6 +307,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         }).catch(() => {});
       }));
       setAppliedDefaults(true);
+      void refreshDashboard();
       setTimeout(() => setAppliedDefaults(false), 2500);
     } finally { setApplyingDefaults(false); }
   }
@@ -603,6 +596,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     show(`Áp dụng: ${ok} thành công${fail > 0 ? `, ${fail} lỗi` : ""}`, ok > 0 ? "success" : "error");
     setAdsDrawerOpen(false);
     setCheckedIds(new Set());
+    void refreshDashboard();
   }
 
   // ── Column widths & visibility ────────────────────────────────────────────
@@ -627,6 +621,47 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
 
   // ── Date range filter ─────────────────────────────────────────────────────
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const queryParams = new URLSearchParams({ status: filter });
+  if (searchQuery.trim()) queryParams.set("search", searchQuery.trim());
+  if (dateRange) {
+    queryParams.set("from", dateRange.from.toISOString());
+    queryParams.set("to", dateRange.to.toISOString());
+  }
+  [...pageFilterIds].sort().forEach(id => queryParams.append("pageId", id));
+  [...tkqcFilterIds].sort().forEach(id => queryParams.append("accountId", id));
+  const filterKey = queryParams.toString();
+  const [pagination, setPagination] = useState({ filterKey, page: 1 });
+  const requestedPage = pagination.filterKey === filterKey ? pagination.page : 1;
+  queryParams.set("page", String(requestedPage));
+  const queryKey = `/api/dashboard?${queryParams}`;
+  const initialKey = "/api/dashboard?status=all&page=1";
+  const { data: dashboard, error: dashboardError, isValidating, mutate: refreshDashboard } = useSWR<DashboardResult>(queryKey, async (url: string) => {
+    const response = await fetch(url, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Không thể tải Dashboard");
+    return payload;
+  }, {
+    fallbackData: queryKey === initialKey ? initialDashboard : undefined,
+    revalidateOnMount: true,
+    refreshInterval: data => data && (data.counts.queued || data.counts.publishing || data.posts.some(post => post.adStatus === "queued" || post.adStatus === "creating")) ? 3000 : 15000,
+  });
+  const [loadedKey, setLoadedKey] = useState(initialKey);
+  useEffect(() => {
+    if (dashboard) {
+      setLocalPosts(dashboard.posts); setLoadedKey(queryKey);
+      const visibleIds = new Set(dashboard.posts.map(post => post.id));
+      setCheckedIds(ids => new Set([...ids].filter(id => visibleIds.has(id))));
+    }
+  }, [dashboard, queryKey]);
+  useEffect(() => {
+    setCheckedIds(new Set());
+    setAdsDrawerOpen(false); setDrawerPostIds([]); setCommentDrawerPostId(null);
+  }, [filterKey, requestedPage]);
+  useEffect(() => {
+    if (dashboard && dashboard.page !== requestedPage) {
+      setPagination({ filterKey, page: dashboard.page });
+    }
+  }, [dashboard, requestedPage, filterKey]);
 
   useEffect(() => {
     try {
@@ -700,75 +735,10 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     document.addEventListener("mouseup", onUp);
   }
 
-  // Filter by the same date the "Giờ đăng" column shows (scheduledAt, falling
-  // back to updatedAt for immediate "Đăng ngay" posts) — not createdAt, so
-  // e.g. posts scheduled today for tomorrow/the day after show up when the
-  // user picks tomorrow/the day after, not "today" (when they were created).
-  const dateFiltered = dateRange
-    ? localPosts.filter((p) => {
-        const d = new Date(p.scheduledAt ?? (p.fbPostUrl || p.igPostUrl ? p.updatedAt : p.createdAt));
-        return d >= dateRange.from && d <= dateRange.to;
-      })
-    : localPosts;
-
-  const counts = {
-    all: dateFiltered.filter((p) => p.status !== "failed").length,
-    pending: dateFiltered.filter((p) => p.status === "pending").length,
-    queued: dateFiltered.filter((p) => p.status === "queued").length,
-    publishing: dateFiltered.filter((p) => p.status === "publishing").length,
-    done: dateFiltered.filter((p) => p.status === "done").length,
-    partial: dateFiltered.filter((p) => p.status === "partial").length,
-    failed: dateFiltered.filter((p) => p.status === "failed").length,
-    fetching: dateFiltered.filter((p) => p.status === "fetching").length,
-  };
-
-  const statusFiltered = filter === "all"
-    ? dateFiltered.filter((p) => p.status !== "failed")
-    : dateFiltered.filter((p) => p.status === filter);
-
-  const searchFiltered = searchQuery.trim()
-    ? statusFiltered.filter((p) => {
-        const q = searchQuery.trim().toLowerCase();
-        return (p.title ?? "").toLowerCase().includes(q)
-          || (p.finalCaption ?? p.rawCaption ?? "").toLowerCase().includes(q)
-          || (p.campaignName ?? "").toLowerCase().includes(q)
-          || p.sourceUrl.toLowerCase().includes(q);
-      })
-    : statusFiltered;
-
-  const distinctPageIds = Array.from(new Set(searchFiltered.map((p) => p.pageId).filter((v): v is string => !!v)));
-  const distinctAccountIds = Array.from(new Set(searchFiltered.map((p) => p.adAccountUsed).filter((v): v is string => !!v)));
-
-  const filtered = searchFiltered.filter((p) => {
-    if (pageFilterIds.size > 0 && !pageFilterIds.has(p.pageId ?? "")) return false;
-    if (tkqcFilterIds.size > 0 && !tkqcFilterIds.has(p.adAccountUsed ?? "")) return false;
-    return true;
-  });
-
-  // Auto-refresh while the Queue or a publisher is processing posts.
-  useEffect(() => {
-    if (counts.queued > 0 || counts.publishing > 0 || counts.fetching > 0) {
-      refreshTimerRef.current = setInterval(() => router.refresh(), 3000);
-    }
-    return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
-  }, [counts.queued, counts.publishing, counts.fetching, router]);
-
-  // Refresh when user comes back to this tab (e.g. after creating a batch)
-  useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible") router.refresh(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [router]);
-
-  // Refresh on every mount too — clicking "Dashboard" in the sidebar is a
-  // client-side navigation, not a full page load, so Next.js can serve this
-  // dynamic route from its client-side router cache (stale up to 30s) unless
-  // explicitly told to refetch. Without this, posts scheduled/published from
-  // the batch page a moment ago wouldn't show up here until a hard refresh.
-  useEffect(() => {
-    router.refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const counts = dashboard?.counts ?? { all: 0, pending: 0, queued: 0, publishing: 0, done: 0, partial: 0, failed: 0, fetching: 0 };
+  const distinctPageIds = dashboard?.pageIds ?? initialDashboard.pageIds;
+  const distinctAccountIds = dashboard?.accountIds ?? initialDashboard.accountIds;
+  const filtered = dashboard ? (loadedKey === queryKey ? localPosts : dashboard.posts) : [];
 
   // Fetch templates once on mount; auto-set publishToPage based on active template postType
   useEffect(() => {
@@ -802,14 +772,14 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
   async function deletePost(postId: string) {
     setDeletingId(postId);
     const res = await fetch(`/api/posts/${postId}`, { method: "DELETE" });
-    if (res.ok) { setLocalPosts((prev) => prev.filter((p) => p.id !== postId)); show("Đã xoá bài", "success"); }
+    if (res.ok) { setLocalPosts((prev) => prev.filter((p) => p.id !== postId)); setCheckedIds(new Set()); void refreshDashboard(); show("Đã xoá bài", "success"); }
     else show("Xoá thất bại", "error");
     setDeletingId(null);
   }
 
   async function retryPost(postId: string) {
     const res = await fetch(`/api/posts/${postId}/retry`, { method: "POST" });
-    if (res.ok) { show("Đang thử lại...", "info"); setTimeout(() => router.refresh(), 1500); }
+    if (res.ok) { show("Đang thử lại...", "info"); void refreshDashboard(); }
     else show("Retry thất bại", "error");
   }
 
@@ -830,6 +800,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     }
     setLocalPosts((rows) => rows.map((row) => row.id === post.id ? { ...row, adStatus: "queued", errorMsg: null, adNextAttemptAt: null } : row));
     show("Quyền hợp lệ. Đã xếp lại riêng Ads, không đăng lại bài.", "success");
+    void refreshDashboard();
   }
 
   // ── Bulk delete ──────────────────────────────────────────────────────────────
@@ -842,6 +813,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     }
     show(`Đã xoá ${ok} bài`, "success");
     setCheckedIds(new Set());
+    void refreshDashboard();
   }
 
   // ── Bulk publish ─────────────────────────────────────────────────────────────
@@ -878,6 +850,7 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
     setBulkRunning(false);
     show(`Đã xếp hàng ${map.size}/${checkedPending.length} bài`, map.size > 0 ? "success" : "error");
     setCheckedIds(new Set());
+    void refreshDashboard();
   }
 
   const btnBase = "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all";
@@ -1054,10 +1027,11 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
         </div>
       </div>
 
-          {/* Ads management table */}
+      {/* Ads management table */}
+      {dashboardError && <div role="alert" className="mb-2 flex items-center gap-3 text-sm text-red-600">{dashboardError.message}<button onClick={() => void refreshDashboard()} className="underline">Thử lại</button></div>}
       <div className="flex-1 min-h-0 flex gap-4">
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
-      {filtered.length === 0 ? (
+      {!dashboard && !dashboardError ? <p className="p-6 text-sm text-slate-500">Đang tải bài…</p> : filtered.length === 0 ? (
         <EmptyState title="Chưa có bài nào"
           action={filter === "all" && <Link href="/posts/new"><Button variant="outline">Tạo batch đầu tiên</Button></Link>} />
       ) : (
@@ -1346,6 +1320,14 @@ export function DashboardClient({ posts, connections, adAccounts }: Props) {
           </table>
         </div>
       )}
+      <div className="shrink-0 flex items-center justify-between gap-3 pt-3 text-sm text-slate-600">
+        <span>{dashboard ? `Đang hiển thị ${dashboard.total ? (dashboard.page - 1) * dashboard.pageSize + 1 : 0}–${Math.min(dashboard.page * dashboard.pageSize, dashboard.total)} / ${dashboard.total} bài` : "Đang tải…"}</span>
+        <div className="flex items-center gap-3">
+          <button className="rounded-lg border px-3 py-1.5 disabled:opacity-40" disabled={!dashboard || dashboard.page <= 1 || isValidating || bulkRunning || drawerApplying} onClick={() => setPagination({ filterKey, page: (dashboard?.page ?? 1) - 1 })}>Trang trước</button>
+          <span>Trang {dashboard?.page ?? requestedPage} / {dashboard?.totalPages ?? 1}</span>
+          <button className="rounded-lg border px-3 py-1.5 disabled:opacity-40" disabled={!dashboard || dashboard.page >= dashboard.totalPages || isValidating || bulkRunning || drawerApplying} onClick={() => setPagination({ filterKey, page: (dashboard?.page ?? 1) + 1 })}>Trang sau</button>
+        </div>
+      </div>
       </div>
 
       {/* Ads drawer — single post or bulk selection, editable before applying */}
