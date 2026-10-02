@@ -890,7 +890,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
                   ? "bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900"
                   : "bg-muted text-muted-foreground hover:bg-accent",
               ].join(" ")}>
-              {FILTER_LABELS[s]} ({s === "all" ? counts.all : counts[s]})
+              {FILTER_LABELS[s]} ({dashboard ? counts[s] : "…"})
             </button>
           ))}
         </div>
@@ -1050,7 +1050,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
             <thead className="sticky top-0 z-20">
               <tr className="border-b bg-slate-50 dark:bg-slate-800/80">
                 <th className="w-10 px-3 py-3">
-                  <button onClick={toggleAll} className="text-slate-400 hover:text-blue-600 transition-colors">
+                  <button onClick={toggleAll} title="Chọn tất cả bài trên trang này" className="text-slate-400 hover:text-blue-600 transition-colors">
                     {allChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} />}
                   </button>
                 </th>
