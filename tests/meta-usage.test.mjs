@@ -53,4 +53,7 @@ test("maps stored Meta failures to actionable Vietnamese labels", () => {
   assert.equal(metaErrorDisplay("OAuthException code=190").label, "Token hết hạn");
   assert.equal(metaErrorDisplay("Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.").label, "Thiếu quyền quảng bá Page");
   assert.equal(metaErrorDisplay("[source] Bài chưa sẵn sàng").label, "Bài đang được Facebook xử lý");
+  assert.equal(metaErrorDisplay("[asset-access-check] Không xác minh được quyền Meta").label, "Chưa xác minh được quyền Meta");
+  assert.equal(metaErrorDisplay("Permission denied [Meta code=200]").label, "Meta từ chối quyền thao tác");
+  assert.equal(metaErrorDisplay("[source] cannot be advertised permission code=200").kind, "source");
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { META_GRAPH_API as FB_API, META_GRAPH_VIDEO_API as FB_VIDEO_API } from "@/lib/meta";
 import { applyAdvantageAudience, applyAdvantagePlacements, type AdAdvantageConfig } from "@/lib/adAdvantage";
 import {
@@ -319,11 +320,30 @@ export async function fetchAdTemplateBlueprint(
   return blueprint;
 }
 
-function permissionCacheKey(adAccountId: string, pageId: string, instagramUserId?: string) {
-  return [adAccountId.replace(/^act_/, ""), pageId, instagramUserId ?? "facebook"].join(":");
+function permissionCacheKey(adAccountId: string, pageId: string, instagramUserId: string | undefined, accessToken: string, pageAccessToken?: string) {
+  const fingerprint = createHash("sha256").update(JSON.stringify([accessToken, pageAccessToken ?? null])).digest("hex");
+  return [adAccountId.replace(/^act_/, ""), pageId, instagramUserId ?? "facebook", fingerprint].join(":");
 }
 
 const PAGE_TOKEN_CACHE_MARKER = "__POSTFLOW_USE_PAGE_TOKEN__";
+
+// Follow opaque cursors on the original Graph endpoint, not arbitrary next URLs.
+async function assetListContains(url: string, id: string, context: MetaRequestContext): Promise<boolean> {
+  let next = url;
+  const cursors = new Set<string>();
+  while (next) {
+    const response = await metaJson<{ data?: Array<{ id?: string }>; paging?: { next?: string; cursors?: { after?: string } } }>(next, {}, context);
+    if ((response.data ?? []).some((asset) => asset.id === id)) return true;
+    const after = response.paging?.cursors?.after;
+    if (!response.paging?.next) return false;
+    if (!after || cursors.has(after)) throw new Error("[asset-access-check] Không đọc được đầy đủ danh sách quyền Meta.");
+    cursors.add(after);
+    const page = new URL(url);
+    page.searchParams.set("after", after);
+    next = page.toString();
+  }
+  return false;
+}
 
 export async function ensureAdAssetAccess(
   adAccountId: string,
@@ -331,14 +351,13 @@ export async function ensureAdAssetAccess(
   instagramUserId: string | undefined,
   accessToken: string,
   pageAccessToken?: string,
-  options: { forceRefresh?: boolean } = {},
+  options: { forceRefresh?: boolean; rechecked?: boolean } = {},
 ): Promise<string> {
   const normalizedId = adAccountId.replace(/^act_/, "");
-  const cacheKey = permissionCacheKey(normalizedId, pageId, instagramUserId);
+  const cacheKey = permissionCacheKey(normalizedId, pageId, instagramUserId, accessToken, pageAccessToken);
   if (options.forceRefresh) await prisma.metaPermissionCache.deleteMany({ where: { cacheKey } });
   const cached = await prisma.metaPermissionCache.findUnique({ where: { cacheKey } });
-  if (cached && cached.expiresAt.getTime() > Date.now()) {
-    if (!cached.allowed) throw new AdTemplateConfigurationError(cached.errorMsg || "TKQC chưa được cấp quyền dùng Page/Instagram.");
+  if (cached?.allowed && cached.expiresAt.getTime() > Date.now()) {
     if (cached.errorMsg === PAGE_TOKEN_CACHE_MARKER) {
       if (pageAccessToken) return pageAccessToken;
       await prisma.metaPermissionCache.deleteMany({ where: { cacheKey } });
@@ -348,14 +367,14 @@ export async function ensureAdAssetAccess(
   }
 
   let errorMsg: string | null = null;
+  let discoveryFailed = false;
   let effectiveAccessToken = accessToken;
   try {
-    const promotePages = await metaJson<{ data?: Array<{ id?: string }> }>(
+    let canPromotePage = await assetListContains(
       `${FB_API}/act_${normalizedId}/promote_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
-      {},
+      pageId,
       { adAccountId: normalizedId },
     );
-    let canPromotePage = (promotePages.data ?? []).some((page) => page.id === pageId);
     // A Page newly shared as a partner asset can appear in the ad account's
     // owning Business client_pages before Meta adds it to promote_pages.
     // Treat that authoritative Business assignment as valid instead of
@@ -368,35 +387,48 @@ export async function ensureAdAssetAccess(
       );
       const businessId = account.business?.id;
       if (businessId) {
-        const [ownedPages, clientPages] = await Promise.all([
-          metaJson<{ data?: Array<{ id?: string }> }>(
+        const [ownedPages, clientPages] = await Promise.allSettled([
+          assetListContains(
             `${FB_API}/${businessId}/owned_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
-            {},
+            pageId,
             { adAccountId: normalizedId },
           ),
-          metaJson<{ data?: Array<{ id?: string }> }>(
+          assetListContains(
             `${FB_API}/${businessId}/client_pages?fields=id&limit=200&access_token=${encodeURIComponent(accessToken)}`,
-            {},
+            pageId,
             { adAccountId: normalizedId },
           ),
         ]);
-        canPromotePage = [...(ownedPages.data ?? []), ...(clientPages.data ?? [])].some((page) => page.id === pageId);
+        canPromotePage = [ownedPages, clientPages].some((result) => result.status === "fulfilled" && result.value);
+        if (!canPromotePage) {
+          const failed = [ownedPages, clientPages].find((result) => result.status === "rejected");
+          if (failed?.status === "rejected") throw failed.reason;
+        }
       }
     }
     if (!canPromotePage) {
       errorMsg = "Tài khoản quảng cáo chưa được cấp quyền quảng bá Page đã chọn.";
     }
     if (!errorMsg && instagramUserId) {
-      const instagramAccounts = await metaJson<{ data?: Array<{ id?: string }> }>(
+      const hasInstagram = await assetListContains(
         `${FB_API}/act_${normalizedId}/instagram_accounts?fields=id&access_token=${encodeURIComponent(accessToken)}`,
-        {},
+        instagramUserId,
         { adAccountId: normalizedId },
       );
-      if (!(instagramAccounts.data ?? []).some((account) => account.id === instagramUserId)) {
+      if (!hasInstagram) {
         errorMsg = "Tài khoản quảng cáo chưa được cấp quyền dùng tài khoản Instagram đã chọn.";
       }
     }
 
+  } catch (error) {
+    if (error instanceof MetaApiError && ["rate_limit", "token", "transient"].includes(error.category)) throw error;
+    if (error instanceof MetaApiError && error.category !== "permission") throw error;
+    discoveryFailed = true;
+    errorMsg = "[asset-access-check] Không xác minh được quyền Meta. Hệ thống sẽ thử lại.";
+  }
+
+  // A discovery permission error must not skip the scoped fallback.
+  try {
     // Page and ad-account connections can originate from different Facebook
     // users. The ad-account token may then miss the Page even though the saved
     // Page token can manage both exact assets. Verify both nodes before using
@@ -419,12 +451,11 @@ export async function ensureAdAssetAccess(
         && targetPage.id === pageId;
       let canUseInstagram = true;
       if (canUseAccountAndPage && instagramUserId) {
-        const instagramAccounts = await metaJson<{ data?: Array<{ id?: string }> }>(
+        canUseInstagram = await assetListContains(
           `${FB_API}/act_${normalizedId}/instagram_accounts?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`,
-          {},
+          instagramUserId,
           { adAccountId: normalizedId },
         );
-        canUseInstagram = (instagramAccounts.data ?? []).some((account) => account.id === instagramUserId);
       }
       if (canUseAccountAndPage && canUseInstagram) {
         errorMsg = null;
@@ -433,7 +464,15 @@ export async function ensureAdAssetAccess(
     }
   } catch (error) {
     if (error instanceof MetaApiError && ["rate_limit", "token", "transient"].includes(error.category)) throw error;
-    errorMsg = error instanceof Error ? error.message : "Không kiểm tra được quyền Page/Instagram";
+    if (!(error instanceof MetaApiError) || error.category !== "permission") throw error;
+  }
+
+  if (errorMsg) {
+    // Do what manual Retry does before any campaign mutation. Negative results
+    // are never cached; a stale denial must not block a new automatic attempt.
+    if (!options.rechecked) return ensureAdAssetAccess(adAccountId, pageId, instagramUserId, accessToken, pageAccessToken, { forceRefresh: true, rechecked: true });
+    if (discoveryFailed) throw new Error(errorMsg);
+    throw new AdTemplateConfigurationError(errorMsg);
   }
 
   await prisma.metaPermissionCache.upsert({
@@ -451,7 +490,6 @@ export async function ensureAdAssetAccess(
       expiresAt: new Date(Date.now() + 6 * 60 * 60_000),
     },
   });
-  if (errorMsg) throw new AdTemplateConfigurationError(errorMsg);
   return effectiveAccessToken;
 }
 
