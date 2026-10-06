@@ -6,6 +6,9 @@ export type MetaErrorDisplay = {
 export function metaErrorDisplay(message?: string | null): MetaErrorDisplay {
   const value = message ?? "";
   const normalized = value.toLowerCase();
+  if (/\[permission-retry\]/.test(normalized)) {
+    return { label: "Đã kiểm tra lại quyền · Đang tự thử lại Ads", kind: "other" };
+  }
   if (/\[asset-access-check\]/.test(normalized)) {
     return { label: "Chưa xác minh được quyền Meta", kind: "other" };
   }

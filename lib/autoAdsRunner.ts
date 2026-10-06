@@ -19,6 +19,8 @@ import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAc
 import { parseAdCtaType, resolveAdCtaScope, validateAdCta, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
 import { isFacebookOriginalCtaVerified } from "@/lib/facebookOriginalCta";
+import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
+import { recheckAdPermissionForRetry } from "@/lib/adPermissionRecovery";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -358,6 +360,19 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created in account ${adAccountId} (attempt ${attemptNumber})`);
     return facebookCtaResult;
   } catch (err) {
+    let permissionRecovered = false;
+    if (err instanceof MetaApiError) {
+      try {
+        permissionRecovered = await recheckAdPermissionForRetry(
+          err, attemptNumber, MAX_ATTEMPTS,
+          () => preflightPostAdPermission(post, true),
+        );
+      } catch (recheckError) {
+        // A confirmed denial stops; token/quota/transient probe failures retain
+        // their classification below. Never create paid assets in this probe.
+        err = recheckError;
+      }
+    }
     const msg = err instanceof Error ? err.message : "auto-ads failed";
     console.error(`[auto-ads] post ${params.postId} attempt ${attemptNumber} failed:`, msg);
 
@@ -374,7 +389,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A quota response needs a much longer, individually-jittered retry. It
     // must not be treated like a normal creative delay, otherwise every row
     // from the batch retries together and immediately exhausts Meta again.
-    if (!isConfigurationError && !isPermanentInstagramError && (sourceCanRetry || rateLimited || (!permanentMetaError && normalCanRetry))) {
+    if (!isConfigurationError && (!isPermanentInstagramError || permissionRecovered) && (sourceCanRetry || rateLimited || ((permissionRecovered || !permanentMetaError) && normalCanRetry))) {
       const delay = rateLimited
         ? Math.max((err instanceof MetaApiError ? err.retryAfterSeconds ?? 0 : 0) * 1000, metaRateLimitDelayMs(attemptNumber, params.postId))
         : sourceNotReady
@@ -388,7 +403,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
           // Waiting for quota is not a failed creation attempt. Keep the
           // previous count so a long throttle window cannot exhaust retries.
           adAttempt: rateLimited ? post.adAttempt ?? 0 : attemptNumber,
-          errorMsg: `${rateLimited ? "[quota]" : sourceNotReady ? "[source]" : "[ads]"} ${msg}`,
+          errorMsg: `${rateLimited ? "[quota]" : sourceNotReady ? "[source]" : permissionRecovered ? "[permission-retry]" : "[ads]"} ${msg}`,
         },
       }).catch(() => {});
       return { retry: true, retryAfterSeconds: Math.ceil(delay / 1000) };
