@@ -5,6 +5,8 @@ import {
   parseAdPlacementConfig,
   placementSoftOptOutFromConfig,
   validateAdPlacements,
+  adPlacementAvailability,
+  toggleAdPlacementPlatform,
 } from "../lib/adPlacements.ts";
 
 const manual = {
@@ -16,6 +18,57 @@ const manual = {
   audienceNetworkPositions: ["classic"],
   threadsPositions: ["threads_stream"],
 };
+
+test("unavailable selected Instagram and Threads can be removed without changing other placements", () => {
+  const options = { instagramOnly: false, hasInstagram: false };
+  for (const [platform, field] of [["instagram", "instagramPositions"], ["threads", "threadsPositions"]]) {
+    const before = structuredClone(manual);
+    assert.deepEqual(adPlacementAvailability(before, platform, options), {
+      selected: true, missingInstagram: true, toggleDisabled: false, positionsDisabled: true,
+    });
+    const next = toggleAdPlacementPlatform(before, platform, options);
+    assert.deepEqual(next, {
+      ...before,
+      publisherPlatforms: before.publisherPlatforms.filter((item) => item !== platform),
+      [field]: [],
+    });
+    assert.deepEqual(before, manual);
+    assert.equal(toggleAdPlacementPlatform(next, platform, options), next);
+    assert.equal(adPlacementAvailability(next, platform, options).toggleDisabled, true);
+    assert.deepEqual(parseAdPlacementConfig(JSON.parse(JSON.stringify(next))), next);
+  }
+});
+
+test("linked Instagram permits ordinary toggles and position edits", () => {
+  const options = { instagramOnly: false, hasInstagram: true };
+  const off = toggleAdPlacementPlatform(manual, "instagram", options);
+  const on = toggleAdPlacementPlatform(off, "instagram", options);
+  assert.equal(on.publisherPlatforms.includes("instagram"), true);
+  assert.equal(adPlacementAvailability(on, "instagram", options).positionsDisabled, false);
+});
+
+test("missing Instagram never prevents Facebook toggles or silently mutates a remembered selection", () => {
+  const before = structuredClone(manual);
+  const options = { instagramOnly: false, hasInstagram: false };
+  adPlacementAvailability(before, "instagram", options);
+  assert.deepEqual(before, manual);
+  const next = toggleAdPlacementPlatform(before, "facebook", options);
+  assert.equal(next.publisherPlatforms.includes("instagram"), true);
+  assert.equal(next.publisherPlatforms.includes("threads"), true);
+  assert.match(validateAdPlacements(next, options) ?? "", /Instagram Professional/);
+  const withoutIg = toggleAdPlacementPlatform(toggleAdPlacementPlatform(before, "instagram", options), "threads", options);
+  assert.equal(validateAdPlacements(withoutIg, options), null);
+});
+
+test("Instagram-source ads cannot toggle into Facebook even when Instagram is unavailable", () => {
+  for (const hasInstagram of [true, false]) {
+    const options = { instagramOnly: true, hasInstagram };
+    assert.equal(toggleAdPlacementPlatform(manual, "instagram", options), manual);
+    assert.equal(toggleAdPlacementPlatform(manual, "facebook", options), manual);
+    assert.equal(adPlacementAvailability(manual, "facebook", options).positionsDisabled, true);
+    assert.equal(adPlacementAvailability(manual, "instagram", options).positionsDisabled, !hasInstagram);
+  }
+});
 
 test("manual placements replace all template placement families and keep other targeting", () => {
   const source = {

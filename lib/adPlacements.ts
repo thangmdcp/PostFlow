@@ -63,6 +63,37 @@ const META_POSITION_FIELD: Record<AdPublisherPlatform, keyof PlacementSoftOptOut
   threads: "threads_positions",
 };
 
+export function adPlacementAvailability(
+  config: AdPlacementConfig,
+  platform: AdPublisherPlatform,
+  options: { instagramOnly: boolean; hasInstagram: boolean },
+) {
+  const selected = config.publisherPlatforms.includes(platform);
+  const missingInstagram = (platform === "instagram" || platform === "threads") && !options.hasInstagram;
+  return {
+    selected,
+    missingInstagram,
+    toggleDisabled: options.instagramOnly || (missingInstagram && !selected),
+    positionsDisabled: missingInstagram || (options.instagramOnly && platform !== "instagram"),
+  };
+}
+
+export function toggleAdPlacementPlatform(
+  config: AdPlacementConfig,
+  platform: AdPublisherPlatform,
+  options: { instagramOnly: boolean; hasInstagram: boolean },
+): AdPlacementConfig {
+  const { selected, toggleDisabled } = adPlacementAvailability(config, platform, options);
+  if (toggleDisabled) return config;
+  return {
+    ...config,
+    publisherPlatforms: selected
+      ? config.publisherPlatforms.filter((item) => item !== platform)
+      : [...config.publisherPlatforms, platform],
+    [POSITION_FIELD[platform]]: selected ? [] : [...AD_POSITIONS[platform]],
+  };
+}
+
 function uniqueStrings(value: unknown): string[] {
   return Array.isArray(value)
     ? [...new Set(value.filter((item): item is string => typeof item === "string"))]
