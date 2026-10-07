@@ -9,7 +9,7 @@ cloudinary.config({
 
 export async function uploadFromUrl(
   mediaUrl: string,
-  options: { forceJpeg?: boolean; ensureInstagramAdWidth?: boolean; folder?: string } = {}
+  options: { forceJpeg?: boolean; ensureInstagramAdWidth?: boolean; folder?: string; publicId?: string } = {}
 ): Promise<{ publicId: string; secureUrl: string; resourceType: string; width?: number; height?: number }> {
   type UploadResult = {
     public_id: string;
@@ -20,13 +20,23 @@ export async function uploadFromUrl(
   };
 
   let result: UploadResult | null = null;
+  if (options.publicId) {
+    try {
+      result = await cloudinary.api.resource(`${options.folder ?? "postflow"}/${options.publicId}`, { resource_type: "image" }) as UploadResult;
+    } catch (error) {
+      if ((error as { error?: { http_code?: number } }).error?.http_code !== 404 && (error as { http_code?: number }).http_code !== 404) throw error;
+    }
+  }
   // Try direct URL upload first (works for most CDNs)
   try {
-    result = await cloudinary.uploader.upload(mediaUrl, {
-      resource_type: options.forceJpeg ? "image" : "auto",
-      folder: options.folder ?? "postflow",
-      ...(options.forceJpeg ? { format: "jpg" } : {}),
-    });
+    if (!result) {
+      result = await cloudinary.uploader.upload(mediaUrl, {
+        resource_type: options.forceJpeg ? "image" : "auto",
+        folder: options.folder ?? "postflow",
+        ...(options.forceJpeg ? { format: "jpg" } : {}),
+        ...(options.publicId ? { public_id: options.publicId, overwrite: false } : {}),
+      });
+    }
   } catch {
     // fbcdn blocks Cloudinary's fetcher — download via server then stream upload
   }
@@ -43,7 +53,7 @@ export async function uploadFromUrl(
 
     result = await new Promise<UploadResult>((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: resourceType as "video" | "image" | "auto", folder: options.folder ?? "postflow", ...(options.forceJpeg ? { format: "jpg" } : {}) },
+        { resource_type: resourceType as "video" | "image" | "auto", folder: options.folder ?? "postflow", ...(options.forceJpeg ? { format: "jpg" } : {}), ...(options.publicId ? { public_id: options.publicId, overwrite: false } : {}) },
         (err, res) => {
           if (err || !res) return reject(err ?? new Error("Upload thất bại"));
           resolve(res as UploadResult);

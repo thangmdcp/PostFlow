@@ -28,6 +28,7 @@ model Post {
   thumbnailUrl   String?
   mediaUrls      String?
   mediaType      String?
+  fetchMediaManifest Json?
   extractedLinks ExtractedLink[]
   comments       PostComment[]
   pageId         String?

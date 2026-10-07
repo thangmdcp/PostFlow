@@ -48,7 +48,7 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
     },
     data: {
       status: "fetching",
-      errorMsg: "Đang lấy nội dung và video…",
+      errorMsg: "Đang lấy nội dung và media…",
       fetchLeaseUntil: new Date(now.getTime() + FETCH_LEASE_MS),
       fetchNextAttemptAt: null,
     },
@@ -56,16 +56,22 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   if (claim.count === 0) return { status: "skipped" };
 
   try {
-    const fields = await fetchPostFieldsWithRetry(post.sourceUrl, { skipAutoDown: post.fetchProvider === "rapidapi" });
+    const fields = await fetchPostFieldsWithRetry(post.sourceUrl, {
+      skipAutoDown: post.fetchProvider === "rapidapi", manifest: post.fetchMediaManifest, postId: post.id,
+      checkpoint: async (assets) => {
+        await prisma.post.update({ where: { id: post.id }, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
+      },
+    });
     await prisma.post.update({
       where: { id: post.id },
       data: {
         title: fields.title, rawCaption: fields.rawCaption, finalCaption: null, stableMediaUrl: fields.stableMediaUrl,
         thumbnailUrl: fields.thumbnailUrl, mediaUrls: fields.mediaUrls, mediaType: fields.mediaType,
         cloudinaryId: fields.cloudinaryId, status: "ready", errorMsg: null,
-        fetchProvider: fields.cloudinaryId?.startsWith("temp/") ? "autodown" : "rapidapi",
+        fetchProvider: fields.fetchProvider,
+        fetchMediaManifest: fields.fetchMediaManifest.length ? fields.fetchMediaManifest as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         fetchErrorCode: null, fetchHttpStatus: null, fetchNextAttemptAt: null, fetchLeaseUntil: null,
-        fetchDiagnostics: Prisma.JsonNull,
+        fetchDiagnostics: fields.diagnostics.length ? fields.diagnostics as unknown as Prisma.InputJsonValue : Prisma.JsonNull,
         extractedLinks: {
           deleteMany: {},
           create: fields.links.map((url, index) => ({ order: index + 1, competitorUrl: url })),

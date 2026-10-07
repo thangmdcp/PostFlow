@@ -45,6 +45,8 @@ export interface AutoDownDownloadResult {
   thumbnail?: string;
   media: AutoDownMedia[];
   cached?: boolean;
+  extractor?: "gallery-dl" | "yt-dlp";
+  extractorVersion?: string;
 }
 
 interface AutoDownErrorBody {

@@ -11,6 +11,7 @@ import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 import { MetaApiError } from "@/lib/metaApiClient";
 import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
+import { cleanupFetchedPhotos } from "@/lib/fetchMediaCleanup";
 
 export interface PublishDuePostResult {
   id: string;
@@ -232,6 +233,7 @@ export async function publishDuePost(
     if (status === "done") {
       try {
         const latest = await prisma.post.findUniqueOrThrow({ where: { id: post.id } });
+        await cleanupFetchedPhotos(post.id);
         await cleanupInstagramMedia(post.id, latest.igMediaManifest);
         if (isAutoDownAsset(cloudinaryId)) await autodownCleanup([cloudinaryId]);
         else if (cloudinaryId) {

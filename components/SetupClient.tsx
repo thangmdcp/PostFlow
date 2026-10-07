@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS "Post" (
   "fetchHttpStatus" INTEGER,
   "fetchLeaseUntil" TIMESTAMP(3),
   "fetchDiagnostics" JSONB,
+  "fetchMediaManifest" JSONB,
   "fbPostId" TEXT,
   "fbPostUrl" TEXT,
   "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE,
@@ -89,6 +90,7 @@ ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUserId" TEXT;
 ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramUsername" TEXT;
 ALTER TABLE "FbConnection" ADD COLUMN IF NOT EXISTS "instagramProfilePicture" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToFacebook" BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchMediaManifest" JSONB;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "sponsoredContentTagEnabled" BOOLEAN;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "publishToInstagram" BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fbPublishStatus" TEXT;

@@ -95,6 +95,7 @@ export async function attemptStory(postId: string): Promise<{ retry: boolean; re
       where: { id: postId },
       data: { storyStatus: "done", storyPostId: result.postId, storyNextAttemptAt: null, errorMsg: null, storyPostedAt: new Date() },
     });
+    await import("@/lib/fetchMediaCleanup").then((module) => module.cleanupFetchedPhotos(postId)).catch(() => {});
     console.log(`[auto-story] post ${postId}: story ${result.postId} posted (attempt ${attemptNumber})`);
     return { retry: false };
   } catch (err) {

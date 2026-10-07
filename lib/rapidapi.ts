@@ -15,6 +15,9 @@ export interface RapidApiPostData {
   title?: string;
   caption: string;
   media: RapidApiMedia[];
+  provider?: "autodown" | "rapidapi";
+  extractor?: string;
+  diagnostics?: SourceFetchDiagnostic[];
 }
 
 function isFacebookUrl(url: string) {
@@ -96,7 +99,7 @@ async function fetchViaAutoDown(url: string): Promise<RapidApiPostData> {
     publicId: m.public_id,
     thumbnail: m.type === "video" ? downloaded.thumbnail : undefined,
   }));
-  return { caption: downloaded.caption ?? "", media };
+  return { caption: downloaded.caption ?? "", media, provider: "autodown", extractor: downloaded.extractor ?? "yt-dlp" };
 }
 
 async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
@@ -144,19 +147,21 @@ async function fetchFacebookPostWithKey(url: string, apiKey: string): Promise<Ra
     const files = post.video_files as Record<string, string>;
     if (files.hd_url) media.push({ url: files.hd_url, type: "video", quality: "hd" });
     if (files.sd_url) media.push({ url: files.sd_url, type: "video", quality: "sd" });
-    const thumb = (post.video_thumbnail ?? (post.image as Record<string,string>)?.uri) as string | undefined;
-    if (thumb) media.push({ url: thumb, type: "photo" });
-    return { caption, media };
+    if (media.length) {
+      const thumb = (post.video_thumbnail ?? (post.image as Record<string,string>)?.uri) as string | undefined;
+      if (thumb) media.push({ url: thumb, type: "photo" });
+      return { caption, media };
+    }
   }
 
-  // Carousel: album_preview contains all photos
+  // album_preview is only the provider's returned subset, not proof of completeness.
   const albumPreview = post?.album_preview as Array<Record<string, string>> | null;
   if (Array.isArray(albumPreview) && albumPreview.length > 0) {
     for (const item of albumPreview) {
       const uri = item.image_file_uri;
       if (uri) media.push({ url: uri, type: "photo" });
     }
-    return { caption, media };
+    if (media.length) return { caption, media };
   }
 
   // Single photo
@@ -231,7 +236,8 @@ export async function fetchPostData(url: string, options: { skipAutoDown?: boole
     }
   }
   try {
-    return isFb ? await fetchFacebookPost(url) : await fetchGenericPost(url);
+    const result = isFb ? await fetchFacebookPost(url) : await fetchGenericPost(url);
+    return { ...result, provider: "rapidapi", diagnostics: autodownDiagnostic ? [autodownDiagnostic] : [] };
   } catch (cause) {
     if (!(cause instanceof SourceFetchError) || !autodownDiagnostic) throw cause;
     throw new SourceFetchError({

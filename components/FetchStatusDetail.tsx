@@ -25,7 +25,8 @@ export function FetchStatusDetail(props: FetchStatusDetailProps) {
     return () => clearInterval(timer);
   }, [props.status, nextAt]);
 
-  if (!props.fetchErrorCode && !(props.status === "queued" && props.errorMsg)) return null;
+  const showSource = props.status === "ready" && !!props.fetchProvider;
+  if (!showSource && !props.fetchErrorCode && !(props.status === "queued" && props.errorMsg)) return null;
   const remaining = now !== null && nextAt ? Math.max(0, Math.ceil((nextAt - now) / 1000)) : null;
   const countdown = remaining === null ? "" : ` · ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
   const diagnostics = Array.isArray(props.fetchDiagnostics)
@@ -44,11 +45,11 @@ export function FetchStatusDetail(props: FetchStatusDetailProps) {
 
   return (
     <p
-      className={`mt-0.5 flex items-center gap-1 text-[10px] leading-tight ${props.status === "failed" ? "text-red-500" : "text-amber-600"}`}
+      className={`mt-0.5 flex items-center gap-1 text-[10px] leading-tight ${props.status === "failed" ? "text-red-500" : showSource ? "text-slate-500" : "text-amber-600"}`}
       title={title || props.errorMsg || undefined}
     >
       {props.status === "queued" && <Clock size={9} className="shrink-0" />}
-      <span className="line-clamp-2">{props.errorMsg || "Đang chờ nguồn Facebook"}{countdown}</span>
+      <span className="line-clamp-2">{showSource ? `Nguồn: ${props.fetchProvider}` : props.errorMsg || "Đang chờ nguồn Facebook"}{countdown}</span>
       {(props.fetchAttempt ?? 0) > 0 && <span className="shrink-0">· lần {props.fetchAttempt}</span>}
     </p>
   );

@@ -357,6 +357,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
       where: { id: params.postId },
       data: { adStatus: "done", adCampaignId: campaignId, adAccountUsed: adAccountId, adAttempt: attemptNumber, errorMsg: null, adNextAttemptAt: null },
     });
+    await import("@/lib/fetchMediaCleanup").then((module) => module.cleanupFetchedPhotos(params.postId)).catch(() => {});
     console.log(`[auto-ads] post ${params.postId}: campaign ${campaignId} created in account ${adAccountId} (attempt ${attemptNumber})`);
     return facebookCtaResult;
   } catch (err) {
