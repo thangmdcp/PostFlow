@@ -189,6 +189,11 @@ export async function readFacebookOriginalCta(
   return facebookOriginalCtaState(payload);
 }
 
+/** Verify Page-read access independently of the just-published story. */
+export async function checkFacebookCtaPageReadAccess(pageId: string, accessToken: string): Promise<void> {
+  await metaJson(`${FB_API}/${pageId}/published_posts?fields=id&limit=1&access_token=${encodeURIComponent(accessToken)}`, {}, { pageId });
+}
+
 // Facebook Stories are media-only via the Graph API — there is no caption/
 // text-overlay field and no way to attach a clickable link (link stickers
 // are a manual mobile-app-only feature), confirmed against the actual API

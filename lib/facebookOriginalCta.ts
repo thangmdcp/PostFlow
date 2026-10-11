@@ -8,6 +8,13 @@ export interface FacebookOriginalCtaState {
 
 type UnknownRecord = Record<string, unknown>;
 
+/** Code 10 on a newly published story is ambiguous, not proof of lost Page access.
+ * Only treat it as propagation delay after a separate Page-read probe succeeds.
+ */
+export function shouldProbeFacebookCtaReadiness(error: { code?: number }, phase: string): boolean {
+  return error.code === 10 && ["resolve", "read"].includes(phase);
+}
+
 function record(value: unknown): UnknownRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord

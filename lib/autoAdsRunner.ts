@@ -5,6 +5,7 @@ import {
   cloneAdCampaign,
   fetchAdTemplateBlueprint,
   readFacebookOriginalCta,
+  checkFacebookCtaPageReadAccess,
   resolveFacebookPromotableStoryId,
   updateFacebookVideoCallToAction,
 } from "@/lib/facebook";
@@ -18,7 +19,7 @@ import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 import { parseAdCtaType, resolveAdCtaScope, validateAdCta, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
-import { isFacebookOriginalCtaVerified } from "@/lib/facebookOriginalCta";
+import { isFacebookOriginalCtaVerified, shouldProbeFacebookCtaReadiness } from "@/lib/facebookOriginalCta";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 import { recheckAdPermissionForRetry } from "@/lib/adPermissionRecovery";
 
@@ -194,6 +195,7 @@ async function attemptFacebookOriginalCta(
     });
     return { retry: false };
   }
+  let ctaPhase = "resolve";
   try {
     const objectStoryId = post.fbObjectStoryId
       ?? await resolveFacebookPromotableStoryId(post.pageId, post.fbPostId!, pageAccessToken);
@@ -203,6 +205,7 @@ async function attemptFacebookOriginalCta(
 
     // Always read first. This makes retries idempotent and lets PostFlow
     // recover a response timeout where Meta applied the CTA successfully.
+    ctaPhase = "read";
     const before = await readFacebookOriginalCta(post.pageId, objectStoryId, pageAccessToken);
     if (isFacebookOriginalCtaVerified(before, ctaType, post.adDestinationUrl)) {
       await prisma.post.update({
@@ -215,7 +218,9 @@ async function attemptFacebookOriginalCta(
       return { retry: false };
     }
 
+    ctaPhase = "update";
     await updateFacebookVideoCallToAction(post.pageId, post.fbMediaId, pageAccessToken, ctaType, post.adDestinationUrl);
+    ctaPhase = "read";
     const after = await readFacebookOriginalCta(post.pageId, objectStoryId, pageAccessToken);
     if (isFacebookOriginalCtaVerified(after, ctaType, post.adDestinationUrl)) {
       await prisma.post.update({
@@ -250,11 +255,23 @@ async function attemptFacebookOriginalCta(
     });
     return { retry: false };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Meta không cập nhật được CTA trên bài Facebook gốc.";
-    const retryable = !(error instanceof MetaApiError) || ["rate_limit", "transient", "unknown"].includes(error.category);
+    let message = error instanceof Error ? error.message : "Meta không cập nhật được CTA trên bài Facebook gốc.";
+    let retryable = !(error instanceof MetaApiError) || ["rate_limit", "transient", "unknown"].includes(error.category);
+    let retryAfterSeconds = error instanceof MetaApiError ? error.retryAfterSeconds ?? 0 : 0;
+    if (error instanceof MetaApiError && shouldProbeFacebookCtaReadiness(error, ctaPhase)) {
+      try {
+        await checkFacebookCtaPageReadAccess(post.pageId, pageAccessToken);
+        retryable = true;
+        message = `Bài Facebook chưa sẵn sàng để cập nhật CTA · tự thử lại. ${message}`;
+      } catch (probeError) {
+        retryable = probeError instanceof MetaApiError && ["rate_limit", "transient"].includes(probeError.category);
+        if (probeError instanceof MetaApiError) retryAfterSeconds = Math.max(retryAfterSeconds, probeError.retryAfterSeconds ?? 0);
+        message = probeError instanceof Error ? probeError.message : message;
+      }
+    }
     if (retryable && attempt <= FACEBOOK_CTA_RETRY_DELAYS_MS.length) {
       const delay = Math.max(
-        error instanceof MetaApiError ? (error.retryAfterSeconds ?? 0) * 1000 : 0,
+        retryAfterSeconds * 1000,
         FACEBOOK_CTA_RETRY_DELAYS_MS[Math.min(attempt - 1, FACEBOOK_CTA_RETRY_DELAYS_MS.length - 1)],
       );
       await prisma.post.update({
