@@ -10,6 +10,7 @@ import { adsPanel } from "@/lib/ui-classes";
 import { AdPlacementSelector } from "@/components/AdPlacementSelector";
 import type { AdPlacementConfig } from "@/lib/adPlacements";
 import type { AdCtaScope, AdCtaType } from "@/lib/adCta";
+import { facebookPostCtaEligibility } from "@/lib/adCta";
 import { DEFAULT_BATCH_ADVANTAGE, type BatchAdvantageConfig, type CampaignBudgetMode } from "@/lib/adAdvantage";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
@@ -93,7 +94,13 @@ interface AdsConfigPanelProps {
 }
 
 export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true }: AdsConfigPanelProps) {
-  const canUpdateFacebookPost = hasFacebook && (adConfig.postType !== "dark" || adConfig.overridePublish);
+  const facebookCta = facebookPostCtaEligibility({
+    hasFacebook,
+    overridePublish: adConfig.overridePublish,
+    templateIds: hideTemplateSelect ? accountRows.map((row) => row.templateId) : [adConfig.templateId],
+    templates,
+  });
+  const canUpdateFacebookPost = facebookCta.allowed;
   const patchAdvantage = (patch: Partial<BatchAdvantageConfig>) => onPatch({
     advantage: { ...adConfig.advantage, ...patch },
   });
@@ -178,12 +185,12 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
                   Chỉ trên quảng cáo
                 </button>
                 <button type="button" disabled={!canUpdateFacebookPost} onClick={() => onPatch({ ctaScope: "AD_AND_FACEBOOK_POST" })}
-                  className={`px-2 py-2 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${adConfig.ctaScope === "AD_AND_FACEBOOK_POST" && canUpdateFacebookPost ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
+                  className={`px-2 py-2 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${adConfig.ctaScope === "AD_AND_FACEBOOK_POST" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300"}`}>
                   Quảng cáo + bài Facebook gốc
                 </button>
               </div>
               {adConfig.ctaScope === "AD_AND_FACEBOOK_POST" && canUpdateFacebookPost && <p className="text-[10px] leading-4 text-amber-600">PostFlow cập nhật chính Reel/video đã đăng; không tạo thêm bài. Nếu Meta từ chối, Ads vẫn được tạo và bài Page hiện cảnh báo.</p>}
-              {!canUpdateFacebookPost && <p className="text-[10px] leading-4 text-pink-600">Bài Instagram-only hoặc chạy ẩn chỉ hỗ trợ CTA trên quảng cáo.</p>}
+              {!canUpdateFacebookPost && <p className="text-[10px] leading-4 text-pink-600">{facebookCta.reason}</p>}
             </div>
           )}
         </div>

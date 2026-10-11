@@ -8,6 +8,26 @@ export type AdCtaScope = (typeof AD_CTA_SCOPES)[number];
 export const DEFAULT_AD_CTA_TYPE: AdCtaType = "LEARN_MORE";
 export const DEFAULT_AD_CTA_SCOPE: AdCtaScope = "AD_ONLY";
 
+// Resolve from the live template selections, never the persisted postType hint.
+export function facebookPostCtaEligibility(input: {
+  hasFacebook: boolean;
+  overridePublish: boolean;
+  templateIds: Array<string | undefined>;
+  templates: Array<{ campaignId: string; templateName: string; settings?: Record<string, unknown> }>;
+}): { allowed: boolean; reason?: string } {
+  if (!input.hasFacebook) return { allowed: false, reason: "CTA trên bài gốc cần chọn nền tảng Facebook." };
+  const selected = input.templateIds.map((id) => input.templates.find((template) => template.campaignId === id));
+  if (!selected.length || selected.some((template) => !template)) {
+    return { allowed: false, reason: "Chọn template hợp lệ cho mọi TKQC để dùng CTA trên bài Facebook gốc." };
+  }
+  const dark = selected.filter((template) => template?.settings?.postType === "dark");
+  if (!input.overridePublish && dark.length) {
+    const names = [...new Set(dark.map((template) => template!.templateName))].join(", ");
+    return { allowed: false, reason: `Template chạy ẩn: ${names}. Chọn template công khai hoặc bật đăng công khai để dùng CTA trên bài Facebook gốc.` };
+  }
+  return { allowed: true };
+}
+
 export function parseAdCtaType(value: unknown): AdCtaType | null {
   return typeof value === "string" && (AD_CTA_TYPES as readonly string[]).includes(value)
     ? value as AdCtaType

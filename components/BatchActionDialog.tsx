@@ -29,6 +29,7 @@ import { templatePortability } from "@/lib/adTemplateBlueprint";
 import { EMPTY_AD_PLACEMENTS, parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
 import { currencyMajorInputStep } from "@/lib/adMoney";
 import { parseBatchAdvantageConfig } from "@/lib/adAdvantage";
+import { facebookPostCtaEligibility } from "@/lib/adCta";
 
 export interface BatchPageRow {
   pageId: string;
@@ -342,10 +343,8 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (needsInstagram && config.pageRows.some((row) => !connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId)) return "Tất cả Page đã chọn phải có Instagram Professional liên kết.";
     if (runsAds && config.accountRows.some((row) => !templates.some((template) => template.campaignId === row.templateId))) return "Mỗi TKQC phải chọn một template hợp lệ.";
     if (runsAds && config.adConfig.ctaType !== "NO_BUTTON" && config.adConfig.ctaScope === "AD_AND_FACEBOOK_POST") {
-      if (!hasFacebook) return "CTA trên bài gốc cần đăng Facebook.";
-      if (!config.adConfig.overridePublish && config.accountRows.some((row) => (templates.find((template) => template.campaignId === row.templateId)?.settings?.postType as string | undefined) === "dark")) {
-        return "CTA trên bài Facebook gốc không dùng được với template chạy ẩn.";
-      }
+      const eligibility = facebookPostCtaEligibility({ hasFacebook, overridePublish: config.adConfig.overridePublish, templateIds: config.accountRows.map((row) => row.templateId), templates });
+      if (!eligibility.allowed) return eligibility.reason!;
     }
     if (runsAds && config.accountRows.some((row) => {
       const template = templates.find((item) => item.campaignId === row.templateId);
