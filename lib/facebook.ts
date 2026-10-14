@@ -22,6 +22,7 @@ import {
 } from "@/lib/adSourceReadiness";
 import { adCallToAction, type AdCtaType } from "@/lib/adCta";
 import { facebookOriginalCtaState, type FacebookOriginalCtaState } from "@/lib/facebookOriginalCta";
+import { resolveAdInstagramIdentity, verifyPageBackedIdentity, type AdInstagramIdentity } from "@/lib/adInstagramIdentity";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -295,6 +296,7 @@ export type AdPostSource =
   | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string; ctaType: AdCtaType };
 
 export interface AdCreationState {
+  instagramIdentity?: AdInstagramIdentity | null;
   campaignId?: string | null;
   adSetId?: string | null;
   creativeId?: string | null;
@@ -303,6 +305,7 @@ export interface AdCreationState {
 }
 
 export interface AdCreationProgress {
+  instagramIdentity?: AdInstagramIdentity;
   campaignId?: string;
   adSetId?: string;
   creativeId?: string;
@@ -518,15 +521,23 @@ export async function cloneAdCampaign(
   onProgress?: (progress: AdCreationProgress) => Promise<void>
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
   const needsInstagramIdentity = source.platform === "instagram"
+    || advantageOverride?.placementsEnabled === true
     || Boolean(placementOverride?.publisherPlatforms.some((platform) => platform === "instagram" || platform === "threads"));
-  const instagramIdentityId = source.instagramUserId;
-  if (needsInstagramIdentity && !instagramIdentityId) {
-    throw new AdTemplateConfigurationError("Placement Instagram/Threads yêu cầu Page đã liên kết Instagram Professional.");
+  if (placementOverride?.publisherPlatforms.includes("threads") && !source.instagramUserId) {
+    throw new AdTemplateConfigurationError("Threads yêu cầu Page đã liên kết Instagram Professional.");
   }
+  let identity = existing.instagramIdentity;
+  if (identity && identity.pageId !== pageId) throw new AdTemplateConfigurationError("Snapshot danh tính Instagram không thuộc Page đã chọn.");
+  if (identity?.kind === "PAGE_BACKED" && !existing.creativeId) await verifyPageBackedIdentity(identity, pageAccessToken || accessToken);
+  if (needsInstagramIdentity && !identity && !existing.creativeId) {
+    identity = await resolveAdInstagramIdentity(pageId, pageAccessToken || accessToken, source.instagramUserId);
+    await onProgress?.({ instagramIdentity: identity });
+  }
+  const instagramIdentityId = identity?.id ?? source.instagramUserId;
   const creativeAccessToken = await ensureAdAssetAccess(
     adAccountId,
     pageId,
-    needsInstagramIdentity ? instagramIdentityId : undefined,
+    needsInstagramIdentity && identity?.kind !== "PAGE_BACKED" ? instagramIdentityId : undefined,
     accessToken,
     pageAccessToken,
   );
@@ -592,6 +603,10 @@ export async function cloneAdCampaign(
   if (useCBO) {
     campBody.daily_budget = dailyBudgetMinor;
     campBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+  } else {
+    // Meta now requires an explicit choice for ad-set budget sharing.
+    // Preserve PostFlow's independent ad-set budgets; do not opt into sharing.
+    campBody.is_adset_budget_sharing_enabled = false;
   }
 
   let campaignId = existing.campaignId ?? undefined;
@@ -672,7 +687,7 @@ export async function cloneAdCampaign(
     }
     if (advantageOverride?.limitedSpendEnabled && placementOverride) {
       const placementSoftOptOut = placementSoftOptOutFromConfig(placementOverride, {
-        hasInstagram: Boolean(instagramIdentityId),
+        hasInstagram: Boolean(source.instagramUserId),
       });
       if (placementSoftOptOut) adSetBody.placement_soft_opt_out = placementSoftOptOut;
     }
@@ -697,7 +712,7 @@ export async function cloneAdCampaign(
           ? buildInstagramExistingPostCreative({
               name: campaignName || "PostFlow Instagram Creative",
               pageId,
-              instagramUserId: source.instagramUserId,
+              instagramUserId: instagramIdentityId!,
               igPostId: source.igPostId,
               destinationUrl: source.destinationUrl,
               ctaType: source.ctaType,
@@ -707,6 +722,7 @@ export async function cloneAdCampaign(
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
               objectStoryId,
+              instagramUserId: instagramIdentityId,
               destinationUrl: source.destinationUrl,
               ctaType: source.ctaType,
               accessToken: creativeAccessToken,
@@ -740,6 +756,9 @@ export async function cloneAdCampaign(
 
     return { campaignId: campaignId!, adSetId: adSetId!, creativeId: creativeId!, adId: adId! };
   } catch (error) {
+    if (error instanceof MetaApiError && ["configuration", "permission"].includes(error.category) && /instagram.*(?:identity|user|account|actor)|(?:identity|user|account|actor).*instagram/i.test(error.message)) {
+      await prisma.appConfig.deleteMany({ where: { key: `ads-instagram:${pageId}` } }).catch(() => {});
+    }
     // Keep successfully-created IDs. The queue runner persists each stage and
     // resumes from it, avoiding duplicate campaigns/ads after transient errors.
     throw error;

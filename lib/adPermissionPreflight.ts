@@ -26,7 +26,9 @@ export async function preflightPostAdPermission(post: PostPermissionSnapshot, fo
   if (!account?.accessToken) throw new Error("TKQC chưa kết nối hoặc thiếu token. Hãy kết nối lại Facebook.");
   if (!page) throw new Error("Page chưa được kết nối trong PostFlow.");
   const needsInstagram = post.adPlatform === "instagram" || placementsNeedInstagram(post.adPlacementConfig);
-  if (needsInstagram && !page.instagramUserId) throw new Error("Page chưa liên kết Instagram Professional.");
+  if (post.adPlatform === "instagram" && !page.instagramUserId) throw new Error("Page chưa liên kết Instagram Professional.");
+  const placements = post.adPlacementConfig as Record<string, unknown> | null;
+  if (!page.instagramUserId && Array.isArray(placements?.publisherPlatforms) && placements.publisherPlatforms.includes("threads")) throw new Error("Threads yêu cầu Page liên kết Instagram Professional.");
   await ensureAdAssetAccess(
     post.adAccountUsed,
     post.pageId,

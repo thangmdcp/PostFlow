@@ -38,6 +38,7 @@ export function restrictTargetingToInstagram(
 export function buildFacebookExistingPostCreative(input: {
   name: string;
   objectStoryId: string;
+  instagramUserId?: string;
   destinationUrl?: string;
   ctaType: AdCtaType;
   accessToken: string;
@@ -47,6 +48,7 @@ export function buildFacebookExistingPostCreative(input: {
   return {
     name: input.name,
     object_story_id: input.objectStoryId,
+    ...(input.instagramUserId ? { instagram_user_id: input.instagramUserId } : {}),
     // Match Meta Ads Manager's “Enable app deep linking” option: open the
     // destination app when installed, otherwise keep the website fallback.
     applink_treatment: APP_DEEP_LINK_TREATMENT,

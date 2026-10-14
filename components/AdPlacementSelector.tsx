@@ -109,6 +109,7 @@ export function AdPlacementSelector({ value, onChange, instagramOnly, hasInstagr
               <button type="button" disabled={toggleDisabled} aria-pressed={selected} onClick={() => togglePlatform(platform)} className="flex w-full items-center gap-2 text-left text-xs font-semibold text-slate-700 disabled:cursor-not-allowed dark:text-slate-200">
                 <span className={["flex h-4 w-4 items-center justify-center rounded border text-[10px]", selected ? "border-violet-600 bg-violet-600 text-white" : "border-slate-300"].join(" ")}>{selected ? "✓" : ""}</span>
                 {PLATFORM_LABEL[platform]}
+                {platform === "instagram" && !hasInstagram && !instagramOnly && <span className="ml-auto text-[9px] font-normal text-blue-600">Instagram dùng danh tính Facebook Page</span>}
                 {missingInstagram && <span className="ml-auto text-[9px] font-normal text-amber-600">{selected && !instagramOnly ? "Có Page chưa nối Instagram · Bỏ chọn hoặc đổi Page" : "Có Page chưa nối Instagram · Đổi Page để sử dụng"}</span>}
               </button>
               {selected && (

@@ -64,6 +64,7 @@ export async function POST(request: Request) {
           adCtaType: null,
           adCtaScope: null,
           fbCtaStatus: null,
+          adInstagramIdentity: Prisma.DbNull,
           fbCtaErrorMsg: null,
           fbCtaNextAttemptAt: null,
           fbCtaAttempt: 0,

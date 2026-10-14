@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { parseAdInstagramIdentity } from "@/lib/adInstagramIdentity";
 import { prisma } from "@/lib/prisma";
 import { AdTemplateConfigurationError, cloneAdCampaign, fetchAdTemplateBlueprint } from "@/lib/facebook";
 import { portableTemplateBlueprint, templateBlueprintFromSettings } from "@/lib/adTemplateBlueprint";
@@ -143,6 +144,7 @@ export async function POST(req: Request) {
         campaignId: post.adCampaignId,
         adSetId: post.adSetId,
         creativeId: post.adCreativeId,
+        instagramIdentity: parseAdInstagramIdentity(post.adInstagramIdentity),
         adId: post.adId,
       },
       async (progress) => {
@@ -152,6 +154,7 @@ export async function POST(req: Request) {
             ...(progress.campaignId ? { adCampaignId: progress.campaignId } : {}),
             ...(progress.adSetId ? { adSetId: progress.adSetId } : {}),
             ...(progress.creativeId ? { adCreativeId: progress.creativeId } : {}),
+            ...(progress.instagramIdentity ? { adInstagramIdentity: progress.instagramIdentity } : {}),
             ...(progress.adId ? { adId: progress.adId } : {}),
           },
         });

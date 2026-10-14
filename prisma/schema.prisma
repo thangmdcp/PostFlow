@@ -69,6 +69,7 @@ model Post {
   adAgeMax       Int?
   adGender       String?
   adPlacementConfig Json?
+  adInstagramIdentity Json?
   adAdvantageConfig Json?
   adCtaType      String?
   adCtaScope     String?

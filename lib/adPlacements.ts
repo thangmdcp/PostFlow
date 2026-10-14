@@ -69,7 +69,7 @@ export function adPlacementAvailability(
   options: { instagramOnly: boolean; hasInstagram: boolean },
 ) {
   const selected = config.publisherPlatforms.includes(platform);
-  const missingInstagram = (platform === "instagram" || platform === "threads") && !options.hasInstagram;
+  const missingInstagram = (platform === "threads" || (platform === "instagram" && options.instagramOnly)) && !options.hasInstagram;
   return {
     selected,
     missingInstagram,
@@ -125,8 +125,8 @@ export function validateAdPlacements(
   if (options.instagramOnly && (config.publisherPlatforms.length !== 1 || config.publisherPlatforms[0] !== "instagram")) {
     return "Quảng cáo dùng bài Instagram chỉ được phân phối trên Instagram.";
   }
-  if (!options.hasInstagram && config.publisherPlatforms.some((platform) => platform === "instagram" || platform === "threads")) {
-    return "Instagram và Threads yêu cầu Page đã liên kết Instagram Professional.";
+  if (!options.hasInstagram && (config.publisherPlatforms.includes("threads") || (options.instagramOnly && config.publisherPlatforms.includes("instagram")))) {
+    return "Đăng Instagram organic và vị trí Threads yêu cầu Page đã liên kết Instagram Professional.";
   }
   for (const platform of config.publisherPlatforms) {
     if (!(config[POSITION_FIELD[platform]] as string[]).length) {

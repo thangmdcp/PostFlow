@@ -19,9 +19,9 @@ const manual = {
   threadsPositions: ["threads_stream"],
 };
 
-test("unavailable selected Instagram and Threads can be removed without changing other placements", () => {
+test("unavailable selected Threads can be removed without changing other placements", () => {
   const options = { instagramOnly: false, hasInstagram: false };
-  for (const [platform, field] of [["instagram", "instagramPositions"], ["threads", "threadsPositions"]]) {
+  for (const [platform, field] of [["threads", "threadsPositions"]]) {
     const before = structuredClone(manual);
     assert.deepEqual(adPlacementAvailability(before, platform, options), {
       selected: true, missingInstagram: true, toggleDisabled: false, positionsDisabled: true,
@@ -37,6 +37,15 @@ test("unavailable selected Instagram and Threads can be removed without changing
     assert.equal(adPlacementAvailability(next, platform, options).toggleDisabled, true);
     assert.deepEqual(parseAdPlacementConfig(JSON.parse(JSON.stringify(next))), next);
   }
+});
+
+test("Facebook source permits Instagram placements without a linked professional account", () => {
+  const config = { ...manual, publisherPlatforms: ["facebook", "instagram"], threadsPositions: [] };
+  const options = { instagramOnly: false, hasInstagram: false };
+  assert.equal(validateAdPlacements(config, options), null);
+  assert.equal(adPlacementAvailability(config, "instagram", options).positionsDisabled, false);
+  const off = toggleAdPlacementPlatform(config, "instagram", options);
+  assert.equal(toggleAdPlacementPlatform(off, "instagram", options).publisherPlatforms.includes("instagram"), true);
 });
 
 test("linked Instagram permits ordinary toggles and position edits", () => {

@@ -22,6 +22,7 @@ import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantag
 import { isFacebookOriginalCtaVerified, shouldProbeFacebookCtaReadiness } from "@/lib/facebookOriginalCta";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 import { recheckAdPermissionForRetry } from "@/lib/adPermissionRecovery";
+import { parseAdInstagramIdentity } from "@/lib/adInstagramIdentity";
 
 // Facebook needs a bit of time after a post publishes (especially video)
 // before it's eligible to be referenced by an ad creative. Instead of
@@ -642,6 +643,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       creativeId: postFull?.adCreativeId,
       adId: postFull?.adId,
       objectStoryId: postFull?.fbObjectStoryId,
+      instagramIdentity: parseAdInstagramIdentity(postFull?.adInstagramIdentity),
     },
     async (progress) => {
       await prisma.post.update({
@@ -652,6 +654,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
           ...(progress.creativeId ? { adCreativeId: progress.creativeId } : {}),
           ...(progress.adId ? { adId: progress.adId } : {}),
           ...(progress.objectStoryId ? { fbObjectStoryId: progress.objectStoryId } : {}),
+          ...(progress.instagramIdentity ? { adInstagramIdentity: progress.instagramIdentity } : {}),
         },
       });
     }
