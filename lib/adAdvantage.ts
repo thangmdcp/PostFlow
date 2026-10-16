@@ -147,11 +147,21 @@ export const ADVANTAGE_CREATIVE_FEATURES = [
   "video_auto_crop",
 ] as const;
 
+// Existing-post affiliate creatives have no product_set_id/catalog. Opting
+// into these features causes Meta 3858293, even on video source posts.
+// Explicit opt-out avoids inheriting a Meta default; do not disable unrelated
+// enhancements or change the immutable creativeEnabled snapshot on retry.
+export const CATALOG_ONLY_CREATIVE_FEATURES: readonly string[] = [
+  "image_background_gen",
+  "product_extensions",
+];
+
 export function advantageCreativeSpec(enabled: boolean): Record<string, unknown> {
-  const enroll_status = enabled ? "OPT_IN" : "OPT_OUT";
   return {
     creative_features_spec: Object.fromEntries(
-      ADVANTAGE_CREATIVE_FEATURES.map((feature) => [feature, { enroll_status }]),
+      ADVANTAGE_CREATIVE_FEATURES.map((feature) => [feature, {
+        enroll_status: enabled && !CATALOG_ONLY_CREATIVE_FEATURES.includes(feature) ? "OPT_IN" : "OPT_OUT",
+      }]),
     ),
   };
 }

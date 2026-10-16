@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_BATCH_ADVANTAGE,
   ADVANTAGE_CREATIVE_FEATURES,
+  CATALOG_ONLY_CREATIVE_FEATURES,
   advantageCreativeSpec,
   applyAdvantageAudience,
   applyAdvantagePlacements,
@@ -69,7 +70,7 @@ test("Audience and Creative explicitly opt in or out", () => {
   assert.deepEqual(Object.keys(optedOut), [...ADVANTAGE_CREATIVE_FEATURES]);
   for (const feature of ADVANTAGE_CREATIVE_FEATURES) {
     assert.deepEqual(optedOut[feature], { enroll_status: "OPT_OUT" });
-    assert.deepEqual(optedIn[feature], { enroll_status: "OPT_IN" });
+    assert.deepEqual(optedIn[feature], { enroll_status: CATALOG_ONLY_CREATIVE_FEATURES.includes(feature) ? "OPT_OUT" : "OPT_IN" });
   }
 });
 

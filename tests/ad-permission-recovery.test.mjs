@@ -98,3 +98,17 @@ test("pending recovery label does not claim confirmed missing permission", () =>
   assert.match(metaErrorDisplay("[permission-retry] code=200").label, /Đang tự thử lại/);
   assert.equal(metaErrorDisplay("[ads] code=200 permission denied").kind, "permission");
 });
+
+test("Meta Catalog-only Creative rejection stops immediately even without category classification", async () => {
+  const error = new MetaApiError("unknown");
+  error.subcode = 3858293;
+  const f = fixture({ fail: error });
+  assert.deepEqual(await f.run(), { retry: false });
+  assert.equal(f.row.adStatus, "failed");
+  assert.equal(f.row.adAttempt, 1);
+  assert.equal(f.row.adCampaignId, "existing-campaign");
+  assert.equal(f.probes.length, 0);
+  assert.deepEqual(await f.run(), { retry: false });
+  assert.equal(f.creations.length, 1);
+  assert.equal(metaErrorDisplay("[ads] Meta code=100 subcode=3858293").label, "Tính năng Creative yêu cầu Catalog");
+});

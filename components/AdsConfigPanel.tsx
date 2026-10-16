@@ -236,7 +236,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
               warning={adConfig.advantage.limitedSpendEnabled ? "Các vị trí đã bỏ chọn vẫn có thể nhận ngân sách; tắt để loại trừ tuyệt đối." : undefined}
             />
           )}
-          <AdvantageToggle title="Advantage+ Creative" description="Meta có thể crop, chỉnh cách trình bày hoặc tạo biến thể; PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể thay đổi cách creative hiển thị ở từng placement." : undefined} />
+          <AdvantageToggle title="Advantage+ Creative" description="Bật các cải thiện tương thích bài có sẵn; tính năng cần Catalog vẫn tắt. PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể crop hoặc thay đổi cách creative hiển thị ở từng placement." : undefined} />
 
           <LockedAdvantageRow title="Advantage+ Catalog Ads" description="Cần Meta Catalog và Product ID; link Shopee affiliate chưa hỗ trợ." />
         </div>

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CATALOG_ONLY_CREATIVE_FEATURES } from "../lib/adAdvantage.ts";
 import {
   APP_DEEP_LINK_TREATMENT,
   buildFacebookExistingPostCreative,
@@ -133,7 +134,31 @@ test("Advantage+ Creative can be opted in for an existing Instagram post", () =>
   const features = creative.degrees_of_freedom_spec.creative_features_spec;
   assert.equal("standard_enhancements" in features, false);
   assert.ok(Object.keys(features).length > 1);
-  for (const value of Object.values(features)) assert.deepEqual(value, { enroll_status: "OPT_IN" });
+  for (const [feature, value] of Object.entries(features)) {
+    assert.deepEqual(value, { enroll_status: CATALOG_ONLY_CREATIVE_FEATURES.includes(feature) ? "OPT_OUT" : "OPT_IN" });
+  }
   assert.equal("title" in creative, false);
   assert.equal("headline" in creative, false);
+});
+
+test("Facebook affiliate Creative keeps source, IG identity and CTA while excluding Catalog-only enhancements", () => {
+  const creative = buildFacebookExistingPostCreative({
+    name: "Pee 1 recovery",
+    objectStoryId: "page_story",
+    instagramUserId: "page-backed-ig",
+    destinationUrl: "https://s.shopee.vn/affiliate",
+    ctaType: "SHOP_NOW",
+    accessToken: "fake-token",
+    creativeEnhancements: true,
+  });
+  const features = creative.degrees_of_freedom_spec.creative_features_spec;
+  assert.equal(features.image_background_gen.enroll_status, "OPT_OUT");
+  assert.equal(features.product_extensions.enroll_status, "OPT_OUT");
+  assert.equal(features.video_auto_crop.enroll_status, "OPT_IN");
+  assert.equal(creative.object_story_id, "page_story");
+  assert.equal(creative.instagram_user_id, "page-backed-ig");
+  assert.deepEqual(creative.call_to_action, { type: "SHOP_NOW", value: { link: "https://s.shopee.vn/affiliate" } });
+  assert.equal(creative.applink_treatment, APP_DEEP_LINK_TREATMENT);
+  assert.equal("headline" in creative, false);
+  assert.equal("title" in creative, false);
 });

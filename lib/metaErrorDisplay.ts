@@ -18,6 +18,9 @@ export function metaErrorDisplay(message?: string | null): MetaErrorDisplay {
   if (/subcode=3858504\b/.test(normalized)) {
     return { label: "Cấu hình Advantage+ Creative đã ngừng hỗ trợ", kind: "other" };
   }
+  if (/subcode=3858293\b/.test(normalized)) {
+    return { label: "Tính năng Creative yêu cầu Catalog", kind: "other" };
+  }
   if (/\[quota\]|request limit|rate limit|code=(4|17|32|613|80001|80002|80004)\b/.test(normalized)) {
     return { label: "Meta đang giới hạn TKQC/Page", kind: "quota" };
   }
