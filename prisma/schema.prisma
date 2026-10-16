@@ -9,6 +9,8 @@ datasource db {
 
 model Batch {
   id        String   @id @default(cuid())
+  requestKey String? @unique
+  requestHash String?
   createdAt DateTime @default(now())
   posts     Post[]
 }
@@ -19,6 +21,8 @@ model Post {
   batch          Batch?          @relation(fields: [batchId], references: [id])
   order          Int             @default(0)
   sourceUrl      String
+  linkBankEntryId String?
+  linkBankEntry LinkBankEntry? @relation(fields: [linkBankEntryId], references: [id], onDelete: SetNull)
   title          String?
   rawCaption     String?
   finalCaption   String?
@@ -102,6 +106,30 @@ model Post {
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+}
+
+model LinkBankList {
+  id String @id @default(cuid())
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  entries LinkBankEntry[]
+}
+
+model LinkBankEntry {
+  id String @id @default(cuid())
+  position Int @default(autoincrement())
+  listId String
+  list LinkBankList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  sourceUrl String
+  urlKey String
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime?
+  lastBatchId String?
+  useCount Int @default(0)
+  posts Post[]
+  @@unique([listId, urlKey])
+  @@index([listId, lastUsedAt, position])
 }
 
 model PostComment {

@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// "Kho link" is a read-only dedup view over existing Post rows, not a
-// separate table — every batch Fetch already creates a Post per pasted URL,
-// so there's nothing extra to write. Pick the most-recent row per sourceUrl
+// Legacy batch history, retained separately from the named link-bank tables.
+// Pick the most-recent row per sourceUrl
 // (Postgres DISTINCT ON), using the same "effective time" fallback already
 // established for the Dashboard's date filter / Giờ đăng column:
 // scheduledAt ?? (fbPostUrl present ? updatedAt : createdAt).

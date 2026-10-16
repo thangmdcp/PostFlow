@@ -27,6 +27,8 @@ import { CommentStatusBadge, CommentAggregateStatus } from "@/components/Comment
 import { StoryStatusBadge } from "@/components/StoryStatusBadge";
 import { ScheduledTime } from "@/components/ScheduledTime";
 import { LinkBankPanel } from "@/components/LinkBankPanel";
+import { cleanSourceLinks, MAX_BATCH_LINKS, sourceLinkKey, type BankSelection } from "@/lib/linkBank";
+import { readComposerBankState } from "@/lib/batchDraft";
 import { useColumnOrder } from "@/lib/useColumnOrder";
 import { allocateEvenly, allocateWeighted } from "@/lib/balancedAllocation";
 import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
@@ -238,27 +240,33 @@ const LAST_BATCH_KEY = "postflow_last_batch_id";
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export function BatchImportClient({ connections, initialBatch }: Props) {
-  const [urlText, setUrlText] = useState(() => {
-    if (typeof window === "undefined") return "";
-    try { return readComposerDraft(localStorage); } catch { return ""; }
+  const [composer, setComposer] = useState<{ urlText: string; bankSelections: BankSelection[]; requestKey?: string }>(() => {
+    if (typeof window === "undefined") return { urlText: "", bankSelections: [] };
+    try { return { urlText: readComposerDraft(localStorage), ...readComposerBankState(localStorage) }; } catch { return { urlText: "", bankSelections: [] }; }
   });
+  const urlText = composer.urlText;
+  function setUrlText(value: string) {
+    const keys = new Set(value.split("\n").map(line => sourceLinkKey(line.match(/https?:\/\/\S+/)?.[0] ?? "")));
+    setComposer(current => ({ ...current, urlText: value, bankSelections: current.bankSelections.filter(s => keys.has(sourceLinkKey(s.url))), requestKey: undefined }));
+  }
   const [batchId, setBatchId] = useState<string | null>(() => {
     if (initialBatch?.id) return initialBatch.id;
     if (typeof window === "undefined") return null;
     return localStorage.getItem(LAST_BATCH_KEY);
   });
   const [loading, setLoading] = useState(false);
+  const fetchInFlight = useRef(false);
   const { show, ToastComponent } = useToast();
 
   useEffect(() => {
-    try { writeComposerDraft(localStorage, urlText); } catch { /* storage unavailable */ }
-  }, [urlText]);
+    try { writeComposerDraft(localStorage, urlText, Date.now(), { bankSelections: composer.bankSelections, requestKey: composer.requestKey }); } catch { /* storage unavailable */ }
+  }, [composer, urlText]);
   useEffect(() => {
     const syncComposer = (event: StorageEvent) => {
       if (event.key !== COMPOSER_DRAFT_KEY) return;
       try {
-        const next = readComposerDraft(localStorage);
-        setUrlText((current) => current === next ? current : next);
+        const next = { urlText: readComposerDraft(localStorage), ...readComposerBankState(localStorage) };
+        setComposer(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
       } catch { /* storage unavailable */ }
     };
     window.addEventListener("storage", syncComposer);
@@ -589,14 +597,17 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   }
 
   const extractUrl = (line: string) => { const m = line.match(/https?:\/\/\S+/); return m ? m[0] : null; };
-  const urlCount = urlText.trim().split("\n").filter((u) => extractUrl(u)).length;
+  const urlCount = cleanSourceLinks(urlText.trim().split("\n").map(u => extractUrl(u)).filter(Boolean)).urls.length;
 
-  function handleBankImport(urls: string[]) {
-    setUrlText((prev) => {
-      const existing = new Set(prev.split("\n").map((l) => extractUrl(l.trim())).filter((u): u is string => !!u));
-      const toAdd = urls.filter((u) => !existing.has(u));
-      if (!toAdd.length) return prev;
-      return prev.trim() ? `${prev.trim()}\n${toAdd.join("\n")}` : toAdd.join("\n");
+  function handleBankImport(urls: string[], selections: BankSelection[] = [], bindExisting = false) {
+    setComposer(current => {
+      const existing = new Set(current.urlText.split("\n").map(l => sourceLinkKey(extractUrl(l.trim()) ?? "")).filter(Boolean));
+      const toAdd = cleanSourceLinks(urls).urls.filter(u => !existing.has(sourceLinkKey(u)));
+      if (!toAdd.length && !bindExisting) return current;
+      if (existing.size + toAdd.length > MAX_BATCH_LINKS) { show("Batch tối đa 200 link; hãy giảm số lượng nhập.", "error"); return current; }
+      const selectedSources = selections.filter(s => toAdd.some(u => sourceLinkKey(u) === sourceLinkKey(s.url)) || (bindExisting && existing.has(sourceLinkKey(s.url))));
+      const bankSelections = [...current.bankSelections.filter(s => !selectedSources.some(next => sourceLinkKey(next.url) === sourceLinkKey(s.url))), ...selectedSources];
+      return { urlText: toAdd.length ? (current.urlText.trim() ? `${current.urlText.trim()}\n${toAdd.join("\n")}` : toAdd.join("\n")) : current.urlText, bankSelections, requestKey: undefined };
     });
   }
 
@@ -625,15 +636,25 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   }, [batch]);
 
   async function handleFetch() {
+    if (fetchInFlight.current) return;
     const urls = urlText.trim().split("\n")
       .map((u) => extractUrl(u.trim()))
       .filter((u): u is string => u !== null);
     if (!urls.length) { show("Không có URL hợp lệ", "error"); return; }
+    if (cleanSourceLinks(urls).urls.length > MAX_BATCH_LINKS) { show("Mỗi batch tối đa 200 link; không có link nào bị cắt. Hãy giảm số lượng.", "error"); return; }
+    fetchInFlight.current = true;
+    const requestKey = composer.requestKey ?? crypto.randomUUID();
+    const keys = new Set(urls.map(sourceLinkKey));
+    const bankSelections = composer.bankSelections.filter(s => keys.has(sourceLinkKey(s.url)));
+    const nextComposer = { ...composer, bankSelections, requestKey };
+    setComposer(nextComposer);
+    // Persist before sending so a lost response/F5 retries the same batch.
+    try { writeComposerDraft(localStorage, urlText, Date.now(), nextComposer); } catch { /* request remains idempotent in this tab */ }
     setLoading(true);
     try {
       const res = await fetch("/api/batches", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({ urls, bankSelections, requestKey }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -642,10 +663,10 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       // round-trip just to re-fetch data we already have in hand.
       globalMutate(`/api/batches/${data.batchId}`, { id: data.batchId, posts: data.posts }, false);
       setBatchId(data.batchId);
-      setUrlText("");
+      setComposer(current => current.requestKey === requestKey ? { urlText: "", bankSelections: [] } : current);
     } catch (err: unknown) {
       show(err instanceof Error ? err.message : "Lỗi tạo batch", "error");
-    } finally { setLoading(false); }
+    } finally { fetchInFlight.current = false; setLoading(false); }
   }
 
   if (!batchId || !batch || !("posts" in batch)) {
@@ -666,7 +687,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <LinkBankPanel connections={connections} onImport={handleBankImport} />
+            <LinkBankPanel connections={connections} urlText={urlText} onImport={handleBankImport} />
             <button onClick={handleFetch} disabled={loading || urlCount === 0}
               className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm shrink-0">
               {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
@@ -680,11 +701,13 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           <div className="min-w-0 flex-1">
             <textarea
               aria-label="Danh sách link tạo batch"
+              disabled={loading}
               value={urlText}
               onChange={event => setUrlText(event.target.value)}
               rows={composerRows}
               className="w-full overflow-y-auto rounded-xl border bg-white px-3 py-2.5 font-mono text-xs leading-5 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none dark:bg-slate-800"
             />
+            <p className="mt-2 text-xs text-slate-500">Tối đa 200 link mỗi batch · tự bỏ link trùng. {composer.bankSelections.length > 0 ? `${composer.bankSelections.length} link từ kho; chỉ đánh dấu đã dùng khi tạo batch thành công.` : ""}</p>
             {urlCount === 0 && (
               <p className="text-center text-sm text-slate-400 mt-8">Chưa có link nào — dán vào ô trên để bắt đầu</p>
             )}

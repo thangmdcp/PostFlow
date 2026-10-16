@@ -184,12 +184,21 @@ export function readComposerDraft(storage: StorageLike, now = Date.now()): strin
   }
 }
 
-export function writeComposerDraft(storage: StorageLike, urlText: string, now = Date.now()): void {
+export function readComposerBankState(storage: StorageLike): { bankSelections: Array<{ entryId: string; url: string; allowUsed: boolean }>; requestKey?: string } {
+  // Validate expiry/version through the legacy-compatible reader first.
+  if (!readComposerDraft(storage)) return { bankSelections: [] };
+  try {
+    const v = JSON.parse(storage.getItem(COMPOSER_DRAFT_KEY)!);
+    return { bankSelections: Array.isArray(v.bankSelections) ? v.bankSelections.filter((s: Record<string, unknown>) => s && typeof s.entryId === "string" && typeof s.url === "string" && typeof s.allowUsed === "boolean").slice(0, 200) : [], requestKey: typeof v.requestKey === "string" ? v.requestKey : undefined };
+  } catch { return { bankSelections: [] }; }
+}
+
+export function writeComposerDraft(storage: StorageLike, urlText: string, now = Date.now(), bankState?: ReturnType<typeof readComposerBankState>): void {
   if (!urlText) {
     storage.removeItem(COMPOSER_DRAFT_KEY);
     return;
   }
-  storage.setItem(COMPOSER_DRAFT_KEY, JSON.stringify({ version: 1, updatedAt: now, urlText }));
+  storage.setItem(COMPOSER_DRAFT_KEY, JSON.stringify({ version: 1, updatedAt: now, urlText, ...bankState }));
 }
 
 export function linkDraftKey(linkId: string): string {
