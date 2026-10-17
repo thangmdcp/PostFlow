@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Bookmark, ChevronDown, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Bookmark, ChevronDown, Loader2, Pencil, Plus, X } from "lucide-react";
 import type { PublicFbConnection as FbConnection } from "@/lib/publicFacebook";
 import { DateRangeFilter, type DateRange } from "@/components/DateRangeFilter";
 import { CustomSelect } from "@/components/ui/CustomSelect";
-import { cleanSourceLinks, MAX_BATCH_LINKS, sourceLinkKey, type BankSelection } from "@/lib/linkBank";
+import { cleanSourceLinks, MAX_BATCH_LINKS, type BankSelection } from "@/lib/linkBank";
+import { bankEntriesImport, composerSourceUrls, quantityImportRequest } from "@/lib/linkBankImport";
 
 interface BankEntry {
   sourceUrl: string;
@@ -17,24 +19,18 @@ interface BankEntry {
 interface LinkBankPanelProps {
   connections: FbConnection[];
   onImport: (urls: string[]) => void;
+  disabled?: boolean;
 }
 
 // Every link ever pasted into a batch is already a Post row (sourceUrl) —
 // this panel is just a dedup/filter view over that, not a separate save step.
-function LinkHistoryPanel({ connections, onImport }: LinkBankPanelProps) {
+function LinkHistoryPanel({ connections, onImport, disabled }: LinkBankPanelProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
   const [entries, setEntries] = useState<BankEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [pageFilter, setPageFilter] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    function handler(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -64,8 +60,10 @@ function LinkHistoryPanel({ connections, onImport }: LinkBankPanelProps) {
   }
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="min-w-0">
       <button
+        disabled={disabled}
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-xl border bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:border-blue-400 transition-colors shrink-0"
       >
@@ -75,7 +73,7 @@ function LinkHistoryPanel({ connections, onImport }: LinkBankPanelProps) {
       </button>
 
       {open && (
-        <div className="absolute top-full mt-1 right-0 z-50 w-[480px] rounded-xl border bg-white dark:bg-slate-900 shadow-xl p-3 space-y-3">
+        <div className="mt-2 w-full rounded-xl border bg-white dark:bg-slate-900 p-3 space-y-3">
           <div className="flex items-center gap-2">
             <CustomSelect className="flex-1 min-w-0" value={pageFilter ?? ""} onChange={(v) => setPageFilter(v || null)}
               placeholder="Tất cả page"
@@ -105,7 +103,7 @@ function LinkHistoryPanel({ connections, onImport }: LinkBankPanelProps) {
           </div>
 
           <div className="flex justify-end pt-1 border-t border-slate-100 dark:border-slate-800">
-            <button onClick={handleImport} disabled={checked.size === 0}
+            <button onClick={handleImport} disabled={disabled || checked.size === 0}
               className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               Nhập ({checked.size})
             </button>
@@ -118,16 +116,21 @@ function LinkHistoryPanel({ connections, onImport }: LinkBankPanelProps) {
 
 type NamedList = { id: string; name: string; total: number; used: number };
 type SavedEntry = { id: string; sourceUrl: string; lastUsedAt: string | null; useCount: number };
-export function LinkBankPanel({ connections, urlText, onImport }: {
+export function LinkBankPanel({ connections, urlText, onImport, disabled = false, beginOperation, endOperation, children }: {
   connections: FbConnection[];
   urlText: string;
   onImport: (urls: string[], selections?: BankSelection[], bindExisting?: boolean) => void;
+  disabled?: boolean;
+  beginOperation: () => boolean;
+  endOperation: () => void;
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [editor, setEditor] = useState<"create" | "rename" | null>(null);
   const [lists, setLists] = useState<NamedList[]>([]);
-  const [listId, setListId] = useState(() => {
-    try { return typeof window === "undefined" ? "" : localStorage.getItem("postflow_selected_link_bank") ?? ""; } catch { return ""; }
-  });
+  const [listsLoading, setListsLoading] = useState(true);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [listId, setListId] = useState("");
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
   const [text, setText] = useState("");
@@ -143,9 +146,15 @@ export function LinkBankPanel({ connections, urlText, onImport }: {
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const inFlight = useRef(false);
+  const manageRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const editorRef = useRef<HTMLInputElement>(null);
   const selectedList = lists.find(l => l.id === listId);
-  useEffect(() => { if (listId) try { localStorage.setItem("postflow_selected_link_bank", listId); } catch { /* unavailable */ } }, [listId]);
-  const inputClass = "rounded-lg border bg-white px-3 py-2 text-sm dark:bg-slate-800";
+  const locked = busy || disabled;
+  const capacity = Math.max(0, MAX_BATCH_LINKS - composerSourceUrls(urlText).length);
+  const inputClass = "min-w-0 rounded-lg border bg-white px-3 py-2 text-sm disabled:opacity-50 dark:bg-slate-800";
+  const buttonClass = "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-xs hover:border-blue-400 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-slate-800";
   const urlsFrom = (value: string) => value.split("\n").map(l => l.match(/https?:\/\/\S+/)?.[0] ?? l.trim()).filter(Boolean);
   async function json(url: string, init?: RequestInit) {
     const r = await fetch(url, init); const data = await r.json();
@@ -153,93 +162,152 @@ export function LinkBankPanel({ connections, urlText, onImport }: {
     return data;
   }
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
+    setListsLoading(true);
     json("/api/link-lists").then((data: NamedList[]) => {
       if (cancelled) return;
       setLists(data);
-      setListId(current => data.some(l => l.id === current) ? current : data[0]?.id ?? "");
-    }).catch(e => { if (!cancelled) setError(e.message); });
+      let saved = "";
+      try { saved = localStorage.getItem("postflow_selected_link_bank") ?? ""; } catch { /* unavailable */ }
+      setListId(current => data.some(l => l.id === current) ? current : data.some(l => l.id === saved) ? saved : data[0]?.id ?? "");
+    }).catch(e => { if (!cancelled) setError(e.message); }).finally(() => { if (!cancelled) setListsLoading(false); });
     return () => { cancelled = true; };
-  }, [open, revision]);
+  }, [revision]);
+  useEffect(() => { if (listId) try { localStorage.setItem("postflow_selected_link_bank", listId); } catch { /* unavailable */ } }, [listId]);
   useEffect(() => { setName(selectedList?.name ?? ""); }, [selectedList?.name, listId]);
+  useEffect(() => { if (editor) { editorRef.current?.focus(); editorRef.current?.select(); } }, [editor]);
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); return; }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')).filter(el => el.getClientRects().length > 0);
+      if (!focusable.length) { event.preventDefault(); dialogRef.current.focus(); return; }
+      let active = document.activeElement;
+      // CustomSelect menus also live in document.body; return Tab to the
+      // control after/before their trigger instead of escaping the dialog.
+      const menu = active?.closest('[role="listbox"]');
+      if (menu) active = focusable.find(el => el.getAttribute("aria-controls") === menu.id) ?? active;
+      const index = focusable.indexOf(active as HTMLElement);
+      event.preventDefault();
+      focusable[(index + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length].focus();
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", keydown);
+      manageRef.current?.focus();
+    };
+  }, [open]);
   useEffect(() => {
     setSelected(new Set());
-    if (!open || !listId) { setEntries([]); setTotal(0); return; }
+    setEntries([]); setTotal(0);
+    if (!open || !listId) { setEntriesLoading(false); return; }
     let cancelled = false;
-    setEntries([]);
+    setEntriesLoading(true);
     json(`/api/link-lists/${listId}?page=${page}&used=${filter}`).then(data => {
       if (!cancelled) { setEntries(data.entries); setTotal(data.total); }
-    }).catch(e => { if (!cancelled) setError(e.message); });
+    }).catch(e => { if (!cancelled) setError(e.message); }).finally(() => { if (!cancelled) setEntriesLoading(false); });
     return () => { cancelled = true; };
   }, [open, listId, filter, page, revision]);
   async function act(work: () => Promise<void>) {
-    if (inFlight.current) return;
+    if (disabled || inFlight.current || !beginOperation()) return;
     inFlight.current = true;
     setBusy(true); setError(""); setMessage("");
     try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "Lỗi Kho link"); }
-    finally { inFlight.current = false; setBusy(false); }
+    finally { inFlight.current = false; setBusy(false); endOperation(); }
   }
   const post = (data: unknown, method = "POST") => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
   function importEntries(items: SavedEntry[]) {
-    const existing = new Set(cleanSourceLinks(urlsFrom(urlText)).urls.map(sourceLinkKey));
-    const chosen = items.filter(e => (includeUsed || !e.lastUsedAt) && !existing.has(sourceLinkKey(e.sourceUrl)));
-    onImport(chosen.map(e => e.sourceUrl), chosen.map(e => ({ entryId: e.id, url: e.sourceUrl, allowUsed: includeUsed })));
+    const chosen = bankEntriesImport(urlText, items, includeUsed);
+    onImport(chosen.urls, chosen.selections);
     setSelected(new Set());
-    setMessage(`Đã thêm ${chosen.length} link vào ô nhập. Chưa đánh dấu đã dùng cho tới khi tạo batch thành công.`);
+    setMessage(`Đã thêm ${chosen.urls.length} link vào ô nhập. Chưa đánh dấu đã dùng cho tới khi tạo batch thành công.`);
+    return chosen.urls.length;
   }
-  return <>
-    <button onClick={() => setOpen(true)} className="flex shrink-0 items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300"><Bookmark size={14} /> Kho link <ChevronDown size={12} /></button>
-    {open && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Kho link có tên">
-      <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl dark:bg-slate-900">
-        <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold">Kho link</h2><button onClick={() => setOpen(false)} disabled={busy} className="rounded-lg border px-3 py-1.5">Đóng</button></div>
-        <p className="mb-4 text-xs text-slate-500">Mỗi kho độc lập, không chứa link trùng. Link đã dùng vẫn được giữ để chủ động dùng lại.</p>
-        <div className="mb-4 flex flex-wrap gap-2">
-          <input aria-label="Tên kho mới" placeholder="Tên kho mới, ví dụ: Gia dụng tháng 10" value={newName} onChange={e => setNewName(e.target.value)} maxLength={100} className={`${inputClass} min-w-60 flex-1`} />
-          <button disabled={busy || !newName.trim()} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40" onClick={() => act(async () => { const r = await json("/api/link-lists", post({ name: newName, urls: [] })); setListId(r.id); setNewName(""); setPage(1); setRevision(v => v + 1); })}>Tạo kho trống</button>
-          <button disabled={busy || !newName.trim() || !urlText.trim()} className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={() => act(async () => { const r = await json("/api/link-lists", post({ name: newName, urls: urlsFrom(urlText) })); setListId(r.id); setNewName(""); setPage(1); setRevision(v => v + 1); if (r.entries.length) onImport([], r.entries.map((e: SavedEntry) => ({ entryId: e.id, url: e.sourceUrl, allowUsed: false })), true); setMessage(`Đã lưu ${r.added} link; bỏ ${r.duplicates} trùng, ${r.invalid} không hợp lệ. ${r.entries.length ? "Ô nhập đã gắn với kho mới, chưa đánh dấu đã dùng." : "Kho lớn đã lưu; hãy nhập từng phần tối đa 200 link để tạo batch."}`); })}>Lưu ô nhập thành kho</button>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-3">
-            <select aria-label="Chọn kho link" value={listId} disabled={busy} onChange={e => { setListId(e.target.value); setPage(1); setMessage(""); setError(""); }} className={`${inputClass} w-full`}><option value="">Chọn kho link</option>{lists.map(l => <option key={l.id} value={l.id}>{l.name} · {l.total - l.used} chưa dùng / {l.total}</option>)}</select>
-            {selectedList && <>
-              <div className="flex gap-2"><input aria-label="Đổi tên kho" value={name} maxLength={100} onChange={e => setName(e.target.value)} className={`${inputClass} min-w-0 flex-1`} /><button disabled={busy || !name.trim()} className="rounded-lg border px-3 text-sm" onClick={() => act(async () => { await json(`/api/link-lists/${listId}`, post({ name }, "PATCH")); setRevision(v => v + 1); setMessage("Đã đổi tên kho."); })}>Đổi tên</button></div>
-              <textarea aria-label="Thêm link vào kho" value={text} onChange={e => setText(e.target.value)} rows={5} placeholder="Dán link vào kho này, mỗi link một dòng" className={`${inputClass} w-full font-mono text-xs`} />
-              <button disabled={busy || !text.trim()} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40" onClick={() => act(async () => { const r = await json(`/api/link-lists/${listId}`, post({ urls: urlsFrom(text) })); setText(""); setRevision(v => v + 1); setMessage(`Thêm ${r.added} link; bỏ ${r.duplicates} trùng, ${r.invalid} không hợp lệ.`); })}>Thêm link và lọc trùng</button>
-              <div className="rounded-xl border bg-blue-50/40 p-3 dark:bg-blue-950/20">
-                <label className="mb-2 block text-sm">Số link lấy vào batch (1–200)</label>
-                <div className="flex gap-2"><input aria-label="Số link nhập" type="number" min={1} max={MAX_BATCH_LINKS} value={count} onChange={e => setCount(e.target.value)} className={`${inputClass} w-24`} /><button disabled={busy} className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={() => act(async () => {
-                  const existing = cleanSourceLinks(urlsFrom(urlText)).urls;
-                  const capacity = MAX_BATCH_LINKS - existing.length;
-                  const amount = Number(count);
-                  if (!Number.isSafeInteger(amount) || amount < 1 || amount > MAX_BATCH_LINKS || amount > capacity) throw new Error(`Số lượng cần 1–200 và không vượt chỗ trống của batch (còn ${Math.max(0, capacity)}).`);
-                  const r = await json(`/api/link-lists/${listId}/pick`, post({ count: amount, includeUsed, excludeUrls: existing }));
-                  importEntries(r.entries);
-                  if (r.entries.length < amount) setMessage(`Chỉ còn ${r.entries.length} link phù hợp; đã nhập toàn bộ, không lấy bù link đã dùng khi chưa cho phép.`);
-                })}>Nhập theo số lượng</button></div>
-                <label className="mt-3 flex items-center gap-2 text-xs"><input type="checkbox" checked={includeUsed} onChange={e => { setIncludeUsed(e.target.checked); setSelected(new Set()); }} /> Cho phép lấy lại link đã dùng</label>
-              </div>
-            </>}
-            <LinkHistoryPanel connections={connections} onImport={urls => onImport(urls)} />
-          </div>
-          <div className="space-y-2">
-            <select aria-label="Lọc link trong kho" value={filter} onChange={e => { setFilter(e.target.value); setPage(1); }} className={`${inputClass} w-full`}><option value="no">Chưa dùng</option><option value="yes">Đã dùng</option><option value="all">Tất cả</option></select>
-            <div className="max-h-80 space-y-1 overflow-auto rounded-xl border p-2">
-              {!entries.length && <p className="p-4 text-xs text-slate-500">Không có link phù hợp.</p>}
-              {entries.map(e => <label key={e.id} className="flex items-start gap-2 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800"><input type="checkbox" disabled={!!e.lastUsedAt && !includeUsed} checked={selected.has(e.id)} onChange={() => setSelected(current => { const next = new Set(current); next.has(e.id) ? next.delete(e.id) : next.add(e.id); return next; })} /><span className="min-w-0 flex-1"><span className="block truncate font-mono text-xs" title={e.sourceUrl}>{e.sourceUrl}</span><span className="text-[10px] text-slate-500">{e.lastUsedAt ? `Đã dùng ${e.useCount} lần · ${new Date(e.lastUsedAt).toLocaleString("vi-VN")}` : "Chưa dùng"}</span></span></label>)}
+  function chooseList(id: string) {
+    setListId(id); setPage(1); setText(""); setEditor(null); setMessage(""); setError("");
+  }
+  async function createList(saveComposer: boolean) {
+    await act(async () => {
+      const r = await json("/api/link-lists", post({ name: newName, urls: saveComposer ? urlsFrom(urlText) : [] }));
+      setLists(current => [{ id: r.id, name: r.name, total: r.added, used: 0 }, ...current]);
+      setListId(r.id); setNewName(""); setEditor(null); setPage(1); setText(""); setRevision(v => v + 1);
+      if (saveComposer && r.entries.length) onImport([], r.entries.map((e: SavedEntry) => ({ entryId: e.id, url: e.sourceUrl, allowUsed: false })), true);
+      setMessage(saveComposer ? `Đã lưu ${r.added} link; bỏ ${r.duplicates} trùng, ${r.invalid} không hợp lệ. ${r.entries.length ? "Ô nhập đã gắn với kho mới, chưa đánh dấu đã dùng." : "Nhập từng phần tối đa 200 link để tạo batch."}` : "Đã tạo kho trống. Vào Quản lý để thêm link.");
+    });
+  }
+  async function renameList() {
+    await act(async () => {
+      await json(`/api/link-lists/${listId}`, post({ name }, "PATCH"));
+      setLists(current => current.map(list => list.id === listId ? { ...list, name: name.trim() } : list));
+      setEditor(null); setRevision(v => v + 1); setMessage("Đã đổi tên kho.");
+    });
+  }
+  const listOptions = lists.map(l => ({ value: l.id, label: `${l.name} · ${l.total - l.used} chưa dùng / ${l.total}` }));
+  const feedback = <div aria-live="polite" className="space-y-1 text-xs">
+    {(busy || listsLoading) && <p className="flex items-center gap-1.5 text-blue-600"><Loader2 size={12} className="animate-spin" />{busy ? "Đang xử lý Kho link…" : "Đang tải Kho link…"}</p>}
+    {message && <p role="status" className="text-emerald-700 dark:text-emerald-400">{message}</p>}
+    {error && <p role="alert" className="text-red-600">{error} <button className="underline" disabled={locked} onClick={() => setRevision(v => v + 1)}>Tải lại kho</button></p>}
+  </div>;
+  return <div className="min-w-0 space-y-2">
+    <div role="group" aria-label="Thao tác nhanh Kho link" className="flex min-w-0 flex-wrap items-center gap-2">
+      <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300"><Bookmark size={14} />Kho link</span>
+      <CustomSelect ariaLabel="Chọn kho link" value={listId} options={listOptions} onChange={chooseList} disabled={locked || listsLoading || !lists.length} placeholder={listsLoading ? "Đang tải kho…" : "Chưa có kho link"} className="min-w-0 basis-52 grow sm:max-w-xs" />
+      <button aria-label="Đổi tên kho" title="Đổi tên kho" disabled={locked || !selectedList} className={buttonClass} onClick={() => { setEditor(editor === "rename" ? null : "rename"); setName(selectedList?.name ?? ""); }}><Pencil size={14} /></button>
+      <button disabled={locked} className={buttonClass} onClick={() => setEditor(editor === "create" ? null : "create")}><Plus size={14} />Tạo kho</button>
+      <label className="flex items-center gap-2 text-xs">Số lượng<input aria-label="Số link nhập" type="number" min={1} max={MAX_BATCH_LINKS} disabled={locked} value={count} onChange={e => setCount(e.target.value)} className={`${inputClass} w-20`} /></label>
+      <button disabled={locked || listsLoading || !selectedList || capacity === 0} className={`${buttonClass} !bg-blue-600 text-white`} onClick={() => act(async () => {
+        const request = quantityImportRequest(urlText, count, includeUsed);
+        const r = await json(`/api/link-lists/${listId}/pick`, post(request));
+        const imported = importEntries(r.entries);
+        if (imported < request.count) setMessage(`Chỉ nhập được ${imported}/${request.count} link phù hợp. ${includeUsed ? "Đã cho phép lấy lại link đã dùng." : "Không lấy bù link đã dùng."} Chưa đánh dấu đã dùng cho tới khi tạo batch thành công.`);
+      })}>Nhập link</button>
+      <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" disabled={locked} checked={includeUsed} onChange={e => { setIncludeUsed(e.target.checked); setSelected(new Set()); }} />Lấy lại link đã dùng</label>
+      <button ref={manageRef} disabled={locked} className={buttonClass} onClick={() => { setOpen(true); setRevision(v => v + 1); }}>Quản lý</button>
+      <div className="ml-auto">{children}</div>
+    </div>
+    {editor && <form className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border bg-slate-50 p-2 dark:bg-slate-900" onSubmit={e => { e.preventDefault(); if (!locked && (editor === "create" ? newName : name).trim()) void (editor === "create" ? createList(false) : renameList()); }}>
+      <input ref={editorRef} aria-label={editor === "create" ? "Tên kho mới" : "Tên kho"} placeholder={editor === "create" ? "Tên kho mới, ví dụ: Gia dụng tháng 10" : "Tên kho"} value={editor === "create" ? newName : name} onChange={e => editor === "create" ? setNewName(e.target.value) : setName(e.target.value)} onKeyDown={e => { if (e.key === "Escape" && !locked) { e.preventDefault(); setEditor(null); } }} maxLength={100} disabled={locked} className={`${inputClass} basis-52 grow sm:max-w-sm`} />
+      <button type="submit" disabled={locked || !(editor === "create" ? newName : name).trim()} className={buttonClass}>{editor === "create" ? "Tạo kho trống" : "Lưu tên"}</button>
+      {editor === "create" && <button type="button" disabled={locked || !newName.trim() || !urlText.trim()} className={`${buttonClass} !bg-blue-600 text-white`} onClick={() => void createList(true)}>Lưu ô nhập thành kho</button>}
+      <button type="button" disabled={locked} className={buttonClass} onClick={() => setEditor(null)}>Huỷ</button>
+    </form>}
+    <p className="text-[11px] text-slate-500">Còn chỗ cho {capacity} link · Nhập link chỉ thêm vào ô soạn; bấm Fetch tất cả mới tạo batch.</p>
+    {feedback}
+    {open && createPortal(<div className="fixed inset-0 z-[70] flex items-center justify-center overflow-hidden bg-black/40 p-4" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="link-bank-title" tabIndex={-1} className="flex max-h-[calc(100dvh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-slate-900">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-4"><h2 id="link-bank-title" className="text-lg font-semibold">Quản lý Kho link</h2><button ref={closeRef} aria-label="Đóng quản lý Kho link" onClick={() => setOpen(false)} className={buttonClass}><X size={16} />Đóng</button></div>
+        <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain p-5">
+          <p className="text-xs text-slate-500">Mỗi kho độc lập, không chứa link trùng. Link đã dùng vẫn được giữ để chủ động dùng lại. Tạo/đổi tên và nhập theo số lượng ngay trên thanh ghim.</p>
+          <div className="grid min-w-0 gap-4 md:grid-cols-2">
+            <div className="min-w-0 space-y-3">
+              <CustomSelect ariaLabel="Chọn kho trong quản lý" value={listId} options={listOptions} onChange={chooseList} disabled={locked || listsLoading || !lists.length} placeholder="Chưa có kho link" />
+              {selectedList ? <>
+                <p className="text-xs text-slate-500">{selectedList.total - selectedList.used} chưa dùng / {selectedList.total} link</p>
+                <textarea aria-label="Thêm link vào kho" value={text} disabled={locked} onChange={e => setText(e.target.value)} rows={5} placeholder="Dán link vào kho này, mỗi link một dòng" className={`${inputClass} w-full font-mono text-xs`} />
+                <button disabled={locked || !text.trim()} className={buttonClass} onClick={() => act(async () => { const r = await json(`/api/link-lists/${listId}`, post({ urls: urlsFrom(text) })); setText(""); setPage(1); setRevision(v => v + 1); setMessage(`Thêm ${r.added} link; bỏ ${r.duplicates} trùng, ${r.invalid} không hợp lệ.`); })}>Thêm link và lọc trùng</button>
+                <label className="flex items-center gap-2 text-xs"><input type="checkbox" disabled={locked} checked={includeUsed} onChange={e => { setIncludeUsed(e.target.checked); setSelected(new Set()); }} />Lấy lại link đã dùng</label>
+              </> : <p className="rounded-xl border p-4 text-xs text-slate-500">Chưa có kho. Đóng quản lý và bấm Tạo kho trên thanh ghim.</p>}
+              <LinkHistoryPanel connections={connections} disabled={locked} onImport={urls => { void act(async () => { if (cleanSourceLinks([...composerSourceUrls(urlText), ...urls]).urls.length > MAX_BATCH_LINKS) throw new Error("Batch tối đa 200 link."); onImport(urls); setMessage("Đã nhập link từ lịch sử vào ô soạn."); }); }} />
             </div>
-            <div className="flex items-center justify-between gap-2 text-xs"><button disabled={page <= 1} onClick={() => setPage(v => v - 1)}>← Trước</button><span>Trang {page} · {total} link</span><button disabled={page * 50 >= total} onClick={() => setPage(v => v + 1)}>Sau →</button></div>
-            <button disabled={busy || !selected.size} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40" onClick={() => act(async () => {
-              const chosen = entries.filter(e => selected.has(e.id));
-              if (cleanSourceLinks([...urlsFrom(urlText), ...chosen.map(e => e.sourceUrl)]).urls.length > MAX_BATCH_LINKS) throw new Error("Batch tối đa 200 link.");
-              importEntries(chosen);
-            })}>Nhập link đã tick ({selected.size})</button>
+            <div className="min-w-0 space-y-2">
+              <CustomSelect ariaLabel="Lọc link trong kho" value={filter} disabled={locked} onChange={value => { setFilter(value); setPage(1); }} options={[{value:"no",label:"Chưa dùng"},{value:"yes",label:"Đã dùng"},{value:"all",label:"Tất cả"}]} />
+              <div aria-busy={entriesLoading} className="max-h-80 space-y-1 overflow-auto rounded-xl border p-2">
+                {entriesLoading ? <p className="flex items-center gap-2 p-4 text-xs text-slate-500"><Loader2 size={14} className="animate-spin" />Đang tải link…</p> : !entries.length && <p className="p-4 text-xs text-slate-500">Không có link phù hợp.</p>}
+                {entries.map(e => <label key={e.id} className="flex items-start gap-2 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800"><input type="checkbox" disabled={locked || (!!e.lastUsedAt && !includeUsed)} checked={selected.has(e.id)} onChange={() => setSelected(current => { const next = new Set(current); next.has(e.id) ? next.delete(e.id) : next.add(e.id); return next; })} /><span className="min-w-0 flex-1"><span className="block truncate font-mono text-xs" title={e.sourceUrl}>{e.sourceUrl}</span><span className="text-[10px] text-slate-500">{e.lastUsedAt ? `Đã dùng ${e.useCount} lần · ${new Date(e.lastUsedAt).toLocaleString("vi-VN")}` : "Chưa dùng"}</span></span></label>)}
+              </div>
+              <div className="flex items-center justify-between gap-2 text-xs"><button disabled={locked || entriesLoading || page <= 1} onClick={() => setPage(v => v - 1)}>← Trước</button><span>Trang {page} · {total} link</span><button disabled={locked || entriesLoading || page * 50 >= total} onClick={() => setPage(v => v + 1)}>Sau →</button></div>
+              <button disabled={locked || entriesLoading || !selected.size} className={buttonClass} onClick={() => act(async () => { importEntries(entries.filter(e => selected.has(e.id))); })}>Nhập link đã tick ({selected.size})</button>
+            </div>
           </div>
+          {feedback}
         </div>
-        {busy && <p className="mt-3 text-xs text-blue-600">Đang xử lý…</p>}
-        {message && <p role="status" className="mt-3 text-sm text-emerald-700">{message}</p>}
-        {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
       </div>
-    </div>}
-  </>;
+    </div>, document.body)}
+  </div>;
 }

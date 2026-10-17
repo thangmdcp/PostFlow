@@ -255,7 +255,18 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     return localStorage.getItem(LAST_BATCH_KEY);
   });
   const [loading, setLoading] = useState(false);
+  const [bankBusy, setBankBusy] = useState(false);
   const fetchInFlight = useRef(false);
+  const beginBankOperation = useCallback(() => {
+    if (fetchInFlight.current) return false;
+    fetchInFlight.current = true;
+    setBankBusy(true);
+    return true;
+  }, []);
+  const endBankOperation = useCallback(() => {
+    fetchInFlight.current = false;
+    setBankBusy(false);
+  }, []);
   const { show, ToastComponent } = useToast();
 
   useEffect(() => {
@@ -678,7 +689,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         {ToastComponent}
 
         {/* Sticky header */}
-        <div className="sticky top-0 z-30 bg-background/95 backdrop-blur border-b px-1 py-3 flex items-center justify-between mb-4">
+        <div className="sticky top-0 z-30 min-w-0 space-y-3 bg-background/95 backdrop-blur border-b px-1 py-3 mb-4">
           <div>
             <h1 className="text-xl font-bold leading-tight">Tạo batch mới</h1>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -686,14 +697,13 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
               {urlCount > 0 && <> · <span className="text-blue-600 font-medium">{urlCount} link hợp lệ</span></>}
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <LinkBankPanel connections={connections} urlText={urlText} onImport={handleBankImport} />
-            <button onClick={handleFetch} disabled={loading || urlCount === 0}
+          <LinkBankPanel connections={connections} urlText={urlText} onImport={handleBankImport} disabled={loading} beginOperation={beginBankOperation} endOperation={endBankOperation}>
+            <button onClick={handleFetch} disabled={loading || bankBusy || urlCount === 0}
               className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm shrink-0">
               {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
               {loading ? "Đang xử lý..." : "Fetch tất cả"}
             </button>
-          </div>
+          </LinkBankPanel>
         </div>
 
         {/* Batch composer stays focused on source links. */}
@@ -701,7 +711,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           <div className="min-w-0 flex-1">
             <textarea
               aria-label="Danh sách link tạo batch"
-              disabled={loading}
+              disabled={loading || bankBusy}
               value={urlText}
               onChange={event => setUrlText(event.target.value)}
               rows={composerRows}
