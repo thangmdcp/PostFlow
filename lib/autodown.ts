@@ -1,170 +1,113 @@
+// Backend-only adaptation of Flully's supplied Node client. DNS override only:
+// hostname, TLS SNI and certificate verification always remain flully.com.
+import https from "node:https";
+import { isIP } from "node:net";
 import { prisma } from "@/lib/prisma";
 import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
-import { parseRetryAfter, SourceFetchError } from "@/lib/sourceFetchError";
-
-const BASE_URL = (process.env.AUTODOWN_BASE_URL ?? "https://autodown.vibevic.com").replace(/\/$/, "");
-
-// Key can be set via the web UI (stored in AppConfig, works on Vercel without
-// a redeploy) or fall back to the env var for local/manual setups.
-async function getApiKeys(): Promise<string[]> {
-  const keys: string[] = [];
-  try {
-    const row = await prisma.appConfig.findUnique({ where: { key: "autodownApiKey" } });
-    if (row?.value) keys.push(row.value);
-  } catch { /* DB not reachable — fall back to env */ }
-  if (process.env.AUTODOWN_API_KEY) keys.push(process.env.AUTODOWN_API_KEY);
-  return [...new Set(keys)];
-}
-
-function headers(apiKey: string) {
-  return {
-    "Content-Type": "application/json",
-    "X-API-Key": apiKey,
-  };
-}
-
-export interface AutoDownExtractResult {
-  success: boolean;
-  platform: string;
-  type: string;
-  caption: string;
-  thumbnail: string;
-  mediaCount: number;
-}
-
-export interface AutoDownMedia {
-  type: string;
-  url: string;
-  public_id: string;
-}
+import { SourceFetchError } from "@/lib/sourceFetchError";
 
 export interface AutoDownDownloadResult {
-  success: boolean;
+  success: true;
   caption: string;
-  type: string;
-  thumbnail?: string;
-  media: AutoDownMedia[];
-  cached?: boolean;
-  extractor?: "gallery-dl" | "yt-dlp";
-  extractorVersion?: string;
+  type: "video";
+  media: { type: "video"; url: string; thumbnail?: string | null }[];
+  expiresAt: string;
 }
 
-interface AutoDownErrorBody {
-  code?: string;
-  error?: string;
-  retryable?: boolean;
-  retryAfterSeconds?: number;
+export function flullyError(code: string, status: number, retryAfterSeconds?: number): SourceFetchError {
+  const messages: Record<string, string> = {
+    UNAUTHORIZED: "Flully từ chối API key. Kiểm tra khóa Flully trong Cài đặt.",
+    FLULLY_NOT_CONFIGURED: "Chưa cấu hình API key Flully.",
+    INVALID_ORIGIN: "Origin Flully phải là địa chỉ IP hợp lệ.",
+    MEDIA_BUSY: "Flully đang xử lý video khác.",
+    MEDIA_CAPACITY_EXCEEDED: "Kho tạm Flully đã hết dung lượng.",
+    MEDIA_TOO_LARGE: "Video vượt giới hạn 100 MiB của Flully.",
+    LOGIN_REQUIRED: "Nguồn yêu cầu đăng nhập.",
+    PRIVATE_OR_REMOVED: "Bài nguồn riêng tư hoặc đã bị xóa.",
+    PRIVATE_SOURCE_DENIED: "Flully không hỗ trợ nguồn riêng tư.",
+    NO_VIDEO_SOURCE: "Nguồn không phải video; chuyển nguồn ảnh dự phòng.",
+    INVALID_MEDIA: "Flully không tìm thấy video hợp lệ.",
+    FACEBOOK_PARSE_FAILED: "Flully chưa đọc được bài Facebook.",
+    UPSTREAM_TIMEOUT: "Flully phản hồi quá thời gian cho phép.",
+  };
+  return new SourceFetchError({ provider: "flully", code, httpStatus: status,
+    message: messages[code] ?? `Flully không xử lý được yêu cầu (${code}).`,
+    retryable: !["UNAUTHORIZED", "INVALID_ORIGIN", "INVALID_JSON", "INVALID_REQUEST", "INVALID_SOURCE", "PRIVATE_SOURCE_DENIED", "MEDIA_TOO_LARGE"].includes(code)
+      && (status === 429 || status >= 500), retryAfterSeconds,
+  });
 }
 
-// Metadata only — no download, no Cloudinary side effect. Used to cheaply
-// detect whether a URL is an AutoDown-eligible public video before committing
-// to a download.
-export async function autodownExtract(url: string): Promise<AutoDownExtractResult | null> {
-  try {
-    for (const apiKey of await getApiKeys()) {
-      const res = await fetch(`${BASE_URL}/api/extract`, {
-        method: "POST",
-        headers: headers(apiKey),
-        body: JSON.stringify({ url }),
-        signal: AbortSignal.timeout(25_000),
+export async function flullyRequest(operation: "extract" | "download", url: string): Promise<unknown> {
+  const rows = await prisma.appConfig.findMany({ where: { key: { in: ["flullyAutoDownApiKey", "flullyAutoDownOriginIp"] } } });
+  const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const key = config.flullyAutoDownApiKey || process.env.AUTODOWN_PUBLIC_API_KEY;
+  const originIp = config.flullyAutoDownOriginIp || process.env.AUTODOWN_ORIGIN_IP;
+  if (!key) throw flullyError("FLULLY_NOT_CONFIGURED", 400);
+  if (originIp && !isIP(originIp)) throw flullyError("INVALID_ORIGIN", 400);
+  const target = new URL(`https://flully.com/api/autodown/v1/${operation}`);
+  const body = JSON.stringify({ url });
+  const result = await new Promise<{ status: number; text: string; retryAfter?: number }>((resolve, reject) => {
+    const req = https.request(target, {
+      method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(280_000),
+      ...(originIp ? { lookup: ((hostname, options, callback) => {
+        if (hostname !== "flully.com") return callback(new Error("Unexpected API hostname"), "", 4);
+        const address = { address: originIp, family: isIP(originIp) };
+        if (typeof options === "object" && options.all) callback(null, [address] as never, 4);
+        else callback(null, address.address, address.family);
+      }) as import("node:net").LookupFunction } : {}),
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 16 * 1024 * 1024) { response.destroy(new Error("API response too large")); return; }
+        chunks.push(chunk);
       });
-      // A stale key saved from the UI must not disable a valid deploy-time
-      // key. Try the next configured key only for authentication failures.
-      if (res.status === 401 || res.status === 403) continue;
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data?.success) return null;
-      return data as AutoDownExtractResult;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Downloads + uploads to AutoDown's Cloudinary in one call. Can take up to
-// ~60s per the API guide.
-export async function autodownDownload(url: string): Promise<AutoDownDownloadResult | null> {
-  await assertFetchProviderAvailable("autodown");
-  const keys = await getApiKeys();
-  if (!keys.length) {
-    throw new SourceFetchError({
-      provider: "autodown", code: "AUTODOWN_NOT_CONFIGURED",
-      message: "AutoDown chưa được cấu hình API key.", retryable: false,
+      response.on("error", reject);
+      response.on("end", () => resolve({ status: response.statusCode || 502, text: Buffer.concat(chunks).toString("utf8"),
+        retryAfter: Number(response.headers["retry-after"]) || undefined }));
     });
+    req.on("error", reject);
+    req.end(body);
+  }).catch((cause: unknown) => {
+    // Never persist native HTTP errors: they can contain capability URLs.
+    throw flullyError(cause instanceof Error && cause.name === "AbortError" ? "UPSTREAM_TIMEOUT" : "API_UNAVAILABLE", 503, 30);
+  });
+  let data: Record<string, unknown>;
+  try { data = JSON.parse(result.text); } catch { throw flullyError("API_UNAVAILABLE", 502, 30); }
+  if (!data || result.status < 200 || result.status >= 300 || data.success !== true) {
+    throw flullyError(result.status === 401 || result.status === 403 ? "UNAUTHORIZED"
+      : typeof data?.code === "string" && /^[A-Z_0-9]+$/.test(data.code) ? data.code : "API_UNAVAILABLE", result.status, result.retryAfter);
   }
-  let authenticationFailed = false;
-  for (const apiKey of keys) {
-    try {
-      const res = await fetch(`${BASE_URL}/api/download`, {
-        method: "POST",
-        headers: headers(apiKey),
-        body: JSON.stringify({ url }),
-        signal: AbortSignal.timeout(90_000),
-      });
-      const data = await res.json().catch(() => ({})) as AutoDownDownloadResult & AutoDownErrorBody;
-      if (res.status === 401 || res.status === 403) {
-        authenticationFailed = true;
-        continue;
-      }
-      if (!res.ok || !data?.success) {
-        const error = new SourceFetchError({
-          provider: "autodown",
-          code: data.code || `AUTODOWN_HTTP_${res.status}`,
-          message: data.error || `AutoDown trả HTTP ${res.status}.`,
-          httpStatus: res.status,
-          retryable: data.retryable ?? res.status >= 500,
-          retryAfterSeconds: data.retryAfterSeconds ?? parseRetryAfter(res.headers.get("retry-after")),
-        });
-        await recordFetchProviderFailure(error);
-        throw error;
-      }
-      await recordFetchProviderSuccess("autodown");
-      return data;
-    } catch (cause) {
-      if (cause instanceof SourceFetchError) throw cause;
-      const timeout = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
-      const error = new SourceFetchError({
-        provider: "autodown",
-        code: timeout ? "UPSTREAM_TIMEOUT" : "AUTODOWN_NETWORK_ERROR",
-        message: timeout ? "AutoDown phản hồi quá thời gian cho phép." : "Không kết nối được AutoDown.",
-        httpStatus: timeout ? 504 : 503,
-        retryable: true,
-        retryAfterSeconds: 30,
-      });
-      await recordFetchProviderFailure(error);
-      throw error;
-    }
-  }
-  if (authenticationFailed) {
-    throw new SourceFetchError({
-      provider: "autodown", code: "AUTH_FAILED",
-      message: "AutoDown từ chối API key đã cấu hình.", httpStatus: 401, retryable: false,
-    });
-  }
-  return null;
+  return data;
 }
 
-// Deletes AutoDown-side Cloudinary assets by public_id. Fire-and-forget is
-// fine — a failed cleanup just leaves a temp/ asset for AutoDown's own
-// housekeeping, it doesn't affect our app state.
-export async function autodownCleanup(publicIds: string[]): Promise<void> {
-  if (publicIds.length === 0) return;
+export function normalizeFlullyDownload(value: unknown): AutoDownDownloadResult {
+  const data = value as AutoDownDownloadResult;
+  const validUrl = (url: unknown) => typeof url === "string" && /^https:\/\/flully\.com\/_media-tmp\//.test(url);
+  if (data?.success !== true || data.type !== "video" || !Array.isArray(data.media) || data.media.length !== 1
+    || !data.media.every((item) => item.type === "video" && validUrl(item.url) && (!item.thumbnail || validUrl(item.thumbnail)))
+    || !Number.isFinite(Date.parse(data.expiresAt)) || Date.parse(data.expiresAt) <= Date.now()) {
+    throw flullyError("INVALID_RESPONSE", 502, 30);
+  }
+  return { success: true, caption: typeof data.caption === "string" ? data.caption : "", type: "video",
+    media: data.media.map((item) => ({ type: "video", url: item.url, thumbnail: item.thumbnail ?? null })), expiresAt: data.expiresAt };
+}
+
+export async function autodownDownload(url: string): Promise<AutoDownDownloadResult> {
+  await assertFetchProviderAvailable("flully");
   try {
-    for (const apiKey of await getApiKeys()) {
-      const res = await fetch(`${BASE_URL}/api/cleanup`, {
-        method: "POST",
-        headers: headers(apiKey),
-        body: JSON.stringify({ public_ids: publicIds }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (res.status !== 401 && res.status !== 403) break;
-    }
-  } catch { /* best-effort */ }
+    const data = normalizeFlullyDownload(await flullyRequest("download", url));
+    await recordFetchProviderSuccess("flully");
+    return data;
+  } catch (cause) {
+    const error = cause instanceof SourceFetchError ? cause : flullyError("API_UNAVAILABLE", 503, 30);
+    await recordFetchProviderFailure(error);
+    throw error;
+  }
 }
 
-// AutoDown's own Cloudinary public_ids are always prefixed "temp/" — use that
-// as the tag to route cleanup/refresh logic away from our own Cloudinary account.
-export function isAutoDownAsset(publicId: string | null | undefined): publicId is string {
-  return !!publicId && publicId.startsWith("temp/");
+export async function autodownExtract(url: string): Promise<unknown> {
+  return flullyRequest("extract", url);
 }

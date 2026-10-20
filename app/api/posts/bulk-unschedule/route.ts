@@ -48,6 +48,9 @@ export async function POST(request: Request) {
         },
         data: {
           status: "ready",
+          fetchDownloadSnapshot: Prisma.DbNull,
+          fetchLeaseUntil: null,
+          fetchNextAttemptAt: null,
           pageId: null,
           scheduledAt: null,
           sponsoredContentTagEnabled: null,

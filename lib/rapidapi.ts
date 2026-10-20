@@ -15,7 +15,8 @@ export interface RapidApiPostData {
   title?: string;
   caption: string;
   media: RapidApiMedia[];
-  provider?: "autodown" | "rapidapi";
+  provider?: "autodown" | "flully" | "rapidapi";
+  expiresAt?: string;
   extractor?: string;
   diagnostics?: SourceFetchDiagnostic[];
 }
@@ -68,7 +69,7 @@ async function withKeyRotation<T>(fn: (key: string) => Promise<T>): Promise<T> {
   throw lastErr instanceof Error ? lastErr : new Error("Tất cả RAPIDAPI_KEY đều hết lượt");
 }
 
-// AutoDown is fast and can run concurrently. RapidAPI is the fallback only
+// Flully runs through the dedicated two-slot Fetch Queue. RapidAPI is fallback
 // and a single free/low-tier key is easily burst-limited, so serialize those
 // requests with a short gap instead of sacrificing the entire batch to 429s.
 let rapidApiTail: Promise<void> = Promise.resolve();
@@ -84,22 +85,20 @@ async function throughRapidApiGate<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// AutoDown's /download already returns caption and stable Cloudinary media.
-// Calling /extract first made yt-dlp parse every Facebook Reel twice.
+// One Flully download call; URLs stay temporary until our upload stage.
 async function fetchViaAutoDown(url: string): Promise<RapidApiPostData> {
   const downloaded = await autodownDownload(url);
   if (!downloaded?.media?.length) throw new SourceFetchError({
-    provider: "autodown", code: "AUTODOWN_EMPTY_MEDIA",
-    message: "AutoDown không trả về media.", retryable: true, httpStatus: 502, retryAfterSeconds: 30,
+    provider: "flully", code: "FLULLY_EMPTY_MEDIA",
+    message: "Flully không trả về media.", retryable: true, httpStatus: 502, retryAfterSeconds: 30,
   });
 
   const media: RapidApiMedia[] = downloaded.media.map((m) => ({
     url: m.url,
     type: m.type,
-    publicId: m.public_id,
-    thumbnail: m.type === "video" ? downloaded.thumbnail : undefined,
+    thumbnail: m.thumbnail ?? undefined,
   }));
-  return { caption: downloaded.caption ?? "", media, provider: "autodown", extractor: downloaded.extractor ?? "yt-dlp" };
+  return { caption: downloaded.caption ?? "", media, provider: "flully", extractor: "flully", expiresAt: downloaded.expiresAt };
 }
 
 async function fetchFacebookPost(url: string): Promise<RapidApiPostData> {
@@ -232,6 +231,9 @@ export async function fetchPostData(url: string, options: { skipAutoDown?: boole
     try {
       return await fetchViaAutoDown(url);
     } catch (error) {
+      // Don't hide auth/config errors or overrun the 300s route with another
+      // provider after a long Flully timeout. Photos/unsupported sources fall back.
+      if (!(error instanceof SourceFetchError) || !["NO_VIDEO_SOURCE", "INVALID_MEDIA", "LOGIN_REQUIRED", "PRIVATE_OR_REMOVED", "NOT_FOUND", "FACEBOOK_PARSE_FAILED"].includes(error.code)) throw error;
       autodownDiagnostic = sourceDiagnostic(error);
     }
   }

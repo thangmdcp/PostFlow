@@ -24,6 +24,7 @@ export default async function NewPostPage({ searchParams }: Props) {
           },
         },
       });
+      if (initialBatch) initialBatch.posts = initialBatch.posts.map(post => ({ ...post, fetchDownloadSnapshot: null }));
     }
 
     return <BatchImportClient connections={connections} initialBatch={initialBatch} />;

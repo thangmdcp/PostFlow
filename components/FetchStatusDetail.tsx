@@ -26,7 +26,7 @@ export function FetchStatusDetail(props: FetchStatusDetailProps) {
   }, [props.status, nextAt]);
 
   const showSource = props.status === "ready" && !!props.fetchProvider;
-  if (!showSource && !props.fetchErrorCode && !(props.status === "queued" && props.errorMsg)) return null;
+  if (!showSource && !props.fetchErrorCode && !(["queued", "fetching"].includes(props.status) && props.errorMsg)) return null;
   const remaining = now !== null && nextAt ? Math.max(0, Math.ceil((nextAt - now) / 1000)) : null;
   const countdown = remaining === null ? "" : ` · ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
   const diagnostics = Array.isArray(props.fetchDiagnostics)

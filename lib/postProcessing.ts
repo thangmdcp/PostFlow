@@ -1,9 +1,10 @@
 import { fetchPostData } from "@/lib/rapidapi";
 import { extractLinks } from "@/lib/extractLinks";
-import { uploadFromUrl } from "@/lib/cloudinary";
+import { uploadFromUrl, uploadFetchedVideo, cloudinaryFetchError } from "@/lib/cloudinary";
 import { SourceFetchError, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
 import { readFetchMediaManifest, type FetchMediaAsset } from "@/lib/fetchMediaManifest";
 import { createHash } from "node:crypto";
+import { readDownloadSnapshot, reusableDownload, FetchDownloadReady, type FetchDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
 
 export interface FetchedPostFields {
   title: string | null;
@@ -19,13 +20,23 @@ export interface FetchedPostFields {
   diagnostics: SourceFetchDiagnostic[];
 }
 
-// Shared by batch creation and retry. Photos are stabilized before ready;
-// videos retain the existing publish-time preparation and temp/ cleanup.
+// Download and upload run on separate durable Queue deliveries.
 export async function fetchPostFields(sourceUrl: string, options: {
   skipAutoDown?: boolean; manifest?: unknown; postId?: string;
   checkpoint?: (assets: FetchMediaAsset[]) => Promise<void>;
+  downloadSnapshot?: unknown;
+  separateDownload?: boolean;
 } = {}): Promise<FetchedPostFields> {
-  const data = await fetchPostData(sourceUrl, options);
+  const snapshot = readDownloadSnapshot(options.downloadSnapshot, sourceUrl);
+  const cached = reusableDownload(snapshot);
+  const data = cached ?? await fetchPostData(sourceUrl, options);
+  if (!cached && options.separateDownload && data.media.length) {
+    const next: FetchDownloadSnapshot = { version: 1, sourceUrl, purpose: snapshot?.purpose ?? "fetch",
+      prepared: false,
+      ...(snapshot?.publishToPage === undefined ? {} : { publishToPage: snapshot.publishToPage }),
+      data, expiresAt: data.expiresAt ?? new Date(Date.now() + 15 * 60_000).toISOString() };
+    throw new FetchDownloadReady(next);
+  }
   const caption = data.caption ?? "";
   const links = extractLinks(caption);
 
@@ -69,19 +80,20 @@ export async function fetchPostFields(sourceUrl: string, options: {
           resourceType: "image", order: index + 1, provider, extractor: data.extractor ?? "rapidapi" });
         photo.url = uploaded.url;
         await options.checkpoint?.(manifest);
-      } catch {
-        throw new SourceFetchError({ provider, code: "CLOUDINARY_FAILED", message: "Không lưu được toàn bộ ảnh; đang chờ thử lại.", retryable: true, httpStatus: 502,
-          diagnostics: [...(data.diagnostics ?? []), { provider, code: "CLOUDINARY_FAILED", message: "Upload ảnh chưa hoàn tất.", retryable: true, httpStatus: 502 }],
-        });
+      } catch (cause) {
+        throw cloudinaryFetchError(cause);
       }
     }
   }
 
   if (bestVideo) {
-    stableMediaUrl = bestVideo.url ?? null;
+    if (!options.postId) throw new Error("Video upload requires postId");
+    const uploaded = await uploadFetchedVideo(bestVideo.url, options.postId);
+    stableMediaUrl = uploaded.secureUrl;
     mediaType = "video";
-    thumbnailUrl = photos[0]?.url ?? bestVideo.thumbnail ?? null;
-    cloudinaryId = bestVideo.publicId ?? null;
+    // Cloudinary-derived thumbnail outlives Flully's 24-hour capability URL.
+    thumbnailUrl = uploaded.secureUrl.replace(/\.[a-z0-9]+(?:\?.*)?$/i, ".jpg");
+    cloudinaryId = uploaded.publicId;
   } else if (photos.length === 1) {
     stableMediaUrl = photos[0].url;
     mediaType = "image";

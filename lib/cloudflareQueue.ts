@@ -20,6 +20,7 @@ export async function enqueueQueueJob(job: PostflowQueueJob, delaySeconds = 0): 
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
       body: JSON.stringify({ ...job, delaySeconds: Math.max(0, Math.min(86_400, Math.floor(delaySeconds))) }),
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
     });
     return response.ok;
   } catch {

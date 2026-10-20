@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS "Post" (
   "fetchErrorCode" TEXT,
   "fetchHttpStatus" INTEGER,
   "fetchLeaseUntil" TIMESTAMP(3),
+  "fetchDownloadSnapshot" JSONB,
   "fetchDiagnostics" JSONB,
   "fetchMediaManifest" JSONB,
   "fbPostId" TEXT,
@@ -141,6 +142,7 @@ ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchProvider" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchErrorCode" TEXT;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchHttpStatus" INTEGER;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchLeaseUntil" TIMESTAMP(3);
+ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchDownloadSnapshot" JSONB;
 ALTER TABLE "Post" ADD COLUMN IF NOT EXISTS "fetchDiagnostics" JSONB;
 UPDATE "Post" SET "fbPublishStatus"='done' WHERE "fbPostId" IS NOT NULL AND "fbPublishStatus" IS NULL;
 UPDATE "Post" SET "adPlatform"='facebook' WHERE "adPlatform" IS NULL;
@@ -246,30 +248,31 @@ const FIELDS = [
     configKey: "rapidApiKeys",
     label: "RAPIDAPI_KEY",
     placeholder: "key1\nkey2\nkey3\n(dùng gói free thì nhập nhiều key, mỗi dòng 1 key)",
-    hint: 'rapidapi.com → tìm "Social Download All in One" → Subscribe → lấy X-RapidAPI-Key. Dùng làm dự phòng khi AutoDown không hỗ trợ (ảnh/album/carousel, hoặc lỗi). Có thể nhập NHIỀU key, MỖI DÒNG 1 KEY — hệ thống tự xoay vòng khi 1 key hết lượt. Áp dụng ngay, không cần restart.',
+    hint: 'RapidAPI dự phòng cho ảnh/album hoặc nguồn Flully không hỗ trợ. Có thể nhập nhiều key, mỗi dòng một key. Áp dụng ngay, không cần restart.',
     secret: true,
     required: false,
     multiline: true,
     storage: "db" as const,
   },
   {
-    key: "AUTODOWN_API_KEY",
-    configKey: "autodownApiKey",
-    label: "AUTODOWN_API_KEY",
-    placeholder: "fbdl-...",
-    hint: "Key của dịch vụ AutoDown (autodown.vibevic.com) — ưu tiên dùng cho video FB/TikTok công khai, không watermark. Áp dụng ngay, không cần restart.",
+    key: "AUTODOWN_PUBLIC_API_KEY",
+    configKey: "flullyAutoDownApiKey",
+    label: "Flully API key",
+    placeholder: "Khóa riêng của Flully",
+    hint: "API flully.com: tải video công khai rồi lưu ngay vào Cloudinary. Không dùng khóa Render cũ. Chỉ lưu ở server.",
     secret: true,
     required: false,
     storage: "db" as const,
   },
   {
-    key: "AUTODOWN_BASE_URL",
-    label: "AUTODOWN_BASE_URL",
-    placeholder: "https://autodown.vibevic.com",
-    hint: "Địa chỉ service AutoDown. Thường giữ nguyên giá trị mặc định.",
+    key: "AUTODOWN_ORIGIN_IP",
+    configKey: "flullyAutoDownOriginIp",
+    label: "Flully origin IP (tuỳ chọn)",
+    placeholder: "Địa chỉ IP origin",
+    hint: "Kết nối thẳng origin cho request dài; vẫn giữ Host, TLS SNI và xác minh chứng chỉ flully.com.",
     secret: false,
     required: false,
-    storage: "env" as const,
+    storage: "db" as const,
   },
 ];
 
@@ -316,6 +319,7 @@ export function SetupClient() {
       const dbUpdates: Record<string, string> = {};
       for (const f of FIELDS) {
         if (values[f.key] === undefined) continue;
+        if (values[f.key] === "__CONFIGURED__") continue;
         const val = f.multiline ? values[f.key].replace(/\r?\n/g, "\\n") : values[f.key];
         if (f.storage === "db") {
           dbUpdates[f.configKey] = val;

@@ -34,7 +34,7 @@ export async function queryDashboard(params: URLSearchParams) {
       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${pagination.offset}`);
     const rows = await tx.post.findMany({ where: { id: { in: ids.map(row => row.id) } }, include: { extractedLinks: true, comments: true } });
     const byId = new Map(rows.map(row => [row.id, row]));
-    const posts = ids.map(row => byId.get(row.id)!);
+    const posts = ids.map(row => ({ ...byId.get(row.id)!, fetchDownloadSnapshot: null }));
     const facets = await tx.$queryRaw<{ pageId: string | null; accountId: string | null }[]>(Prisma.sql`
       SELECT DISTINCT p."pageId", p."adAccountUsed" AS "accountId" FROM "Post" p
       WHERE p.status IN (${Prisma.join(DASHBOARD_STATUSES)})`);

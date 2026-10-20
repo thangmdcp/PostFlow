@@ -44,6 +44,7 @@ model Post {
   fetchErrorCode     String?
   fetchHttpStatus    Int?
   fetchLeaseUntil    DateTime?
+  fetchDownloadSnapshot Json?
   fetchDiagnostics   Json?
   fbPostId       String?
   fbObjectStoryId String?

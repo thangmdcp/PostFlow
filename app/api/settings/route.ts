@@ -16,8 +16,8 @@ const KNOWN_ENV_KEYS = [
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
   "RAPIDAPI_KEY",
-  "AUTODOWN_API_KEY",
-  "AUTODOWN_BASE_URL",
+  "AUTODOWN_PUBLIC_API_KEY",
+  "AUTODOWN_ORIGIN_IP",
 ];
 
 const SECRET_ENV_KEYS = new Set([
@@ -26,6 +26,7 @@ const SECRET_ENV_KEYS = new Set([
   "CLOUDINARY_API_SECRET",
   "RAPIDAPI_KEY",
   "AUTODOWN_API_KEY",
+  "AUTODOWN_PUBLIC_API_KEY",
 ]);
 
 function parseEnv(content: string): Record<string, string> {

@@ -23,7 +23,7 @@ export async function GET(
       return NextResponse.json({ error: "Batch not found" }, { status: 404 });
     }
 
-    return NextResponse.json(batch);
+    return NextResponse.json({ ...batch, posts: batch.posts.map(post => ({ ...post, fetchDownloadSnapshot: null })) });
   } catch (err) {
     console.error("GET /api/batches/[id] error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -2,8 +2,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { fetchPostFieldsWithRetry } from "@/lib/postProcessing";
 import { FETCH_RETRY_DELAYS_SECONDS, fetchRetryDelaySeconds, SourceFetchError, sourceDiagnostic, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
+import { FetchDownloadReady, readDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
+import { enqueuePublish } from "@/lib/cloudflareQueue";
 
-const FETCH_LEASE_MS = 5 * 60_000;
+const FETCH_LEASE_MS = 7 * 60_000;
 
 export type FetchPostJobResult = {
   status: "done" | "deferred" | "failed" | "skipped";
@@ -14,7 +16,7 @@ function isStoredDiagnostic(value: Prisma.JsonValue): value is Prisma.JsonObject
   return !!value
     && typeof value === "object"
     && !Array.isArray(value)
-    && (value.provider === "autodown" || value.provider === "rapidapi" || value.provider === "queue")
+    && ["autodown", "flully", "cloudinary", "rapidapi", "queue"].includes(String(value.provider))
     && typeof value.code === "string"
     && typeof value.message === "string";
 }
@@ -22,7 +24,7 @@ function isStoredDiagnostic(value: Prisma.JsonValue): value is Prisma.JsonObject
 function waitingMessage(error: SourceFetchError): string {
   const autoDownCouldNotParse = error.diagnostics.some((item) => item.code === "FACEBOOK_PARSE_FAILED");
   if (error.code === "PROVIDER_CIRCUIT_OPEN") return `${error.message} Đang chờ tự tiếp tục…`;
-  if (autoDownCouldNotParse) return "AutoDown không đọc được Reel · nguồn Facebook dự phòng tạm bận · đang tự thử lại…";
+  if (autoDownCouldNotParse) return "Flully không đọc được Reel · nguồn Facebook dự phòng tạm bận · đang tự thử lại…";
   return `${error.message} Đang tự thử lại…`;
 }
 
@@ -33,6 +35,11 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   if (!post || post.status === "ready" || post.status === "done" || post.status === "pending") {
     return { status: "skipped" };
   }
+  const snapshot = readDownloadSnapshot(post.fetchDownloadSnapshot, post.sourceUrl);
+  const refreshing = snapshot?.purpose === "publish";
+  if (snapshot?.prepared) return { status: "skipped" };
+  // A stale Fetch message must never re-fetch/rebuild a scheduled caption.
+  if (post.finalCaption && post.pageId && !refreshing) return { status: "skipped" };
   if (post.fetchNextAttemptAt && post.fetchNextAttemptAt.getTime() > now.getTime()) {
     return {
       status: "deferred",
@@ -40,6 +47,8 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
     };
   }
 
+  const leaseUntil = new Date(now.getTime() + FETCH_LEASE_MS);
+  const owned = { id: postId, status: "fetching", fetchLeaseUntil: leaseUntil };
   const claim = await prisma.post.updateMany({
     where: {
       id: postId,
@@ -49,7 +58,7 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
     data: {
       status: "fetching",
       errorMsg: "Đang lấy nội dung và media…",
-      fetchLeaseUntil: new Date(now.getTime() + FETCH_LEASE_MS),
+      fetchLeaseUntil: leaseUntil,
       fetchNextAttemptAt: null,
     },
   });
@@ -58,17 +67,33 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   try {
     const fields = await fetchPostFieldsWithRetry(post.sourceUrl, {
       skipAutoDown: post.fetchProvider === "rapidapi", manifest: post.fetchMediaManifest, postId: post.id,
+      separateDownload: true, downloadSnapshot: post.fetchDownloadSnapshot,
       checkpoint: async (assets) => {
-        await prisma.post.update({ where: { id: post.id }, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
+        const saved = await prisma.post.updateMany({ where: owned, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
+        if (!saved.count) throw new Error("Fetch lease lost");
       },
     });
+    if (refreshing) {
+      const saved = await prisma.post.updateMany({ where: owned, data: {
+        stableMediaUrl: fields.stableMediaUrl, thumbnailUrl: fields.thumbnailUrl, mediaUrls: fields.mediaUrls,
+        mediaType: fields.mediaType, cloudinaryId: fields.cloudinaryId, status: "pending", errorMsg: null,
+        fetchDownloadSnapshot: { version: 1, purpose: "publish", prepared: true, sourceUrl: post.sourceUrl,
+          ...(snapshot.publishToPage === undefined ? {} : { publishToPage: snapshot.publishToPage }) },
+        fetchProvider: fields.fetchProvider, fetchErrorCode: null, fetchHttpStatus: null, fetchLeaseUntil: null, fetchNextAttemptAt: null,
+      } });
+      if (!saved.count) return { status: "skipped" };
+      // Cron can enqueue pending publish if the producer is temporarily down.
+      await enqueuePublish(post.id, { publishToPage: snapshot.publishToPage });
+      return { status: "done" };
+    }
     await prisma.post.update({
-      where: { id: post.id },
+      where: owned,
       data: {
         title: fields.title, rawCaption: fields.rawCaption, finalCaption: null, stableMediaUrl: fields.stableMediaUrl,
         thumbnailUrl: fields.thumbnailUrl, mediaUrls: fields.mediaUrls, mediaType: fields.mediaType,
         cloudinaryId: fields.cloudinaryId, status: "ready", errorMsg: null,
         fetchProvider: fields.fetchProvider,
+        fetchDownloadSnapshot: Prisma.DbNull,
         fetchMediaManifest: fields.fetchMediaManifest.length ? fields.fetchMediaManifest as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         fetchErrorCode: null, fetchHttpStatus: null, fetchNextAttemptAt: null, fetchLeaseUntil: null,
         fetchDiagnostics: fields.diagnostics.length ? fields.diagnostics as unknown as Prisma.InputJsonValue : Prisma.JsonNull,
@@ -80,6 +105,16 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
     });
     return { status: "done" };
   } catch (cause) {
+    if (cause instanceof FetchDownloadReady) {
+      const saved = await prisma.post.updateMany({ where: owned, data: {
+        status: "queued", errorMsg: "Đã tải nguồn · đang lưu media vào Cloudinary…",
+        fetchDownloadSnapshot: cause.snapshot as unknown as Prisma.InputJsonValue,
+        fetchProvider: cause.snapshot.data?.provider ?? "flully", fetchLeaseUntil: null,
+        fetchErrorCode: null, fetchHttpStatus: null, fetchNextAttemptAt: new Date(Date.now() + 1000),
+      } });
+      return saved.count ? { status: "deferred", retryAfterSeconds: 1 } : { status: "skipped" };
+    }
+    if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2025") return { status: "skipped" };
     const rawError = cause instanceof SourceFetchError ? cause : new SourceFetchError({
       provider: "queue",
       code: "UNKNOWN_FETCH_ERROR",
@@ -114,8 +149,8 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
 
     if (canRetry) {
       const retryAfterSeconds = fetchRetryDelaySeconds(attempt, error.retryAfterSeconds, Math.floor(Math.random() * 8));
-      await prisma.post.update({
-        where: { id: post.id },
+      await prisma.post.updateMany({
+        where: owned,
         data: {
           status: "queued",
           errorMsg: waitingMessage(error),
@@ -131,8 +166,8 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
       return { status: "deferred", retryAfterSeconds };
     }
 
-    await prisma.post.update({
-      where: { id: post.id },
+    await prisma.post.updateMany({
+      where: owned,
       data: {
         status: "failed",
         errorMsg: error.retryable

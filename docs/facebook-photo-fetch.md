@@ -1,5 +1,10 @@
 # Facebook photo Fetch
 
+> Superseded 2026-10-20: Render/gallery-dl is no longer called. Flully supports
+> videos only; photos/albums use RapidAPI, then Cloudinary. See
+> [current media pipeline](./flully-media-fetch.md). The notes below describe
+> the historical deployment, not active endpoints or cleanup.
+
 AutoDown `/api/download` tries cookie-free gallery-dl 1.32.15 for Facebook
 post/permalink/photo/set URLs. Explicit Reel/video URLs continue using yt-dlp.
 Unsupported or video results fall through to yt-dlp; other photo failures return

@@ -44,7 +44,7 @@ export async function POST(
         await prisma.post.update({ where: { id: post.id }, data: { status: post.status } });
         return NextResponse.json({ error: "Không thể đưa bài vào Queue" }, { status: 503 });
       }
-    } else if (!await enqueueFetch(post.id)) {
+    } else if (!await enqueueFetch(post.id) && !process.env.VERCEL && process.env.NODE_ENV !== "production") {
       waitUntil(processFetchPost(post.id));
     }
 

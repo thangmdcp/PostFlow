@@ -6,6 +6,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { SourceFetchError } from "../lib/sourceFetchError.ts";
 import { createHash } from "node:crypto";
+import { readDownloadSnapshot, reusableDownload, FetchDownloadReady } from "../lib/fetchDownloadSnapshot.ts";
 
 function processingHarness(data, upload) {
   const source = readFileSync(new URL("../lib/postProcessing.ts", import.meta.url), "utf8");
@@ -14,10 +15,11 @@ function processingHarness(data, upload) {
   const mocks = {
     "@/lib/rapidapi": { fetchPostData: async () => structuredClone(data) },
     "@/lib/extractLinks": { extractLinks: () => ["https://s.shopee.vn/test"] },
-    "@/lib/cloudinary": { uploadFromUrl: upload },
+    "@/lib/cloudinary": { uploadFromUrl: upload, cloudinaryFetchError: () => new SourceFetchError({ provider: "cloudinary", code: "CLOUDINARY_FAILED", message: "Upload failed", retryable: true }) },
     "@/lib/sourceFetchError": { SourceFetchError },
     "@/lib/fetchMediaManifest": { readFetchMediaManifest },
     "node:crypto": { createHash },
+    "@/lib/fetchDownloadSnapshot": { readDownloadSnapshot, reusableDownload, FetchDownloadReady },
   };
   vm.runInNewContext(output, { module, exports: module.exports, require: (id) => {
     if (!(id in mocks)) throw new Error(`Unexpected import ${id}`);

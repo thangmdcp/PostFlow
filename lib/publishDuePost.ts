@@ -2,9 +2,11 @@ import type { Post } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { publishToPage } from "@/lib/facebook";
 import { publishToInstagram, InstagramPublishError } from "@/lib/instagram";
-import { prepareInstagramMedia, cleanupInstagramMedia } from "@/lib/instagramMedia";
-import { uploadFromUrl, deleteFile } from "@/lib/cloudinary";
-import { autodownDownload, autodownCleanup, isAutoDownAsset } from "@/lib/autodown";
+import { prepareInstagramMedia } from "@/lib/instagramMedia";
+import { uploadFromUrl } from "@/lib/cloudinary";
+import { preparePublishMedia } from "@/lib/preparePublishMedia";
+import { readDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
+import { SourceFetchError } from "@/lib/sourceFetchError";
 import { scheduleAutoAds } from "@/lib/autoAdsRunner";
 import { parseAdAdvantageConfig } from "@/lib/adAdvantage";
 import { scheduleCommentJobs } from "@/lib/autoCommentsRunner";
@@ -26,6 +28,17 @@ export async function publishDuePost(
   inputPost: Post,
   options: { publishToPage?: boolean } = {}
 ): Promise<PublishDuePostResult> {
+  try {
+    if (!await preparePublishMedia(inputPost, options.publishToPage)) return { id: inputPost.id, status: "queued" };
+  } catch (cause) {
+    const error = cause instanceof SourceFetchError ? cause : null;
+    await prisma.post.updateMany({ where: { id: inputPost.id, status: { in: ["pending", "queued", "partial", "failed"] } },
+      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!error?.retryable ? { status: "failed" } : {}) } });
+    return { id: inputPost.id, status: "queued", retryable: error?.retryable ?? true, retryAfterSeconds: 60,
+      error: error?.message ?? "Chưa kiểm tra được media trước khi đăng." };
+  }
+  const restored = readDownloadSnapshot(inputPost.fetchDownloadSnapshot, inputPost.sourceUrl);
+  options = { publishToPage: options.publishToPage ?? restored?.publishToPage };
   const claim = await prisma.post.updateMany({
     where: { id: inputPost.id, status: { in: ["pending", "queued", "partial", "failed"] } },
     data: { status: "publishing" },
@@ -63,18 +76,6 @@ export async function publishDuePost(
     if (post.publishToInstagram && !connection.instagramUserId) {
       igError = new Error("Page chưa kết nối Instagram Professional. Hãy nhập lại token trong Cài đặt > Kết nối.");
       await prisma.post.update({ where: { id: post.id }, data: { igPublishStatus: "failed", igErrorMsg: igError.message } });
-    }
-
-    if (mediaUrl && isAutoDownAsset(cloudinaryId)) {
-      const stillThere = await fetch(mediaUrl, { method: "HEAD" }).then((r) => r.ok).catch(() => false);
-      if (!stillThere) {
-        const fresh = await autodownDownload(post.sourceUrl);
-        const freshVideo = fresh?.media?.find((item) => item.type === "video");
-        if (!freshVideo) throw new Error("Media gốc đã hết hạn và không tải lại được — link gốc có thể đã bị xoá.");
-        mediaUrl = freshVideo.url;
-        cloudinaryId = freshVideo.public_id;
-        post = await prisma.post.update({ where: { id: post.id }, data: { stableMediaUrl: mediaUrl, cloudinaryId } });
-      }
     }
 
     let preparedInstagram: Awaited<ReturnType<typeof prepareInstagramMedia>> = [];
@@ -232,14 +233,7 @@ export async function publishDuePost(
 
     if (status === "done") {
       try {
-        const latest = await prisma.post.findUniqueOrThrow({ where: { id: post.id } });
         await cleanupFetchedPhotos(post.id);
-        await cleanupInstagramMedia(post.id, latest.igMediaManifest);
-        if (isAutoDownAsset(cloudinaryId)) await autodownCleanup([cloudinaryId]);
-        else if (cloudinaryId) {
-          await deleteFile(cloudinaryId, mediaType ?? "image");
-          await prisma.post.update({ where: { id: post.id }, data: { cloudinaryId: null, stableMediaUrl: null } });
-        }
       } catch (error) {
         console.error(`[cleanup] post ${post.id}: failed after publish`, error);
       }

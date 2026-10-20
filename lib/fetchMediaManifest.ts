@@ -4,7 +4,7 @@ export interface FetchMediaAsset {
   publicId: string;
   resourceType: "image";
   order: number;
-  provider: "autodown" | "rapidapi";
+  provider: "autodown" | "flully" | "rapidapi";
   extractor: string;
 }
 
@@ -13,7 +13,7 @@ export function readFetchMediaManifest(value: unknown): FetchMediaAsset[] {
   return value.filter((item): item is FetchMediaAsset => !!item && typeof item === "object"
     && typeof item.sourceUrl === "string" && typeof item.url === "string"
     && typeof item.publicId === "string" && item.resourceType === "image"
-    && Number.isInteger(item.order) && (item.provider === "autodown" || item.provider === "rapidapi"));
+    && Number.isInteger(item.order) && (item.provider === "autodown" || item.provider === "flully" || item.provider === "rapidapi"));
 }
 
 export function fetchMediaCanBeCleaned(post: {

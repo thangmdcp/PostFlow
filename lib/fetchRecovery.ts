@@ -28,7 +28,9 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
   });
   const expiredIds = expiredLeases.map((post) => post.id);
   if (expiredIds.length) await prisma.post.updateMany({
-    where: { id: { in: expiredIds }, status: "fetching" },
+    where: { id: { in: expiredIds }, status: "fetching", OR: [
+      { fetchLeaseUntil: { lte: now } }, { fetchLeaseUntil: null, updatedAt: { lt: staleBefore } },
+    ] },
     data: {
       status: "queued",
       errorMsg: RECOVERING_MESSAGE,
@@ -42,6 +44,10 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
       ...scope,
       status: "queued",
       updatedAt: { lt: staleBefore },
+      AND: [{ OR: [{ finalCaption: null }, { AND: [
+        { fetchDownloadSnapshot: { path: ["purpose"], equals: "publish" } },
+        { fetchDownloadSnapshot: { path: ["prepared"], equals: false } },
+      ] }] }],
       OR: [{ fetchNextAttemptAt: null }, { fetchNextAttemptAt: { lte: now } }],
     },
     select: { id: true },

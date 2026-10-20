@@ -11,7 +11,7 @@ export async function assertFetchProviderAvailable(provider: Exclude<SourceFetch
   throw new SourceFetchError({
     provider,
     code: "PROVIDER_CIRCUIT_OPEN",
-    message: `${provider === "autodown" ? "AutoDown" : "Nguồn Facebook dự phòng"} đang tạm nghỉ sau nhiều lỗi liên tiếp.`,
+    message: `${provider === "flully" ? "Flully" : provider === "cloudinary" ? "Cloudinary" : provider === "autodown" ? "AutoDown cũ" : "Nguồn Facebook dự phòng"} đang tạm nghỉ sau nhiều lỗi liên tiếp.`,
     httpStatus: 503,
     retryable: true,
     retryAfterSeconds: Math.max(1, Math.ceil((state.blockedUntil.getTime() - Date.now()) / 1000)),

@@ -20,7 +20,7 @@ async function enqueueFetchBatch(ids: string[]): Promise<boolean[]> {
   return results;
 }
 
-async function processFetchBatch(ids: string[], concurrency = 4): Promise<void> {
+async function processFetchBatch(ids: string[], concurrency = 2): Promise<void> {
   let cursor = 0;
   const worker = async () => {
     while (cursor < ids.length) {
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     const postIds = batch.posts.map((post) => post.id);
     const queued = await enqueueFetchBatch(postIds);
     const fallbackIds = postIds.filter((_, index) => !queued[index]);
-    if (fallbackIds.length) waitUntil(processFetchBatch(fallbackIds));
+    if (fallbackIds.length && !process.env.VERCEL && process.env.NODE_ENV !== "production") waitUntil(processFetchBatch(fallbackIds));
 
     // Every time a new batch is fetched, top up each connected page's
     // rolling Story quota from its own already-published archive — pages

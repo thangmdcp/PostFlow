@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { processFetchPost } from "@/lib/fetchPostJob";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   // The consumer uses the same Queue secret as the producer. This is the

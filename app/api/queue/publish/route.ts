@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { publishDuePost } from "@/lib/publishDuePost";
 import { reserveMetaJob, scopesForPost } from "@/lib/metaThrottle";
+import { preparePublishMedia } from "@/lib/preparePublishMedia";
+import { SourceFetchError } from "@/lib/sourceFetchError";
 
 export const maxDuration = 90;
 
@@ -24,6 +26,21 @@ export async function POST(request: Request) {
   if (!["pending", "queued", "publishing", "partial", "failed"].includes(post.status)) {
     return NextResponse.json({ status: "cancelled" });
   }
+  // Recover a stale publish claim before media preparation, not after quota.
+  if (post.status === "publishing") {
+    if (post.updatedAt.getTime() > Date.now() - 10 * 60_000) return NextResponse.json({ error: "Job is already being processed" }, { status: 409 });
+    const recovered = await prisma.post.updateMany({ where: { id: post.id, status: "publishing", updatedAt: post.updatedAt }, data: { status: "queued" } });
+    if (!recovered.count) return NextResponse.json({ status: "skipped" });
+    post = await prisma.post.findUniqueOrThrow({ where: { id: postId } });
+  }
+  try {
+    if (!await preparePublishMedia(post, publishToPage)) return NextResponse.json({ status: "preparing_media" });
+  } catch (cause) {
+    const error = cause instanceof SourceFetchError ? cause : null;
+    await prisma.post.updateMany({ where: { id: postId, status: { in: ["pending", "queued", "partial", "failed"] } },
+      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!error?.retryable ? { status: "failed" } : {}) } });
+    return NextResponse.json({ error: error?.message ?? "Media check failed", retryAfterSeconds: 60 }, { status: error?.retryable ? 503 : 200 });
+  }
   const instagramUserId = post.publishToInstagram && post.pageId
     ? (await prisma.fbConnection.findUnique({ where: { pageId: post.pageId }, select: { instagramUserId: true } }))?.instagramUserId
     : null;
@@ -35,12 +52,7 @@ export async function POST(request: Request) {
 
   // A serverless invocation may be interrupted after claiming the row. Allow
   // the Queue's later retry to recover a claim that has been stuck for 10 min.
-  if (post.status === "publishing") {
-    if (post.updatedAt.getTime() > Date.now() - 10 * 60_000) {
-      return NextResponse.json({ error: "Job is already being processed" }, { status: 409 });
-    }
-    await prisma.post.update({ where: { id: post.id }, data: { status: "queued" } });
-  } else if (post.status === "failed" || post.status === "partial" || post.status === "pending") {
+  if (post.status === "failed" || post.status === "partial" || post.status === "pending") {
     await prisma.post.update({ where: { id: post.id }, data: { status: "queued" } });
   }
 
