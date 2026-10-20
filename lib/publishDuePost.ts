@@ -32,9 +32,10 @@ export async function publishDuePost(
     if (!await preparePublishMedia(inputPost, options.publishToPage)) return { id: inputPost.id, status: "queued" };
   } catch (cause) {
     const error = cause instanceof SourceFetchError ? cause : null;
+    const retryable = error?.retryable ?? true;
     await prisma.post.updateMany({ where: { id: inputPost.id, status: { in: ["pending", "queued", "partial", "failed"] } },
-      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!error?.retryable ? { status: "failed" } : {}) } });
-    return { id: inputPost.id, status: "queued", retryable: error?.retryable ?? true, retryAfterSeconds: 60,
+      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!retryable ? { status: "failed" } : {}) } });
+    return { id: inputPost.id, status: retryable ? "queued" : "failed", retryable, retryAfterSeconds: 60,
       error: error?.message ?? "Chưa kiểm tra được media trước khi đăng." };
   }
   const restored = readDownloadSnapshot(inputPost.fetchDownloadSnapshot, inputPost.sourceUrl);

@@ -74,6 +74,8 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
       },
     });
     if (refreshing) {
+      if (fields.mediaType !== "video") throw new SourceFetchError({ provider: "flully", code: "REFRESH_NOT_VIDEO",
+        message: "Nguồn không còn trả video; không tự đổi bài đã lên lịch thành bài ảnh.", retryable: false });
       const saved = await prisma.post.updateMany({ where: owned, data: {
         stableMediaUrl: fields.stableMediaUrl, thumbnailUrl: fields.thumbnailUrl, mediaUrls: fields.mediaUrls,
         mediaType: fields.mediaType, cloudinaryId: fields.cloudinaryId, status: "pending", errorMsg: null,

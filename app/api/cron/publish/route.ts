@@ -37,7 +37,12 @@ export async function GET(req: Request) {
 
   const now = new Date();
   const posts = await prisma.post.findMany({
-    where: { status: "pending", scheduledAt: { lte: now } },
+    where: { status: "pending", OR: [
+      { scheduledAt: { lte: now } },
+      // Immediate-publish jobs may have no scheduledAt. Resume only media
+      // refreshes that were explicitly requested by an earlier publish job.
+      { fetchDownloadSnapshot: { path: ["prepared"], equals: true } },
+    ] },
   });
 
   const results = await Promise.all(posts.map(async (post) => {

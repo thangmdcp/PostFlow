@@ -37,9 +37,10 @@ export async function POST(request: Request) {
     if (!await preparePublishMedia(post, publishToPage)) return NextResponse.json({ status: "preparing_media" });
   } catch (cause) {
     const error = cause instanceof SourceFetchError ? cause : null;
+    const retryable = error?.retryable ?? true;
     await prisma.post.updateMany({ where: { id: postId, status: { in: ["pending", "queued", "partial", "failed"] } },
-      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!error?.retryable ? { status: "failed" } : {}) } });
-    return NextResponse.json({ error: error?.message ?? "Media check failed", retryAfterSeconds: 60 }, { status: error?.retryable ? 503 : 200 });
+      data: { errorMsg: error?.message ?? "Chưa kiểm tra được media trước khi đăng.", ...(!retryable ? { status: "failed" } : {}) } });
+    return NextResponse.json({ error: error?.message ?? "Media check failed", retryAfterSeconds: 60 }, { status: retryable ? 503 : 200 });
   }
   const instagramUserId = post.publishToInstagram && post.pageId
     ? (await prisma.fbConnection.findUnique({ where: { pageId: post.pageId }, select: { instagramUserId: true } }))?.instagramUserId

@@ -176,6 +176,12 @@ test("stale Fetch delivery cannot rebuild scheduled/cancelled/completed media", 
     assert.equal((await f.run()).status, "skipped");
   }
 });
+test("refresh cannot silently switch a scheduled video to a photo; cron resumes unscheduled refreshes", async () => {
+  const f = workerFixture({ row: { finalCaption: "keep", pageId: "page", fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish" } }, processor: async () => ({ mediaType: "image" }) });
+  assert.equal((await f.run()).status, "failed"); assert.equal(f.state.fetchErrorCode, "REFRESH_NOT_VIDEO"); assert.equal(f.published.length, 0);
+  const cron = readFileSync(new URL("../app/api/cron/publish/route.ts", import.meta.url), "utf8");
+  assert.match(cron, /fetchDownloadSnapshot: \{ path: \["prepared"\], equals: true \}/);
+});
 test("new pipeline has no Render URL, cleanup endpoint, publish-time source fetch or production fallback", () => {
   const source = file => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
   for (const file of ["lib/autodown.ts", "lib/publishDuePost.ts", "lib/fetchMediaCleanup.ts"]) assert.doesNotMatch(source(file), /autodown\.vibevic|onrender\.com|\/api\/cleanup/);
