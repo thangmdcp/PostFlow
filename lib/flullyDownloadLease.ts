@@ -1,0 +1,29 @@
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/prisma";
+import { SourceFetchError } from "@/lib/sourceFetchError";
+
+export const FLULLY_DOWNLOAD_LEASE_KEY = "_internal_flully_download_lease";
+const LEASE_MS = 7 * 60_000;
+
+/** Shared across instances, legacy deliveries and local callers. Never keep
+ * a DB transaction open during the network request. An expired owner's release
+ * cannot unlock its successor; a crashed process releases by lease expiry. */
+export async function withFlullyDownloadLease<T>(run: () => Promise<T>): Promise<T> {
+  const value = await prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe('SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext($1)::bigint)', FLULLY_DOWNLOAD_LEASE_KEY);
+    const row = await tx.appConfig.findUnique({ where: { key: FLULLY_DOWNLOAD_LEASE_KEY } });
+    let until = 0;
+    try { until = Number(JSON.parse(row?.value || "{}").until) || 0; } catch { /* invalid/old lease is expired */ }
+    if (until > Date.now()) throw new SourceFetchError({ provider: "flully", code: "MEDIA_BUSY",
+      message: "Flully đang tải video khác · chờ tới lượt…", retryable: true, retryAfterSeconds: 5 });
+    const next = JSON.stringify({ owner: randomUUID(), until: Date.now() + LEASE_MS });
+    await tx.appConfig.upsert({ where: { key: FLULLY_DOWNLOAD_LEASE_KEY },
+      create: { key: FLULLY_DOWNLOAD_LEASE_KEY, value: next }, update: { value: next } });
+    return next;
+  }, { maxWait: 5000, timeout: 10_000 });
+  try { return await run(); }
+  finally {
+    await prisma.appConfig.updateMany({ where: { key: FLULLY_DOWNLOAD_LEASE_KEY, value }, data: { value: "" } })
+      .catch(() => console.warn("[fetch] Flully lease release deferred until expiry"));
+  }
+}

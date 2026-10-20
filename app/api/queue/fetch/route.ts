@@ -9,14 +9,18 @@ export async function POST(request: Request) {
   // guaranteed to match on both services.
   const workerSecret = process.env.CLOUDFLARE_QUEUE_SECRET;
   if (!workerSecret || request.headers.get("x-postflow-worker-secret") !== workerSecret) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { postId } = await request.json() as { postId?: string };
+  const { postId, stage } = await request.json() as { postId?: string; stage?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
-  const result = await processFetchPost(postId);
+  if (stage !== undefined && !["legacy", "download", "upload"].includes(stage)) return NextResponse.json({ error: "Invalid Fetch stage" }, { status: 400 });
+  const deliveryStage = stage === "download" || stage === "upload" ? stage : "legacy";
+  const started = Date.now();
+  const result = await processFetchPost(postId, deliveryStage);
+  console.info("[fetch]", { postId, stage: deliveryStage, result: result.status, durationMs: Date.now() - started });
   if (result.status === "deferred") {
     return NextResponse.json({
       error: "Nguồn Facebook tạm bận; retry qua Queue",
       retryAfterSeconds: result.retryAfterSeconds ?? 30,
     }, { status: 503 });
   }
-  return NextResponse.json({ ok: true, fetchStatus: result.status });
+  return NextResponse.json({ ok: true, fetchStatus: result.status, ...(result.retryAfterSeconds ? { retryAfterSeconds: result.retryAfterSeconds } : {}) });
 }

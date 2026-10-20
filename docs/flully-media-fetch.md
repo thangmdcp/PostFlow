@@ -19,13 +19,19 @@ certificate verification remain `flully.com`. No insecure TLS/redirect bypass.
 
 ## Durable steps
 
-1. Two-slot Fetch Queue claims a seven-minute lease. Flully request has a
+1. `postflow-download` has concurrency **one**; `postflow-upload` has concurrency
+   **two**. Both call `/api/queue/fetch` with an explicit stage and claim a seven-minute
+   per-Post lease. A shared, owner-fenced seven-minute Flully lease in AppConfig
+   also protects cross-instance/legacy/local calls; DB transactions end before
+   network I/O. Flully request has a
    280-second maximum. `/api/queue/fetch` has `maxDuration = 300`; Vercel Hobby
    must have Fluid Compute enabled (verify in project Settings → Functions).
 2. Store `Post.fetchDownloadSnapshot` JSON: version, source URL, media with
-   per-media thumbnail, expiry and purpose. Release lease, return a one-second
-   deferred delivery. This transition consumes no failure retry.
-3. Next delivery uploads via bounded streaming to Cloudinary using deterministic
+   per-media thumbnail, expiry and purpose. Release lease, enqueue immediately
+   to the **upload queue**, then ACK the download job. This transition consumes
+   neither application nor Queue failure retries. Failed enqueue preserves the
+   checkpoint and retries only the handoff; cron also routes recovery by stage.
+3. The independent upload delivery streams to Cloudinary using deterministic
    ID `postflow-fetch/video-<Post ID>`. Existing IDs are read/reused. Only a
    successful upload and readable Cloudinary HEAD allow `ready`. The retained
    thumbnail is Cloudinary-derived, not Flully's expiring URL.
@@ -33,8 +39,12 @@ certificate verification remain `flully.com`. No insecure TLS/redirect bypass.
    retry upload without re-downloading. Missing/expired snapshots download
    again. Flully/media URLs never become persistent publish/Ads URLs.
 
-Media timeout, busy, quota and capacity failures use durable backoff and
-provider-specific circuit breakers. Flully does not inherit Render's breaker.
+`MEDIA_BUSY` is resource waiting, not failure: no app attempt increment, no
+circuit update, and no Queue retry consumption. The consumer sends a delayed
+replacement (normally 5–10 seconds) and ACKs only once the send succeeds. Old
+breakers caused solely by `MEDIA_BUSY` are ignored and don't count toward the
+next real failure window. Real timeout, quota and capacity failures keep their
+durable backoff/circuit behavior. Flully does not inherit Render's breaker.
 Cloudinary authentication/account locks surface as storage errors; no bypass
 and no alternate source downloads. Jobs stay queued for cron recovery if the
 producer is unavailable in production, never run in the batch-create 60s route.
@@ -52,9 +62,20 @@ Flully has no assumed public cleanup or health endpoint.
 
 ## Rollout / acceptance
 
-Apply `20261020000000_flully_download_checkpoint/migration.sql`, configure new
-key/origin, deploy PostFlow. Existing Cloudflare consumer already supports
-deferred responses and concurrency two; no worker change is required.
+The original Flully integration requires
+`20261020000000_flully_download_checkpoint/migration.sql` and key/origin config.
+The split-queue optimization needs **no further migration**. Create
+`postflow-download`, `postflow-upload` and their respective `-dlq` queues, then
+deploy the Cloudflare Worker/bindings **before** the new PostFlow deployment.
+Keep `postflow-fetch` and its DLQ: old messages are handed to the correct new
+queue using the current database checkpoint, never replayed as inline downloads.
+The producer still accepts old `{type:"fetch",postId}` jobs; missing stage means
+download. Queue name overrides delivery payload stage. No failed/DLQ batch is
+automatically retried. Existing publish/Ads/engagement queues stay unchanged.
+
+Fetch logs contain only Post ID, stage, result and duration in milliseconds;
+they never include keys, captions or temporary capability URLs. Use these
+stage timings to distinguish actual download/upload latency from queue waiting.
 Run unit tests, TypeScript and production build. Accept using one isolated
 public video: download, checkpoint, upload, API metadata and HEAD verification.
 Do not invoke batch creation (which can also top up Stories), publishing, Ads,

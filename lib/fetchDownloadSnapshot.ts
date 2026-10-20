@@ -23,8 +23,19 @@ export function reusableDownload(snapshot: FetchDownloadSnapshot | null, now = D
   return snapshot.data;
 }
 
+export type FetchStage = "download" | "upload";
+
+export function fetchStageFor(sourceUrl: string, value: unknown, now = Date.now()): FetchStage {
+  return reusableDownload(readDownloadSnapshot(value, sourceUrl), now) ? "upload" : "download";
+}
+
 // Successful stage transition, not an upstream failure or consumed retry.
 export class FetchDownloadReady extends Error {
   snapshot: FetchDownloadSnapshot;
   constructor(snapshot: FetchDownloadSnapshot) { super("Download checkpoint ready"); this.snapshot = snapshot; }
+}
+
+export class FetchStageChanged extends Error {
+  stage: FetchStage;
+  constructor(stage: FetchStage) { super("Fetch stage changed"); this.stage = stage; }
 }

@@ -3,15 +3,17 @@ type QueueJob =
   | { type: "ads"; postId: string }
   | { type: "comment"; commentId: string }
   | { type: "story"; postId: string }
-  | { type: "fetch"; postId: string };
+  | { type: "fetch"; postId: string; stage?: "download" | "upload" | "legacy" };
 type EnqueueBody = QueueJob & { delaySeconds?: number };
 interface QueueMessage { body: QueueJob; ack(): void; retry(options?: { delaySeconds?: number }): void; }
-interface QueueBatch { messages: QueueMessage[]; }
+interface QueueBatch { queue?: string; messages: QueueMessage[]; }
 interface Env {
   POSTFLOW_PUBLISH_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_ADS_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_ENGAGEMENT_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_FETCH_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
+  POSTFLOW_DOWNLOAD_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
+  POSTFLOW_UPLOAD_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_QUEUE_SECRET: string;
   POSTFLOW_API_URL: string;
   POSTFLOW_WORKER_SECRET: string;
@@ -33,22 +35,28 @@ export default {
       (body.type === "ads" && !!body.postId) ||
       (body.type === "comment" && !!body.commentId) ||
       (body.type === "story" && !!body.postId) ||
-      (body.type === "fetch" && !!body.postId);
+      (body.type === "fetch" && !!body.postId && (body.stage === undefined || body.stage === "download" || body.stage === "upload"));
     if (!valid) return Response.json({ error: "Invalid queue job" }, { status: 400 });
     const { delaySeconds, ...job } = body;
     const queue = job.type === "fetch"
-      ? env.POSTFLOW_FETCH_QUEUE
+      ? job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE
       : job.type === "ads"
         ? env.POSTFLOW_ADS_QUEUE
         : job.type === "comment" || job.type === "story"
           ? env.POSTFLOW_ENGAGEMENT_QUEUE
           : env.POSTFLOW_PUBLISH_QUEUE;
-    await queue.send(job, { delaySeconds: Math.max(0, Math.min(86_400, Math.floor(delaySeconds ?? 0))) });
+    await queue.send(job.type === "fetch" ? { ...job, stage: job.stage ?? "download" } : job,
+      { delaySeconds: Math.max(0, Math.min(86_400, Math.floor(delaySeconds ?? 0))) });
     return Response.json({ queued: true }, { status: 202 });
   },
 
   async queue(batch: QueueBatch, env: Env): Promise<void> {
     for (const message of batch.messages) {
+      // Queue name is authoritative; stale/cross-queue deliveries cannot run
+      // a source download inside the parallel upload pool.
+      const job = message.body.type === "fetch" ? { ...message.body,
+        stage: batch.queue === "postflow-download" ? "download" as const
+          : batch.queue === "postflow-upload" ? "upload" as const : "legacy" as const } : message.body;
       const endpoint = message.body.type === "publish" ? "publish" : message.body.type;
       const response = await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/, "")}/api/queue/${endpoint}`, {
         method: "POST",
@@ -56,9 +64,21 @@ export default {
         // CLOUDFLARE_QUEUE_SECRET by the producer /enqueue handshake. Use it
         // in both directions instead of an independently configured secret.
         headers: { "Content-Type": "application/json", "x-postflow-worker-secret": env.POSTFLOW_QUEUE_SECRET },
-        body: JSON.stringify(message.body),
+        body: JSON.stringify(job),
       });
-      if (response.ok) message.ack();
+      if (response.ok) {
+        if (job.type === "fetch") {
+          const payload = await response.json().catch(() => null) as { fetchStatus?: string; retryAfterSeconds?: number } | null;
+          if (payload?.fetchStatus === "waiting") {
+            // Resource contention is not a failure: delayed replacement, then
+            // ack only after send succeeds. It consumes neither retry budget.
+            const queue = job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE;
+            await queue.send({ ...job, stage: job.stage === "upload" ? "upload" : "download" },
+              { delaySeconds: Math.max(5, Math.min(300, Math.ceil(payload.retryAfterSeconds ?? 10))) });
+          }
+        }
+        message.ack();
+      }
       else {
         const payload = await response.json().catch(() => null) as { retryAfterSeconds?: number } | null;
         const fallbackDelay = message.body.type === "ads" ? 120 : message.body.type === "comment" ? 120 : message.body.type === "story" ? 300 : 30;

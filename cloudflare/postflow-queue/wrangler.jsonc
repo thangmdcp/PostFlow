@@ -10,7 +10,9 @@
       { "binding": "POSTFLOW_PUBLISH_QUEUE", "queue": "postflow-publish" },
       { "binding": "POSTFLOW_ADS_QUEUE", "queue": "postflow-ads" },
       { "binding": "POSTFLOW_ENGAGEMENT_QUEUE", "queue": "postflow-engagement" },
-      { "binding": "POSTFLOW_FETCH_QUEUE", "queue": "postflow-fetch" }
+      { "binding": "POSTFLOW_FETCH_QUEUE", "queue": "postflow-fetch" },
+      { "binding": "POSTFLOW_DOWNLOAD_QUEUE", "queue": "postflow-download" },
+      { "binding": "POSTFLOW_UPLOAD_QUEUE", "queue": "postflow-upload" }
     ],
     "consumers": [
       {
@@ -44,6 +46,22 @@
         "max_retries": 20,
         "max_concurrency": 2,
         "dead_letter_queue": "postflow-fetch-dlq"
+      },
+      {
+        "queue": "postflow-download",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 20,
+        "max_concurrency": 1,
+        "dead_letter_queue": "postflow-download-dlq"
+      },
+      {
+        "queue": "postflow-upload",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 20,
+        "max_concurrency": 2,
+        "dead_letter_queue": "postflow-upload-dlq"
       }
     ]
   }

@@ -7,6 +7,8 @@ const FAILURE_THRESHOLD = 3;
 
 export async function assertFetchProviderAvailable(provider: Exclude<SourceFetchProvider, "queue">): Promise<void> {
   const state = await prisma.fetchProviderState.findUnique({ where: { provider } });
+  // Ignore a legacy breaker opened solely by resource contention.
+  if (provider === "flully" && state?.lastErrorCode === "MEDIA_BUSY") return;
   if (!state?.blockedUntil || state.blockedUntil.getTime() <= Date.now()) return;
   throw new SourceFetchError({
     provider,
@@ -35,10 +37,11 @@ export async function recordFetchProviderSuccess(provider: Exclude<SourceFetchPr
 }
 
 export async function recordFetchProviderFailure(error: SourceFetchError): Promise<void> {
-  if (!error.retryable || error.provider === "queue" || error.code === "PROVIDER_CIRCUIT_OPEN") return;
+  if (!error.retryable || error.provider === "queue" || error.code === "PROVIDER_CIRCUIT_OPEN"
+    || (error.provider === "flully" && error.code === "MEDIA_BUSY")) return;
   const now = new Date();
   const current = await prisma.fetchProviderState.findUnique({ where: { provider: error.provider } });
-  const insideWindow = !!current?.failureWindowStartedAt
+  const insideWindow = !(error.provider === "flully" && current?.lastErrorCode === "MEDIA_BUSY") && !!current?.failureWindowStartedAt
     && now.getTime() - current.failureWindowStartedAt.getTime() <= FAILURE_WINDOW_MS;
   const failures = insideWindow ? current!.consecutiveFailures + 1 : 1;
   const blockedUntil = failures >= FAILURE_THRESHOLD

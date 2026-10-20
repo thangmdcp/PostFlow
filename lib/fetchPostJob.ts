@@ -2,13 +2,13 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { fetchPostFieldsWithRetry } from "@/lib/postProcessing";
 import { FETCH_RETRY_DELAYS_SECONDS, fetchRetryDelaySeconds, SourceFetchError, sourceDiagnostic, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
-import { FetchDownloadReady, readDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
-import { enqueuePublish } from "@/lib/cloudflareQueue";
+import { FetchDownloadReady, FetchStageChanged, fetchStageFor, readDownloadSnapshot, type FetchStage } from "@/lib/fetchDownloadSnapshot";
+import { enqueuePublish, enqueueFetch } from "@/lib/cloudflareQueue";
 
 const FETCH_LEASE_MS = 7 * 60_000;
 
 export type FetchPostJobResult = {
-  status: "done" | "deferred" | "failed" | "skipped";
+  status: "done" | "deferred" | "waiting" | "handed_off" | "failed" | "skipped";
   retryAfterSeconds?: number;
 };
 
@@ -24,15 +24,20 @@ function isStoredDiagnostic(value: Prisma.JsonValue): value is Prisma.JsonObject
 function waitingMessage(error: SourceFetchError): string {
   const autoDownCouldNotParse = error.diagnostics.some((item) => item.code === "FACEBOOK_PARSE_FAILED");
   if (error.code === "PROVIDER_CIRCUIT_OPEN") return `${error.message} Đang chờ tự tiếp tục…`;
+  if (error.provider === "flully" && error.code === "MEDIA_BUSY") return "Flully đang tải video khác · chờ tới lượt, không tính lỗi…";
   if (autoDownCouldNotParse) return "Flully không đọc được Reel · nguồn Facebook dự phòng tạm bận · đang tự thử lại…";
   return `${error.message} Đang tự thử lại…`;
 }
 
-/** Process one source link. Called only by the dedicated Cloudflare Fetch Queue. */
-export async function processFetchPost(postId: string): Promise<FetchPostJobResult> {
+async function handoffFetch(postId: string, stage: FetchStage): Promise<FetchPostJobResult> {
+  return await enqueueFetch(postId, stage) ? { status: "handed_off" } : { status: "deferred", retryAfterSeconds: 5 };
+}
+
+/** Explicit stages never run each other's work. Legacy messages only hand off. */
+export async function processFetchPost(postId: string, stage: FetchStage | "legacy" = "download"): Promise<FetchPostJobResult> {
   const now = new Date();
   const post = await prisma.post.findUnique({ where: { id: postId } });
-  if (!post || post.status === "ready" || post.status === "done" || post.status === "pending") {
+  if (!post || !["queued", "fetching"].includes(post.status)) {
     return { status: "skipped" };
   }
   const snapshot = readDownloadSnapshot(post.fetchDownloadSnapshot, post.sourceUrl);
@@ -40,9 +45,12 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   if (snapshot?.prepared) return { status: "skipped" };
   // A stale Fetch message must never re-fetch/rebuild a scheduled caption.
   if (post.finalCaption && post.pageId && !refreshing) return { status: "skipped" };
+  if (post.fetchLeaseUntil && post.fetchLeaseUntil.getTime() > now.getTime()) return { status: "skipped" };
+  const requiredStage = fetchStageFor(post.sourceUrl, post.fetchDownloadSnapshot, now.getTime());
+  if (stage !== requiredStage) return handoffFetch(post.id, requiredStage);
   if (post.fetchNextAttemptAt && post.fetchNextAttemptAt.getTime() > now.getTime()) {
     return {
-      status: "deferred",
+      status: post.fetchErrorCode === "MEDIA_BUSY" ? "waiting" : "deferred",
       retryAfterSeconds: Math.max(1, Math.ceil((post.fetchNextAttemptAt.getTime() - now.getTime()) / 1000)),
     };
   }
@@ -52,12 +60,13 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   const claim = await prisma.post.updateMany({
     where: {
       id: postId,
+      updatedAt: post.updatedAt,
       status: { in: ["queued", "fetching"] },
       OR: [{ fetchLeaseUntil: null }, { fetchLeaseUntil: { lte: now } }],
     },
     data: {
       status: "fetching",
-      errorMsg: "Đang lấy nội dung và media…",
+      errorMsg: stage === "upload" ? "Đang lưu media vào Cloudinary…" : "Đang tải nội dung nguồn…",
       fetchLeaseUntil: leaseUntil,
       fetchNextAttemptAt: null,
     },
@@ -67,7 +76,7 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
   try {
     const fields = await fetchPostFieldsWithRetry(post.sourceUrl, {
       skipAutoDown: post.fetchProvider === "rapidapi", manifest: post.fetchMediaManifest, postId: post.id,
-      separateDownload: true, downloadSnapshot: post.fetchDownloadSnapshot,
+      separateDownload: true, downloadSnapshot: post.fetchDownloadSnapshot, stage,
       checkpoint: async (assets) => {
         const saved = await prisma.post.updateMany({ where: owned, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
         if (!saved.count) throw new Error("Fetch lease lost");
@@ -112,9 +121,13 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
         status: "queued", errorMsg: "Đã tải nguồn · đang lưu media vào Cloudinary…",
         fetchDownloadSnapshot: cause.snapshot as unknown as Prisma.InputJsonValue,
         fetchProvider: cause.snapshot.data?.provider ?? "flully", fetchLeaseUntil: null,
-        fetchErrorCode: null, fetchHttpStatus: null, fetchNextAttemptAt: new Date(Date.now() + 1000),
+        fetchErrorCode: null, fetchHttpStatus: null, fetchNextAttemptAt: null,
       } });
-      return saved.count ? { status: "deferred", retryAfterSeconds: 1 } : { status: "skipped" };
+      return saved.count ? handoffFetch(post.id, "upload") : { status: "skipped" };
+    }
+    if (cause instanceof FetchStageChanged) {
+      const saved = await prisma.post.updateMany({ where: owned, data: { status: "queued", fetchLeaseUntil: null, fetchNextAttemptAt: null } });
+      return saved.count ? handoffFetch(post.id, cause.stage) : { status: "skipped" };
     }
     if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2025") return { status: "skipped" };
     const rawError = cause instanceof SourceFetchError ? cause : new SourceFetchError({
@@ -145,12 +158,14 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
       retryAfterSeconds: rawError.retryAfterSeconds,
       diagnostics,
     });
-    const consumesAttempt = error.code !== "PROVIDER_CIRCUIT_OPEN";
+    const busy = error.provider === "flully" && error.code === "MEDIA_BUSY";
+    const consumesAttempt = !busy && error.code !== "PROVIDER_CIRCUIT_OPEN";
     const attempt = (post.fetchAttempt ?? 0) + (consumesAttempt ? 1 : 0);
     const canRetry = error.retryable && (!consumesAttempt || attempt <= FETCH_RETRY_DELAYS_SECONDS.length);
 
     if (canRetry) {
-      const retryAfterSeconds = fetchRetryDelaySeconds(attempt, error.retryAfterSeconds, Math.floor(Math.random() * 8));
+      const retryAfterSeconds = busy ? Math.max(5, Math.min(30, error.retryAfterSeconds ?? 10))
+        : fetchRetryDelaySeconds(attempt, error.retryAfterSeconds, Math.floor(Math.random() * 8));
       await prisma.post.updateMany({
         where: owned,
         data: {
@@ -165,7 +180,7 @@ export async function processFetchPost(postId: string): Promise<FetchPostJobResu
           fetchDiagnostics: error.diagnostics as unknown as Prisma.InputJsonValue,
         },
       });
-      return { status: "deferred", retryAfterSeconds };
+      return { status: busy ? "waiting" : "deferred", retryAfterSeconds };
     }
 
     await prisma.post.updateMany({

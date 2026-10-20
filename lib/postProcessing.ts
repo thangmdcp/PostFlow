@@ -4,7 +4,7 @@ import { uploadFromUrl, uploadFetchedVideo, cloudinaryFetchError } from "@/lib/c
 import { SourceFetchError, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
 import { readFetchMediaManifest, type FetchMediaAsset } from "@/lib/fetchMediaManifest";
 import { createHash } from "node:crypto";
-import { readDownloadSnapshot, reusableDownload, FetchDownloadReady, type FetchDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
+import { readDownloadSnapshot, reusableDownload, FetchDownloadReady, FetchStageChanged, type FetchDownloadSnapshot, type FetchStage } from "@/lib/fetchDownloadSnapshot";
 
 export interface FetchedPostFields {
   title: string | null;
@@ -26,9 +26,12 @@ export async function fetchPostFields(sourceUrl: string, options: {
   checkpoint?: (assets: FetchMediaAsset[]) => Promise<void>;
   downloadSnapshot?: unknown;
   separateDownload?: boolean;
+  stage?: FetchStage;
 } = {}): Promise<FetchedPostFields> {
   const snapshot = readDownloadSnapshot(options.downloadSnapshot, sourceUrl);
   const cached = reusableDownload(snapshot);
+  if (options.stage === "upload" && !cached) throw new FetchStageChanged("download");
+  if (options.stage === "download" && cached) throw new FetchStageChanged("upload");
   const data = cached ?? await fetchPostData(sourceUrl, options);
   if (!cached && options.separateDownload && data.media.length) {
     const next: FetchDownloadSnapshot = { version: 1, sourceUrl, purpose: snapshot?.purpose ?? "fetch",

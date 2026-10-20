@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import { prisma } from "@/lib/prisma";
 import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
 import { SourceFetchError } from "@/lib/sourceFetchError";
+import { withFlullyDownloadLease } from "@/lib/flullyDownloadLease";
 
 export interface AutoDownDownloadResult {
   success: true;
@@ -102,7 +103,7 @@ export function normalizeFlullyDownload(value: unknown): AutoDownDownloadResult 
 export async function autodownDownload(url: string): Promise<AutoDownDownloadResult> {
   await assertFetchProviderAvailable("flully");
   try {
-    const data = normalizeFlullyDownload(await flullyRequest("download", url));
+    const data = await withFlullyDownloadLease(async () => normalizeFlullyDownload(await flullyRequest("download", url)));
     await recordFetchProviderSuccess("flully");
     return data;
   } catch (cause) {

@@ -9,13 +9,13 @@ import { pipeline } from "node:stream/promises";
 import vm from "node:vm";
 import ts from "typescript";
 import { SourceFetchError, sourceDiagnostic, fetchRetryDelaySeconds, FETCH_RETRY_DELAYS_SECONDS } from "../lib/sourceFetchError.ts";
-import { FetchDownloadReady, readDownloadSnapshot, reusableDownload } from "../lib/fetchDownloadSnapshot.ts";
+import { FetchDownloadReady, FetchStageChanged, fetchStageFor, readDownloadSnapshot, reusableDownload } from "../lib/fetchDownloadSnapshot.ts";
 import { readFetchMediaManifest, fetchMediaCanBeCleaned } from "../lib/fetchMediaManifest.ts";
 
 const sourceUrl = "https://www.facebook.com/reel/123456789";
 const media = { type: "video", url: "https://flully.com/_media-tmp/asset/cap/media.mp4", thumbnail: "https://flully.com/_media-tmp/asset/cap/thumbnail.jpg" };
 const downloaded = () => ({ provider: "flully", caption: "caption\nhttps://s.shopee.vn/aff", media: [{ ...media }], expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
-const snapshots = { FetchDownloadReady, readDownloadSnapshot, reusableDownload };
+const snapshots = { FetchDownloadReady, FetchStageChanged, fetchStageFor, readDownloadSnapshot, reusableDownload };
 function load(file, mocks, globals = {}) {
   const module = { exports: {} };
   const code = ts.transpileModule(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"), {
@@ -42,6 +42,7 @@ function flullyFixture({ status = 200, body, key = "test-key", origin = "203.0.1
       { key: "flullyAutoDownApiKey", value: key }, { key: "flullyAutoDownOriginIp", value: origin },
     ] } } },
     "@/lib/sourceFetchError": { SourceFetchError },
+    "@/lib/flullyDownloadLease": { withFlullyDownloadLease: run => run() },
     "@/lib/fetchProviderCircuit": { assertFetchProviderAvailable: async provider => circuits.push(provider), recordFetchProviderSuccess: async () => {}, recordFetchProviderFailure: async () => {} },
   });
   return { api, calls, circuits };
@@ -127,9 +128,9 @@ test("expired checkpoint re-downloads; readable Cloudinary media has no Flully l
   await assert.rejects(run(sourceUrl, { postId: "p", separateDownload: true, downloadSnapshot: { version: 1, purpose: "fetch", sourceUrl, data: downloaded(), expiresAt: new Date(0).toISOString() } }), error => error instanceof FetchDownloadReady);
   assert.equal(calls, 1);
 });
-function workerFixture({ processor, row = {} } = {}) {
+function workerFixture({ processor, row = {}, enqueue = true } = {}) {
   const state = { id: "p", sourceUrl, status: "queued", fetchAttempt: 0, fetchDiagnostics: null, fetchLeaseUntil: null, finalCaption: null, pageId: null, ...row };
-  const published = [];
+  const published = [], routed = [];
   const matches = where => (!where.status || (typeof where.status === "string" ? state.status === where.status : where.status.in.includes(state.status)))
     && (!where.fetchLeaseUntil || state.fetchLeaseUntil?.getTime() === where.fetchLeaseUntil.getTime())
     && (!where.OR || !state.fetchLeaseUntil || state.fetchLeaseUntil.getTime() <= Date.now());
@@ -143,31 +144,36 @@ function workerFixture({ processor, row = {} } = {}) {
     "@prisma/client": { Prisma: { PrismaClientKnownRequestError: KnownError, DbNull: null, JsonNull: null } },
     "@/lib/prisma": { prisma: { post } }, "@/lib/postProcessing": { fetchPostFieldsWithRetry: processor },
     "@/lib/sourceFetchError": { SourceFetchError, sourceDiagnostic, fetchRetryDelaySeconds, FETCH_RETRY_DELAYS_SECONDS },
-    "@/lib/fetchDownloadSnapshot": snapshots, "@/lib/cloudflareQueue": { enqueuePublish: async (...args) => { published.push(args); return true; } },
+    "@/lib/fetchDownloadSnapshot": snapshots, "@/lib/cloudflareQueue": {
+      enqueuePublish: async (...args) => { published.push(args); return true; },
+      enqueueFetch: async (...args) => { routed.push(args); return enqueue; },
+    },
   });
-  return { state, published, run: () => api.processFetchPost("p") };
+  return { state, published, routed, run: stage => api.processFetchPost("p", stage) };
 }
 test("Queue stage transition releases 7-minute lease without consuming a failure attempt", async () => {
   let lease;
   const f = workerFixture({ processor: async () => { lease = f.state.fetchLeaseUntil; throw new FetchDownloadReady({ version: 1, purpose: "fetch", sourceUrl, data: downloaded(), expiresAt: downloaded().expiresAt }); } });
   const start = Date.now(); const result = await f.run();
-  assert.equal(result.retryAfterSeconds, 1); assert.equal(f.state.fetchAttempt, 0);
+  assert.equal(result.status, "handed_off"); assert.equal(f.state.fetchAttempt, 0);
+  assert.deepEqual(f.routed, [["p", "upload"]]);
   assert.ok(lease.getTime() >= start + 419_000);
   assert.equal(f.state.status, "queued"); assert.equal(f.state.fetchLeaseUntil, null);
   assert.ok(f.state.fetchDownloadSnapshot.data);
 });
 test("duplicate deliveries claim only once and never publish inside Fetch", async () => {
   let release, calls = 0;
-  const f = workerFixture({ processor: async () => { calls++; await new Promise(resolve => { release = resolve; }); return { fetchProvider: "flully", fetchMediaManifest: [], diagnostics: [], links: [] }; } });
-  const first = f.run(); await new Promise(resolve => setImmediate(resolve));
-  const second = await f.run(); assert.equal(second.status, "skipped");
+  const f = workerFixture({ row: { fetchDownloadSnapshot: { version: 1, purpose: "fetch", sourceUrl, data: downloaded(), expiresAt: downloaded().expiresAt } },
+    processor: async () => { calls++; await new Promise(resolve => { release = resolve; }); return { fetchProvider: "flully", fetchMediaManifest: [], diagnostics: [], links: [] }; } });
+  const first = f.run("upload"); await new Promise(resolve => setImmediate(resolve));
+  const second = await f.run("upload"); assert.equal(second.status, "skipped");
   release(); await first; assert.equal(calls, 1); assert.equal(f.published.length, 0); assert.equal(f.state.status, "ready");
 });
 test("publish refresh changes only media, retains captions/affiliate/Ads snapshots and resumes Queue", async () => {
   const f = workerFixture({ row: { pageId: "page", finalCaption: "affiliate #sponsoredcontent", campaignName: "keep", scheduledAt: new Date(0), adCreativeId: "creative", adCtaType: "SHOP_NOW",
-    fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish", publishToPage: false } },
+    fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish", publishToPage: false, data: downloaded(), expiresAt: downloaded().expiresAt } },
     processor: async () => ({ stableMediaUrl: "https://cloud/video", thumbnailUrl: "https://cloud/thumb", mediaType: "video", cloudinaryId: "video-p", fetchProvider: "flully" }) });
-  await f.run();
+  await f.run("upload");
   assert.equal(f.state.finalCaption, "affiliate #sponsoredcontent"); assert.equal(f.state.campaignName, "keep"); assert.equal(f.state.adCreativeId, "creative");
   assert.equal(f.state.adCtaType, "SHOP_NOW"); assert.equal(f.state.status, "pending"); assert.equal(f.state.fetchDownloadSnapshot.prepared, true);
   assert.equal(f.published[0][1].publishToPage, false);
@@ -179,8 +185,8 @@ test("stale Fetch delivery cannot rebuild scheduled/cancelled/completed media", 
   }
 });
 test("refresh cannot silently switch a scheduled video to a photo; cron resumes unscheduled refreshes", async () => {
-  const f = workerFixture({ row: { finalCaption: "keep", pageId: "page", fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish" } }, processor: async () => ({ mediaType: "image" }) });
-  assert.equal((await f.run()).status, "failed"); assert.equal(f.state.fetchErrorCode, "REFRESH_NOT_VIDEO"); assert.equal(f.published.length, 0);
+  const f = workerFixture({ row: { finalCaption: "keep", pageId: "page", fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish", data: downloaded(), expiresAt: downloaded().expiresAt } }, processor: async () => ({ mediaType: "image" }) });
+  assert.equal((await f.run("upload")).status, "failed"); assert.equal(f.state.fetchErrorCode, "REFRESH_NOT_VIDEO"); assert.equal(f.published.length, 0);
   const cron = readFileSync(new URL("../app/api/cron/publish/route.ts", import.meta.url), "utf8");
   assert.match(cron, /fetchDownloadSnapshot: \{ path: \["prepared"\], equals: true \}/);
 });
@@ -246,4 +252,43 @@ test("publish preparation reuses >24h Cloudinary media and routes only missing f
   assert.equal(updates[0].data.fetchDownloadSnapshot.publishToPage, false);
   const pending = { ...post, status: "queued", fetchDownloadSnapshot: { version: 1, sourceUrl, purpose: "publish", prepared: false, data: downloaded() } };
   await api.preparePublishMedia(pending); assert.equal(updates.length, 1);
+});
+
+test("busy capacity waits do not consume app attempts, even after the normal retry budget", async () => {
+  let calls = 0;
+  const f = workerFixture({ row: { fetchAttempt: 9 }, processor: async () => { calls++;
+    throw new SourceFetchError({ provider: "flully", code: "MEDIA_BUSY", message: "busy", retryable: true });
+  } });
+  const result = await f.run("download");
+  assert.equal(result.status, "waiting"); assert.equal(result.retryAfterSeconds, 10);
+  assert.equal(f.state.fetchAttempt, 9); assert.equal(f.state.fetchErrorCode, "MEDIA_BUSY");
+  assert.equal(f.state.fetchLeaseUntil, null); assert.equal(f.state.status, "queued");
+  assert.match(f.state.errorMsg, /không tính lỗi/);
+  assert.equal((await f.run("download")).status, "waiting"); assert.equal(calls, 1);
+});
+test("legacy and wrong-stage deliveries hand off without downloads or uploads", async () => {
+  const snapshot = { version: 1, sourceUrl, purpose: "fetch", data: downloaded(), expiresAt: downloaded().expiresAt };
+  for (const [stage, value, expected] of [["legacy", null, "download"], ["download", snapshot, "upload"], ["legacy", snapshot, "upload"],
+    ["upload", { ...snapshot, expiresAt: new Date(0).toISOString() }, "download"]]) {
+    const f = workerFixture({ row: { fetchDownloadSnapshot: value }, processor: async () => { throw new Error("must hand off, not process"); } });
+    assert.equal((await f.run(stage)).status, "handed_off"); assert.deepEqual(f.routed, [["p", expected]]);
+    assert.equal(f.state.fetchAttempt, 0); assert.equal(f.state.fetchLeaseUntil, null);
+  }
+});
+test("upload handoff outage preserves checkpoint and never re-downloads", async () => {
+  let calls = 0;
+  const snapshot = { version: 1, sourceUrl, purpose: "fetch", data: downloaded(), expiresAt: downloaded().expiresAt };
+  const f = workerFixture({ enqueue: false, processor: async () => { calls++; throw new FetchDownloadReady(snapshot); } });
+  assert.equal((await f.run("download")).status, "deferred");
+  assert.ok(f.state.fetchDownloadSnapshot.data); assert.equal(f.state.fetchAttempt, 0);
+  assert.equal((await f.run("download")).status, "deferred"); assert.equal(calls, 1);
+  assert.equal(f.state.status, "queued"); assert.equal(f.state.fetchLeaseUntil, null);
+});
+test("checkpoint expiring between route and processing cannot start a download in upload pool", async () => {
+  let calls = 0;
+  const run = processorFixture({ fetchData: async () => { calls++; return downloaded(); } });
+  await assert.rejects(run(sourceUrl, { stage: "upload", postId: "p", separateDownload: true,
+    downloadSnapshot: { version: 1, sourceUrl, purpose: "fetch", data: downloaded(), expiresAt: new Date(0).toISOString() } }),
+    error => error instanceof FetchStageChanged && error.stage === "download");
+  assert.equal(calls, 0);
 });

@@ -1,3 +1,5 @@
+import type { FetchStage } from "@/lib/fetchDownloadSnapshot";
+
 const QUEUE_PATH = "/enqueue";
 
 export type PostflowQueueJob =
@@ -5,7 +7,7 @@ export type PostflowQueueJob =
   | { type: "ads"; postId: string }
   | { type: "comment"; commentId: string }
   | { type: "story"; postId: string }
-  | { type: "fetch"; postId: string };
+  | { type: "fetch"; postId: string; stage?: FetchStage };
 
 /** Sends a lightweight delayed job to the Cloudflare producer Worker.
  * Supabase remains the source of truth; Queue only delivers the work. */
@@ -44,6 +46,6 @@ export function enqueueAds(postId: string, delaySeconds: number): Promise<boolea
   return enqueueQueueJob({ type: "ads", postId }, delaySeconds);
 }
 
-export function enqueueFetch(postId: string): Promise<boolean> {
-  return enqueueQueueJob({ type: "fetch", postId });
+export function enqueueFetch(postId: string, stage: FetchStage = "download"): Promise<boolean> {
+  return enqueueQueueJob({ type: "fetch", postId, stage });
 }
