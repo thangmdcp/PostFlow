@@ -69,6 +69,8 @@ test("Flully rejects wrong keys, empty/non-JSON response and invalid origin with
   const f = flullyFixture({ origin: "https://flully.com" });
   await assert.rejects(f.api.autodownDownload(sourceUrl), e => e.code === "INVALID_ORIGIN" && !e.retryable);
   assert.equal(f.calls.length, 0);
+  await assert.rejects(flullyFixture({ status: 401, body: "unauthorized" }).api.autodownDownload(sourceUrl), e => e.code === "UNAUTHORIZED" && !e.retryable);
+  await assert.rejects(flullyFixture({ body: "{}" }).api.autodownDownload(sourceUrl), e => e.retryable && e.httpStatus === 502);
 });
 test("Flully busy, timeout, capacity and 429/5xx back off; oversized/private/auth do not", () => {
   const { api } = flullyFixture();

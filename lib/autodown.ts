@@ -75,10 +75,14 @@ export async function flullyRequest(operation: "extract" | "download", url: stri
     throw flullyError(cause instanceof Error && cause.name === "AbortError" ? "UPSTREAM_TIMEOUT" : "API_UNAVAILABLE", 503, 30);
   });
   let data: Record<string, unknown>;
-  try { data = JSON.parse(result.text); } catch { throw flullyError("API_UNAVAILABLE", 502, 30); }
+  try { data = JSON.parse(result.text); } catch {
+    throw flullyError(result.status === 401 || result.status === 403 ? "UNAUTHORIZED" : "API_UNAVAILABLE",
+      result.status === 401 || result.status === 403 ? result.status : 502, 30);
+  }
   if (!data || result.status < 200 || result.status >= 300 || data.success !== true) {
     throw flullyError(result.status === 401 || result.status === 403 ? "UNAUTHORIZED"
-      : typeof data?.code === "string" && /^[A-Z_0-9]+$/.test(data.code) ? data.code : "API_UNAVAILABLE", result.status, result.retryAfter);
+      : typeof data?.code === "string" && /^[A-Z_0-9]+$/.test(data.code) ? data.code : "API_UNAVAILABLE",
+      result.status >= 400 ? result.status : 502, result.retryAfter);
   }
   return data;
 }
