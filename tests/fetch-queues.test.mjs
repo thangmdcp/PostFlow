@@ -67,9 +67,19 @@ test("idle-source pump immediately pulls next work; busy waits; empty pool stops
 test("pump enqueue failure or malformed response does not lose delivery", async () => {
   for(const options of [{reply:{fetchStatus:"done"},sendFailure:true},{reply:{}}]){
     const f=queueFixture(options);
-    await assert.rejects(f.api.queue({queue:"postflow-download",messages:[f.message({type:"fetch-pump",provider:"flully"})]},f.env));
+    const run=f.api.queue({queue:"postflow-download",messages:[f.message({type:"fetch-pump",provider:"flully"})]},f.env);
+    if(options.sendFailure)await assert.rejects(run);else {await run;assert.equal(f.retries.length,1);}
     assert.equal(f.acks.length,0);
   }
+});
+test("a single Render pump starts two independent lanes without waiting for autoscaling",async()=>{
+  let release;let active=0,max=0,calls=0;
+  const api=load("cloudflare/postflow-queue/src/index.ts",{},{fetch:async()=>{
+    calls++;active++;max=Math.max(max,active);if(calls<=2)await new Promise(resolve=>{if(release){release();resolve();}else release=resolve;});active--;
+    return new Response(JSON.stringify({fetchStatus:"skipped"}));
+  }}).default;
+  let ack=0;await api.queue({queue:"postflow-render",messages:[{body:{type:"fetch-pump",provider:"render"},ack:()=>ack++,retry:()=>assert.fail()}]}, {POSTFLOW_API_URL:"https://test",POSTFLOW_QUEUE_SECRET:"secret"});
+  assert.equal(max,2);assert.equal(ack,1);
 });
 test("real upload/network errors retain Queue retry/backoff and never move into download pool", async () => {
   const f = queueFixture({ reply: { retryAfterSeconds: 120 }, httpStatus: 503 });

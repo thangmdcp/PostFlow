@@ -14,6 +14,10 @@ claim the oldest eligible queued Post from a shared database FIFO. The Post CAS
 and numbered provider slot are reserved in one advisory-locked transaction.
 Slot owner tokens fence release; leases expire after seven minutes. A source
 immediately enqueues its next pump after finishing, with cron as recovery only.
+One Render pump explicitly runs two independent request lanes (each guarded by
+the database slots), since Queue autoscaling alone may stay at one consumer on
+small batches. Each lane pulls the next job immediately after release; bounded
+handlers re-enqueue before reaching Cloudflare's wall-clock limit.
 Private AppConfig leases fence legacy single-slot calls during rollout: those
 must finish/expire before new slots open. Cloudflare Render
 Queue concurrency is 2, Flully is 1, Cloudinary upload is 2. Duplicate Post

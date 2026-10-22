@@ -27,6 +27,28 @@ function validBearer(request: Request, expected: string) {
   return request.headers.get("authorization") === `Bearer ${expected}`;
 }
 
+/** Queue autoscaling can stay at one consumer on a small backlog. Explicit
+ * lanes fill both Render slots even then. Database reservations remain the
+ * hard global limit across consumers. Each completed lane pulls immediately,
+ * avoiding a Queue delivery hop for every video. Stay below the 15m handler
+ * limit even when the last Vercel request takes its full 300s. */
+async function pumpLane(provider:"flully"|"render",env:Env):Promise<number|null> {
+  const deadline=Date.now()+540_000;
+  for(let i=0;i<20;i++){
+    const response=await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/,"")}/api/queue/fetch`,{
+      method:"POST",headers:{"Content-Type":"application/json","x-postflow-worker-secret":env.POSTFLOW_QUEUE_SECRET},
+      body:JSON.stringify({type:"fetch-pump",provider}),
+    });
+    if(!response.ok)throw new Error(`Fetch pump returned HTTP ${response.status}`);
+    const result=await response.json().catch(()=>null) as {fetchStatus?:string;retryAfterSeconds?:number}|null;
+    if(!result?.fetchStatus)throw new Error("Invalid fetch pump response; keep delivery retryable");
+    if(result.fetchStatus==="skipped")return null;
+    if(result.fetchStatus==="waiting")return Math.max(5,Math.min(300,result.retryAfterSeconds||10));
+    if(Date.now()>=deadline)return 0;
+  }
+  return 0;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -62,6 +84,15 @@ export default {
       const job = message.body.type === "fetch-pump" ? {...message.body,provider:batch.queue === "postflow-render"?"render" as const:"flully" as const} : message.body.type === "fetch" ? { ...message.body,
         stage: batch.queue === "postflow-download" ? "download" as const
           : batch.queue === "postflow-render" ? "render" as const : batch.queue === "postflow-upload" ? "upload" as const : "legacy" as const } : message.body;
+      if(job.type === "fetch-pump"){
+        // allSettled keeps the other lane alive if one request/enqueue fails.
+        const lanes=await Promise.allSettled(Array.from({length:job.provider==="render"?2:1},()=>pumpLane(job.provider,env)));
+        if(lanes.some(lane=>lane.status==="rejected")){message.retry({delaySeconds:30});continue;}
+        const delays=lanes.flatMap(lane=>lane.status==="fulfilled" && lane.value!==null?[lane.value]:[]);
+        if(delays.length){const queue=job.provider==="render"?env.POSTFLOW_RENDER_QUEUE:env.POSTFLOW_DOWNLOAD_QUEUE;
+          await queue.send(job,{delaySeconds:Math.min(...delays)});}
+        message.ack();continue;
+      }
       const endpoint = message.body.type === "fetch-pump" ? "fetch" : message.body.type === "publish" ? "publish" : message.body.type;
       const response = await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/, "")}/api/queue/${endpoint}`, {
         method: "POST",
@@ -72,14 +103,6 @@ export default {
         body: JSON.stringify(job),
       });
       if (response.ok) {
-        if(job.type === "fetch-pump"){
-          const result=await response.json().catch(()=>null) as {fetchStatus?:string;retryAfterSeconds?:number}|null;
-          if(!result?.fetchStatus)throw new Error("Invalid fetch pump response; keep delivery retryable");
-          if(result && result.fetchStatus !== "skipped"){
-            const queue=job.provider === "render"?env.POSTFLOW_RENDER_QUEUE:env.POSTFLOW_DOWNLOAD_QUEUE;
-            await queue.send(job,{delaySeconds:result.fetchStatus === "waiting" ? Math.max(5,Math.min(300,result.retryAfterSeconds||10)):0});
-          }
-        }
         if (job.type === "fetch") {
           const payload = await response.json().catch(() => null) as { fetchStatus?: string; retryAfterSeconds?: number } | null;
           if (payload?.fetchStatus === "waiting") {

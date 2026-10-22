@@ -75,7 +75,7 @@ export async function enqueueRecoveredFetches(posts: {id:string;sourceUrl:string
 
 export async function wakeDownloadPool(): Promise<boolean> {
   const config=await (await import("@/lib/renderDownload")).renderConfig();
-  const jobs:PostflowQueueJob[]=[{type:"fetch-pump",provider:"flully"},...(config?[{type:"fetch-pump" as const,provider:"render" as const},{type:"fetch-pump" as const,provider:"render" as const}]:[])];
+  const jobs:PostflowQueueJob[]=[{type:"fetch-pump",provider:"flully"},...(config?[{type:"fetch-pump" as const,provider:"render" as const}]:[])];
   const results=await Promise.all(jobs.map(job=>enqueueQueueJob(job)));
   return results.every(Boolean);
 }
