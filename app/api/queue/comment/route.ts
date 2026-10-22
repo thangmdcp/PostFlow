@@ -10,7 +10,8 @@ export async function POST(request: Request) {
   }
   const { commentId } = await request.json() as { commentId?: string };
   if (!commentId) return NextResponse.json({ error: "commentId is required" }, { status: 400 });
-  const comment = await prisma.postComment.findUnique({ where: { id: commentId }, include: { post: { select: { pageId: true } } } });
+  const comment = await prisma.postComment.findUnique({ where: { id: commentId }, include: { post: { select: { pageId: true, sourceKind: true } } } });
+  if (comment?.post.sourceKind === "existing_facebook_post") return NextResponse.json({ ok: true });
   if (!comment || comment.status === "done" || comment.status === "failed") return NextResponse.json({ ok: true });
   const gate = await reserveMetaJob("comment", scopesForPost(comment.post.pageId), commentId);
   if (!gate.allowed) {

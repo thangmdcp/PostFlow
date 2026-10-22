@@ -14,11 +14,16 @@ export async function POST(request: Request) {
   }
   const { postId } = await request.json() as { postId?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
-  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true, adCtaScope: true, fbCtaStatus: true } });
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, adAccountUsed: true, adStatus: true, adPlatform: true, adPlacementConfig: true, adCtaScope: true, fbCtaStatus: true, sourceKind: true, adNextAttemptAt: true, updatedAt: true } });
   if (!post) return NextResponse.json({ ok: true });
   const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
-  const facebookCtaNeedsWork = post.adCtaScope === "AD_AND_FACEBOOK_POST" && ["pending", "verifying"].includes(post.fbCtaStatus ?? "");
+  const facebookCtaNeedsWork = post.sourceKind !== "existing_facebook_post" && post.adCtaScope === "AD_AND_FACEBOOK_POST" && ["pending", "verifying"].includes(post.fbCtaStatus ?? "");
   if (!adsNeedWork && !facebookCtaNeedsWork) return NextResponse.json({ ok: true });
+  if (adsNeedWork && post.adNextAttemptAt && post.adNextAttemptAt.getTime() > Date.now()) return NextResponse.json({ retryAfterSeconds: Math.max(1, Math.ceil((post.adNextAttemptAt.getTime() - Date.now()) / 1000)) }, { status: 503 });
+  if (post.adStatus === "creating") {
+    const result = await attemptAutoAds(postId);
+    return NextResponse.json(result, { status: result.retry ? 503 : 200 });
+  }
   const placementPlatforms = post.adPlacementConfig && typeof post.adPlacementConfig === "object" && !Array.isArray(post.adPlacementConfig)
     ? (post.adPlacementConfig as Record<string, unknown>).publisherPlatforms
     : null;
@@ -29,8 +34,8 @@ export async function POST(request: Request) {
   const gate = await reserveMetaJob("ads", scopesForPost(post.pageId, post.adAccountUsed, instagramUserId), postId);
   if (!gate.allowed) {
     const nextAttemptAt = new Date(Date.now() + gate.retryAfterSeconds * 1000);
-    await prisma.post.update({
-      where: { id: postId },
+    await prisma.post.updateMany({
+      where: { id: postId, updatedAt: post.updatedAt, adStatus: post.adStatus },
       data: adsNeedWork
         ? { adStatus: "pending", adNextAttemptAt: nextAttemptAt, errorMsg: `[quota] ${gate.reason ?? "Chờ Meta hồi quota"}` }
         : { fbCtaStatus: post.fbCtaStatus ?? "pending", fbCtaNextAttemptAt: nextAttemptAt, fbCtaErrorMsg: gate.reason ?? "Chờ Meta hồi quota" },

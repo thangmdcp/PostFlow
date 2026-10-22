@@ -7,6 +7,8 @@ export async function POST(
 ) {
   try {
     const { competitorUrl } = (await req.json()) as { competitorUrl: string };
+    const post = await prisma.post.findUnique({ where: { id: params.id }, select: { sourceKind: true } });
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Link của bài dùng lại được giữ nguyên." }, { status: 409 });
 
     if (!competitorUrl || !competitorUrl.startsWith("http")) {
       return NextResponse.json({ error: "Invalid URL" }, { status: 400 });

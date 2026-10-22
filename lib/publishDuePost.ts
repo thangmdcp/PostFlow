@@ -28,6 +28,7 @@ export async function publishDuePost(
   inputPost: Post,
   options: { publishToPage?: boolean } = {}
 ): Promise<PublishDuePostResult> {
+  if (inputPost.sourceKind === "existing_facebook_post") return { id: inputPost.id, status: "skipped", error: "Bài có sẵn chỉ được tạo Ads, không đăng lại." };
   try {
     if (!await preparePublishMedia(inputPost, options.publishToPage)) return { id: inputPost.id, status: "queued" };
   } catch (cause) {

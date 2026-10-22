@@ -91,9 +91,10 @@ interface AdsConfigPanelProps {
   instagramOnly?: boolean;
   hasInstagram?: boolean;
   hasFacebook?: boolean;
+  preserveOriginal?: boolean;
 }
 
-export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true }: AdsConfigPanelProps) {
+export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, onPatch, onPatchRow, onDeleteRow, onAddRow, hideRunAdsToggle = false, hideTemplateSelect = false, showPlacements = false, instagramOnly = false, hasInstagram = true, hasFacebook = true, preserveOriginal = false }: AdsConfigPanelProps) {
   const facebookCta = facebookPostCtaEligibility({
     hasFacebook,
     overridePublish: adConfig.overridePublish,
@@ -158,7 +159,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
         </div>
       )}
 
-      {adConfig.runAds && (
+      {adConfig.runAds && !preserveOriginal && (
         <div className="space-y-2 rounded-xl border bg-white p-3 dark:bg-slate-800">
           <div>
             <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Nút kêu gọi hành động</p>
@@ -236,7 +237,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
               warning={adConfig.advantage.limitedSpendEnabled ? "Các vị trí đã bỏ chọn vẫn có thể nhận ngân sách; tắt để loại trừ tuyệt đối." : undefined}
             />
           )}
-          <AdvantageToggle title="Advantage+ Creative" description="Bật các cải thiện tương thích bài có sẵn; tính năng cần Catalog vẫn tắt. PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể crop hoặc thay đổi cách creative hiển thị ở từng placement." : undefined} />
+          {!preserveOriginal && <AdvantageToggle title="Advantage+ Creative" description="Bật các cải thiện tương thích bài có sẵn; tính năng cần Catalog vẫn tắt. PostFlow không gửi headline." checked={adConfig.advantage.creativeEnabled} onChange={(creativeEnabled) => patchAdvantage({ creativeEnabled })} warning={adConfig.advantage.creativeEnabled ? "Meta có thể crop hoặc thay đổi cách creative hiển thị ở từng placement." : undefined} />}
 
           <LockedAdvantageRow title="Advantage+ Catalog Ads" description="Cần Meta Catalog và Product ID; link Shopee affiliate chưa hỗ trợ." />
         </div>

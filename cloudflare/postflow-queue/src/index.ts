@@ -1,4 +1,5 @@
 type QueueJob =
+  | { type: "campaign-source"; sourceId: string }
   | { type: "publish"; postId: string; publishToPage?: boolean }
   | { type: "ads"; postId: string }
   | { type: "comment"; commentId: string }
@@ -31,6 +32,7 @@ export default {
     if (!validBearer(request, env.POSTFLOW_QUEUE_SECRET)) return new Response("Unauthorized", { status: 401 });
     const body = await request.json() as EnqueueBody;
     const valid =
+      (body.type === "campaign-source" && !!body.sourceId) ||
       (body.type === "publish" && !!body.postId) ||
       (body.type === "ads" && !!body.postId) ||
       (body.type === "comment" && !!body.commentId) ||
@@ -38,7 +40,7 @@ export default {
       (body.type === "fetch" && !!body.postId && (body.stage === undefined || body.stage === "download" || body.stage === "upload"));
     if (!valid) return Response.json({ error: "Invalid queue job" }, { status: 400 });
     const { delaySeconds, ...job } = body;
-    const queue = job.type === "fetch"
+    const queue = job.type === "campaign-source" ? env.POSTFLOW_FETCH_QUEUE : job.type === "fetch"
       ? job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE
       : job.type === "ads"
         ? env.POSTFLOW_ADS_QUEUE

@@ -23,6 +23,7 @@ import {
 import { adCallToAction, type AdCtaType } from "@/lib/adCta";
 import { facebookOriginalCtaState, type FacebookOriginalCtaState } from "@/lib/facebookOriginalCta";
 import { resolveAdInstagramIdentity, verifyPageBackedIdentity, type AdInstagramIdentity } from "@/lib/adInstagramIdentity";
+import { preservedFacebookCreative } from "@/lib/campaignSource";
 
 async function metaJson<T>(url: string, init: RequestInit = {}, context: MetaRequestContext = {}): Promise<T> {
   return (await metaRequestJson<T>(url, init, context)).data;
@@ -292,7 +293,7 @@ export async function getAdAccounts(
 }
 
 export type AdPostSource =
-  | { platform: "facebook"; fbPostId: string; instagramUserId?: string; destinationUrl?: string; ctaType: AdCtaType }
+  | { platform: "facebook"; fbPostId: string; instagramUserId?: string; destinationUrl?: string; ctaType: AdCtaType; preserveOriginal?: boolean }
   | { platform: "instagram"; igPostId: string; instagramUserId: string; destinationUrl: string; ctaType: AdCtaType };
 
 export interface AdCreationState {
@@ -520,6 +521,8 @@ export async function cloneAdCampaign(
   existing: AdCreationState = {},
   onProgress?: (progress: AdCreationProgress) => Promise<void>
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
+  const preserveOriginal = source.platform === "facebook" && source.preserveOriginal === true;
+  const creationStatus = preserveOriginal ? "PAUSED" : adStatus;
   const needsInstagramIdentity = source.platform === "instagram"
     || advantageOverride?.placementsEnabled === true
     || Boolean(placementOverride?.publisherPlatforms.some((platform) => platform === "instagram" || platform === "threads"));
@@ -592,7 +595,7 @@ export async function cloneAdCampaign(
   const campBody: Record<string, unknown> = {
     name: campaignName || `${template.name} [PostFlow]`,
     objective: template.objective,
-    status: adStatus,
+    status: creationStatus,
     special_ad_categories: template.specialAdCategories,
     buying_type: "AUCTION",
     access_token: accessToken,
@@ -656,6 +659,13 @@ export async function cloneAdCampaign(
         if (match) objectStoryId = match.id as string;
       }
       if (!objectStoryId) throw new AdSourceNotReadyError();
+      if (preserveOriginal) {
+        if (objectStoryId !== fbPostId || !objectStoryId.startsWith(`${pageId}_`)) throw new AdTemplateConfigurationError("Story ID không khớp bài nguồn.");
+        const original = await metaJson<{ id?: string; is_eligible_for_promotion?: boolean }>(
+          `${FB_API}/${objectStoryId}?fields=id,is_eligible_for_promotion&access_token=${encodeURIComponent(pageAccessToken ?? accessToken)}`,
+          { signal: AbortSignal.timeout(12_000) }, { pageId, adAccountId });
+        if (original.id !== objectStoryId || original.is_eligible_for_promotion === false) throw new AdTemplateConfigurationError("Bài nguồn không còn hợp lệ để quảng bá.");
+      }
       if (existing.objectStoryId !== objectStoryId) await onProgress?.({ objectStoryId });
       console.log("[creative] using objectStoryId:", objectStoryId);
     }
@@ -678,7 +688,7 @@ export async function cloneAdCampaign(
       targeting,
       billing_event: template.billingEvent,
       optimization_goal: template.optimizationGoal,
-      status: adStatus,
+      status: creationStatus,
       access_token: accessToken,
     };
     if (!useCBO) {
@@ -719,6 +729,7 @@ export async function cloneAdCampaign(
               accessToken: creativeAccessToken,
               creativeEnhancements: advantageOverride?.creativeEnabled,
             })
+          : preserveOriginal ? preservedFacebookCreative(campaignName || "PostFlow Reused Post", objectStoryId, creativeAccessToken, instagramIdentityId)
           : buildFacebookExistingPostCreative({
               name: campaignName || "PostFlow Creative",
               objectStoryId,
@@ -737,6 +748,15 @@ export async function cloneAdCampaign(
       await onProgress?.({ creativeId });
     }
 
+    if (preserveOriginal) {
+      // A reused creative must resolve to the exact source story before any paid asset is activated.
+      const verified = await metaJson<{ effective_object_story_id?: string }>(
+        `${FB_API}/${creativeId}?fields=effective_object_story_id&access_token=${encodeURIComponent(creativeAccessToken)}`,
+        { signal: AbortSignal.timeout(12_000) }, { adAccountId });
+      if (!verified.effective_object_story_id) throw new AdSourceNotReadyError("Meta chưa xác minh Story ID của creative mới; tài sản vẫn PAUSED.");
+      if (verified.effective_object_story_id !== objectStoryId) throw new AdTemplateConfigurationError("Creative mới không dùng đúng Story ID nguồn; không kích hoạt Ads.");
+    }
+
   // 6. Create ad
     if (!adId) {
       const ad = await metaJson<{ id: string }>(`${FB_API}/act_${adAccountId}/ads`, {
@@ -746,12 +766,20 @@ export async function cloneAdCampaign(
           name: campaignName || "PostFlow Ad",
           adset_id: adSetId,
           creative: { creative_id: creativeId },
-          status: adStatus,
+          status: creationStatus,
           access_token: accessToken,
         }),
       }, { adAccountId });
       adId = ad.id;
       await onProgress?.({ adId });
+    }
+
+    if (preserveOriginal && adStatus === "ACTIVE") {
+      // Activate the campaign last. A timeout can safely repeat status updates without recreating assets.
+      for (const id of [adId!, adSetId!, campaignId!]) {
+        await metaJson(`${FB_API}/${id}`, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "ACTIVE", access_token: accessToken }), signal: AbortSignal.timeout(12_000) }, { adAccountId });
+      }
     }
 
     return { campaignId: campaignId!, adSetId: adSetId!, creativeId: creativeId!, adId: adId! };

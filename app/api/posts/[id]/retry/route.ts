@@ -11,6 +11,7 @@ export async function POST(
 ) {
   try {
     const post = await prisma.post.findUnique({ where: { id: params.id } });
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn chỉ hỗ trợ thử lại Ads." }, { status: 409 });
     if (!post) {
       return NextResponse.json({ error: "Post not found" }, { status: 404 });
     }

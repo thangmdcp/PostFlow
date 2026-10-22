@@ -16,8 +16,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const post = await prisma.post.findUnique({ where: { id: params.id } });
   if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
   if (!post.fbPostId && !post.igPostId) return NextResponse.json({ error: "Bài nguồn chưa đăng thành công" }, { status: 409 });
-  const retryAds = !post.adId && ["pending", "failed"].includes(post.adStatus ?? "");
-  const retryFacebookCta = resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST"
+  const retryAds = (!post.adId || post.sourceKind === "existing_facebook_post") && ["pending", "failed"].includes(post.adStatus ?? "");
+  const retryFacebookCta = post.sourceKind !== "existing_facebook_post" && resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST"
     && post.adCtaType !== "NO_BUTTON"
     && Boolean(post.fbPostId && post.fbMediaId && post.adDestinationUrl)
     && !post.fbCtaVerifiedAt;
@@ -33,6 +33,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       code: "BUDGET_SNAPSHOT_MISSING",
     }, { status: 409 });
   }
+  const delaySeconds = Math.max(0, Math.min(3600, Math.floor(body.delaySeconds ?? 0)));
   if (retryAds) {
     const selectionError = await validateAdSelection(post.adTemplateId ?? undefined, post.adAccountUsed ?? undefined);
     if (selectionError) return NextResponse.json({ error: selectionError }, { status: 400 });
@@ -58,8 +59,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   if (retryAds) {
     const claim = await prisma.post.updateMany({
-      where: { id: post.id, adId: null, adStatus: { in: ["pending", "failed"] } },
-      data: { adStatus: "queued", adNextAttemptAt: null, errorMsg: null },
+      where: { id: post.id, ...(post.sourceKind !== "existing_facebook_post" ? { adId: null } : {}), adStatus: { in: ["pending", "failed"] } },
+      data: { adStatus: "queued", adNextAttemptAt: new Date(Date.now() + delaySeconds * 1000), errorMsg: null },
     });
     if (!claim.count) return NextResponse.json({ error: "Ads đang được xử lý ở nơi khác" }, { status: 409 });
   }
@@ -72,7 +73,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
       },
     });
   }
-  const delaySeconds = Math.max(0, Math.min(3600, Math.floor(body.delaySeconds ?? 0)));
   if (!await enqueueAds(post.id, delaySeconds)) {
     if (retryAds) await prisma.post.updateMany({ where: { id: post.id, adStatus: "queued" }, data: { adStatus: "pending" } });
     if (retryFacebookCta) await prisma.post.update({ where: { id: post.id }, data: { fbCtaStatus: "failed", fbCtaErrorMsg: "Không thể đưa lượt xác minh CTA vào Queue." } });

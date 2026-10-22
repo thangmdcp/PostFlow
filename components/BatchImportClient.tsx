@@ -47,6 +47,7 @@ import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAct
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
 import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { FetchStatusDetail } from "@/components/FetchStatusDetail";
+import { CampaignImportComposer, ExistingCampaignBatch } from "@/components/CampaignReuse";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import {
   COMPOSER_DRAFT_KEY,
@@ -63,7 +64,7 @@ import {
 } from "@/lib/batchDraft";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
-type BatchData = { id: string; posts: PostWithLinks[] };
+type BatchData = { id: string; sourceKind?: string; posts: PostWithLinks[] };
 
 function needsFacebookCtaRetry(post: PostWithLinks): boolean {
   return post.adCtaScope === "AD_AND_FACEBOOK_POST"
@@ -240,6 +241,10 @@ const LAST_BATCH_KEY = "postflow_last_batch_id";
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export function BatchImportClient({ connections, initialBatch }: Props) {
+  const [composerMode, setComposerMode] = useState<"links" | "campaigns">(() => {
+    try { return typeof window !== "undefined" && localStorage.getItem("pf_composer_mode") === "campaigns" ? "campaigns" : "links"; } catch { return "links"; }
+  });
+  useEffect(() => { try { localStorage.setItem("pf_composer_mode", composerMode); } catch { /* Storage may be disabled. */ } }, [composerMode]);
   const [composer, setComposer] = useState<{ urlText: string; bankSelections: BankSelection[]; requestKey?: string }>(() => {
     if (typeof window === "undefined") return { urlText: "", bankSelections: [] };
     try { return { urlText: readComposerDraft(localStorage), ...readComposerBankState(localStorage) }; } catch { return { urlText: "", bankSelections: [] }; }
@@ -626,10 +631,10 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
     batchId ? `/api/batches/${batchId}` : null,
     fetcher,
     {
-      refreshInterval: (data) => data?.posts?.some((p) => p.status === "queued" || p.status === "fetching")
+      refreshInterval: (data) => data?.sourceKind === "existing_facebook_post" && data.posts.some(p => ["scheduled", "pending", "queued", "creating"].includes(p.adStatus ?? "")) ? 2000 : data?.posts?.some((p) => p.status === "queued" || p.status === "fetching")
         ? 1000
         : data?.posts?.some((p) => p.status === "publishing" || p.adStatus === "pending" || p.adStatus === "creating" || ["pending", "verifying"].includes(p.fbCtaStatus ?? "")) ? 2000 : 0,
-      fallbackData: initialBatch ?? undefined,
+      fallbackData: initialBatch?.id === batchId ? initialBatch : undefined,
     }
   );
 
@@ -681,6 +686,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
   }
 
   if (!batchId || !batch || !("posts" in batch)) {
+    if (composerMode === "campaigns") return <div className="space-y-4"><h1 className="text-xl font-bold">Tạo batch mới</h1><div className="flex gap-2"><button className="rounded-lg border px-4 py-2 text-sm" onClick={() => setComposerMode("links")}>Link nguồn</button><button className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">ID campaign</button></div><CampaignImportComposer onBatch={setBatchId} /></div>;
     const lineCount = urlText === "" ? 1 : urlText.split("\n").length;
     const composerRows = Math.min(22, Math.max(10, lineCount + 2));
 
@@ -692,6 +698,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         <div className="sticky top-0 z-30 min-w-0 space-y-3 bg-background/95 backdrop-blur border-b px-1 py-3 mb-4">
           <div>
             <h1 className="text-xl font-bold leading-tight">Tạo batch mới</h1>
+            <div className="mt-3 flex gap-2"><button className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">Link nguồn</button><button className="rounded-lg border px-4 py-2 text-sm" onClick={() => setComposerMode("campaigns")}>ID campaign</button></div>
             <p className="text-xs text-slate-500 mt-0.5">
               Dán link Facebook / TikTok vào ô bên dưới, mỗi link một dòng
               {urlCount > 0 && <> · <span className="text-blue-600 font-medium">{urlCount} link hợp lệ</span></>}
@@ -727,6 +734,8 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       </div>
     );
   }
+
+  if (batch.sourceKind === "existing_facebook_post" || batch.posts.some(p => p.sourceKind === "existing_facebook_post")) return <ExistingCampaignBatch key={batch.id} batchId={batch.id} posts={batch.posts} connections={connections} templates={templates} adAccounts={adAccounts} accountRows={accountRows} adConfig={adConfig} refresh={mutateBatch} onNewBatch={() => setBatchId(null)} />;
 
   return (
     <BatchView

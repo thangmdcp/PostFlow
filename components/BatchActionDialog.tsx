@@ -75,6 +75,7 @@ interface Props {
   defaults: BatchActionConfig;
   onClose: () => void;
   onConfirm: (config: BatchActionConfig) => Promise<boolean>;
+  existingSources?: Array<{ pageId: string; pageName: string }>;
 }
 
 function cloneConfig(config: BatchActionConfig): BatchActionConfig {
@@ -139,14 +140,19 @@ function quickScheduleTime(kind: "now" | "midnight") {
   return dateToVnSchedule(date);
 }
 
-export function BatchActionDialog({ kind, count, connections, templates, adAccounts, defaults, onClose, onConfirm }: Props) {
-  const [config, setConfig] = useState<BatchActionConfig>(() => {
+export function BatchActionDialog({ kind, count, connections, templates, adAccounts, defaults, onClose, onConfirm, existingSources }: Props) {
+  const [storedConfig, setConfig] = useState<BatchActionConfig>(() => {
     if (typeof window === "undefined") return cloneConfig(defaults);
+    if (existingSources) return cloneConfig(defaults);
     const saved = readLastBatchAction<Partial<BatchActionConfig>>(localStorage, kind);
     const merged = mergeSaved(defaults, saved);
     if (kind === "prepare") merged.runMode = "publish_and_ads";
     return merged;
   });
+  const config: BatchActionConfig = existingSources ? { ...storedConfig, runMode: "publish_and_ads", publishTargets: ["facebook"],
+    adConfig: { ...storedConfig.adConfig, runAds: true, overridePublish: false, ctaType: "NO_BUTTON", ctaScope: "AD_ONLY", advantage: { ...storedConfig.adConfig.advantage, creativeEnabled: false } },
+    engagement: { ...storedConfig.engagement, commentEnabled: false, storyEnabled: false },
+  } : storedConfig;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -161,7 +167,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   const hasFacebook = config.publishTargets.includes("facebook");
   const runsAds = kind === "prepare" || config.runMode === "publish_and_ads";
   const instagramOnlyAds = config.publishTargets.length === 1 && config.publishTargets[0] === "instagram";
-  const selectedPagesHaveInstagram = config.pageRows.length > 0 && config.pageRows.every((row) => Boolean(connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId));
+  const selectedPagesHaveInstagram = existingSources ? existingSources.every(row => Boolean(connections.find(c => c.pageId === row.pageId)?.instagramUserId)) : config.pageRows.length > 0 && config.pageRows.every((row) => Boolean(connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId));
   const eligibleConnections = useMemo(
     () => connections.filter((connection) => !needsInstagram || !!connection.instagramUserId),
     [connections, needsInstagram],
@@ -192,6 +198,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   }, [adAccounts, templates]);
 
   useEffect(() => {
+    if (existingSources) return;
     if (skipNextStorageWrite.current) {
       skipNextStorageWrite.current = false;
       return;
@@ -204,6 +211,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   }, [kind, config]);
 
   useEffect(() => {
+    if (existingSources) return;
     const handler = (event: StorageEvent) => {
       if (event.storageArea !== localStorage || event.key !== batchActionStorageKey(kind) || !event.newValue) return;
       try {
@@ -219,6 +227,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   }, [defaults, kind]);
 
   useEffect(() => {
+    if (existingSources) return;
     const legacy = collectCommentImageUrls(config.engagement).filter((url) => !cloudinaryCommentPublicId(url) && !migratingUrls.current.has(url));
     if (!legacy.length) return;
     legacy.forEach((url) => migratingUrls.current.add(url));
@@ -338,8 +347,8 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
 
   function validate(): string {
     if (!config.publishTargets.length) return "Chọn ít nhất một nền tảng.";
-    if (!weightsAreValid(config.pageRows.map((row) => ({ id: row.pageId, weight: row.weight })))) return "Tỷ lệ Page phải có tổng đúng 100%.";
-    if (new Set(config.pageRows.map((row) => row.pageId)).size !== config.pageRows.length) return "Mỗi Page chỉ được chọn một lần.";
+    if (!existingSources && !weightsAreValid(config.pageRows.map((row) => ({ id: row.pageId, weight: row.weight })))) return "Tỷ lệ Page phải có tổng đúng 100%.";
+    if (!existingSources && new Set(config.pageRows.map((row) => row.pageId)).size !== config.pageRows.length) return "Mỗi Page chỉ được chọn một lần.";
     if (needsInstagram && config.pageRows.some((row) => !connections.find((connection) => connection.pageId === row.pageId)?.instagramUserId)) return "Tất cả Page đã chọn phải có Instagram Professional liên kết.";
     if (runsAds && config.accountRows.some((row) => !templates.some((template) => template.campaignId === row.templateId))) return "Mỗi TKQC phải chọn một template hợp lệ.";
     if (runsAds && config.adConfig.ctaType !== "NO_BUTTON" && config.adConfig.ctaScope === "AD_AND_FACEBOOK_POST") {
@@ -360,6 +369,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
       if (placementError) return placementError;
     }
     if (kind === "prepare" && new Date(`${config.adLaunchAt}:00+07:00`).getTime() <= Date.now() + 60_000) return "Giờ bắt đầu Ads phải muộn hơn hiện tại ít nhất 1 phút.";
+    if (existingSources && kind === "prepare" && new Date(`${config.adLaunchAt}:00+07:00`).getTime() <= Date.now() + 60_000 + (count - 1) * Math.max(0, Number(config.prepareSpacing)) * 60_000) return "Không đủ thời gian chuẩn bị tất cả Ads trước giờ chạy. Hãy đổi giờ hoặc giảm khoảng cách.";
     if (kind === "schedule") {
       const scheduleError = scheduleValidation({ ids: ["preview"], mode: config.scheduleMode, baseTime: config.baseTime, manualTime: config.manualTime, stepMinutes: config.stepMinutes, postsPerDay: config.postsPerDay, endTime: config.endTime });
       if (scheduleError) return scheduleError;
@@ -377,13 +387,15 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
       const allSucceeded = await onConfirm({ ...config, runMode: kind === "prepare" ? "publish_and_ads" : config.runMode });
       if (allSucceeded) onClose();
       else setError("Một số bài chưa gửi được. Các bài lỗi vẫn được giữ tick để bạn thử lại.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Không thể gửi cấu hình; hãy thử lại.");
     } finally { setBusy(false); }
   }
 
-  const title = kind === "schedule" ? "Lên lịch" : kind === "prepare" ? "Chuẩn bị Ads" : "Đăng ngay";
+  const title = kind === "schedule" ? "Lên lịch" : kind === "prepare" ? "Chuẩn bị Ads" : existingSources ? "Tạo ads ngay" : "Đăng ngay";
   const Icon = kind === "schedule" ? Calendar : kind === "prepare" ? Clock : Send;
   const accent = kind === "prepare" ? "violet" : kind === "schedule" ? "blue" : "slate";
-  const presetSummary = `${config.publishTargets.map((target) => target === "facebook" ? "Facebook" : "Instagram").join(" + ")} · ${config.pageRows.length} Page · ${kind === "schedule" ? config.scheduleMode === "manual" ? "Cùng giờ" : config.scheduleMode === "interval" ? "Giãn cách" : "Theo ngày" : title} · ${runsAds ? "Có Ads" : "Chỉ đăng"}`;
+  const presetSummary = `${config.publishTargets.map((target) => target === "facebook" ? "Facebook" : "Instagram").join(" + ")} · ${existingSources?.length ?? config.pageRows.length} Page · ${kind === "schedule" ? config.scheduleMode === "manual" ? "Cùng giờ" : config.scheduleMode === "interval" ? "Giãn cách" : "Theo ngày" : title} · ${runsAds ? "Có Ads" : "Chỉ đăng"}`;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 p-3 backdrop-blur-sm">
@@ -391,7 +403,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
         <div className={`flex items-start justify-between rounded-t-3xl px-6 py-5 text-white ${accent === "violet" ? "bg-gradient-to-br from-violet-600 to-indigo-600" : accent === "blue" ? "bg-gradient-to-br from-blue-600 to-indigo-600" : "bg-gradient-to-br from-slate-700 to-slate-900"}`}>
           <div>
             <div className="flex items-center gap-2 text-base font-bold"><Icon size={18} /> {title}</div>
-            <p className="mt-1 text-xs text-white/75">Một cấu hình chung cho {count} bài đã chọn. Ads luôn được tạo sau khi có bài nguồn.</p>
+            <p className="mt-1 text-xs text-white/75">{existingSources ? `Ads trên ${count} bài có sẵn · giữ nguyên bài, tương tác, CTA và link.` : `Một cấu hình chung cho ${count} bài đã chọn. Ads luôn được tạo sau khi có bài nguồn.`}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-white/75 hover:bg-white/15 hover:text-white"><X size={19} /></button>
         </div>
@@ -401,7 +413,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
         <div className="min-h-0 overflow-y-auto overscroll-contain p-6">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
             <div className="space-y-5">
-              {kind !== "prepare" && (
+              {!existingSources && kind !== "prepare" && (
                 <section className="rounded-2xl border bg-slate-50/60 p-4 dark:bg-slate-800/40">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Mục đích</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -412,7 +424,8 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                 </section>
               )}
 
-              <section className="rounded-2xl border p-4">
+              {existingSources && <section className="rounded-2xl border bg-blue-50 p-4 text-sm dark:bg-slate-800"><b>Page của bài gốc</b>{existingSources.map(page => <p key={page.pageId} className="mt-2 text-xs">{page.pageName} · {page.pageId}</p>)}<p className="mt-3 text-xs text-slate-500">Page được giữ theo bài. Nội dung, CTA và link đích giữ nguyên.</p></section>}
+              {!existingSources && <section className="rounded-2xl border p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div><p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Nền tảng và tài khoản đăng</p><p className="mt-0.5 text-xs text-slate-500">Chọn nền tảng trước, sau đó chia tỷ lệ giữa các cặp Page–Instagram.</p></div>
                   <PublishTargetsSelector value={config.publishTargets} onChange={(publishTargets) => patch({ publishTargets })} />
@@ -432,15 +445,16 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                   })}
                   <button type="button" onClick={addPageRow} disabled={eligibleConnections.length <= config.pageRows.length} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed py-2 text-xs font-semibold text-blue-600 hover:border-blue-400 disabled:opacity-40"><Plus size={13} /> Thêm Page</button>
                 </div>
-              </section>
+              </section>}
 
-              {kind === "schedule" && <ScheduleModeSelector count={count} scheduleMode={config.scheduleMode} onScheduleModeChange={(scheduleMode) => patch({ scheduleMode })} stepMinutes={config.stepMinutes} onStepMinutesChange={(stepMinutes) => patch({ stepMinutes })} postsPerDay={config.postsPerDay} onPostsPerDayChange={(postsPerDay) => patch({ postsPerDay })} baseTime={config.baseTime} onBaseTimeChange={(baseTime) => patch({ baseTime })} manualTime={config.manualTime} onManualTimeChange={(manualTime) => patch({ manualTime })} endTime={config.endTime} onEndTimeChange={(endTime) => patch({ endTime })} onQuickNow={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("now") }) : patch({ baseTime: quickScheduleTime("now") })} onQuickMidnight={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("midnight") }) : patch({ baseTime: quickScheduleTime("midnight") })} />}
+              {kind === "schedule" && <ScheduleModeSelector adsOnly={Boolean(existingSources)} count={count} scheduleMode={config.scheduleMode} onScheduleModeChange={(scheduleMode) => patch({ scheduleMode })} stepMinutes={config.stepMinutes} onStepMinutesChange={(stepMinutes) => patch({ stepMinutes })} postsPerDay={config.postsPerDay} onPostsPerDayChange={(postsPerDay) => patch({ postsPerDay })} baseTime={config.baseTime} onBaseTimeChange={(baseTime) => patch({ baseTime })} manualTime={config.manualTime} onManualTimeChange={(manualTime) => patch({ manualTime })} endTime={config.endTime} onEndTimeChange={(endTime) => patch({ endTime })} onQuickNow={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("now") }) : patch({ baseTime: quickScheduleTime("now") })} onQuickMidnight={() => config.scheduleMode === "manual" ? patch({ manualTime: quickScheduleTime("midnight") }) : patch({ baseTime: quickScheduleTime("midnight") })} />}
 
-              {kind === "prepare" && <section className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 dark:border-violet-900/50 dark:bg-violet-950/20"><p className="text-sm font-semibold text-violet-900 dark:text-violet-100">Thời gian chuẩn bị</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">Ads bắt đầu chạy</span><input type="datetime-local" value={config.adLaunchAt} onChange={(event) => patch({ adLaunchAt: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 text-sm dark:bg-slate-900" /></label><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">Khoảng cách đăng bài</span><div className="relative"><input type="number" min={0} max={180} value={config.prepareSpacing} onChange={(event) => patch({ prepareSpacing: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 pr-14 text-sm dark:bg-slate-900" /><span className="absolute right-3 top-2.5 text-xs text-slate-400">phút</span></div></label></div></section>}
+              {kind === "prepare" && <section className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 dark:border-violet-900/50 dark:bg-violet-950/20"><p className="text-sm font-semibold text-violet-900 dark:text-violet-100">Thời gian chuẩn bị</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">Ads bắt đầu chạy</span><input type="datetime-local" value={config.adLaunchAt} onChange={(event) => patch({ adLaunchAt: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 text-sm dark:bg-slate-900" /></label><label className="space-y-1"><span className="text-xs text-slate-600 dark:text-slate-300">{existingSources ? "Khoảng cách tạo Ads" : "Khoảng cách đăng bài"}</span><div className="relative"><input type="number" min={0} max={180} value={config.prepareSpacing} onChange={(event) => patch({ prepareSpacing: event.target.value })} className="w-full rounded-xl border bg-white px-3 py-2 pr-14 text-sm dark:bg-slate-900" /><span className="absolute right-3 top-2.5 text-xs text-slate-400">phút</span></div></label></div></section>}
+              {existingSources && config.adConfig.adStatus === "PAUSED" && <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">Đang chọn Tạm dừng: Ads sẽ giữ PAUSED, không tự chạy khi đến giờ.</p>}
             </div>
 
             <div className="space-y-5">
-              {runsAds && <AdsConfigPanel adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect showPlacements instagramOnly={instagramOnlyAds} hasInstagram={selectedPagesHaveInstagram} hasFacebook={hasFacebook} />}
+              {runsAds && <AdsConfigPanel preserveOriginal={Boolean(existingSources)} adConfig={{ ...config.adConfig, runAds: true }} templates={templates} adAccounts={adAccounts} accountRows={config.accountRows} onPatch={patchAd} onPatchRow={patchAccountRow} onDeleteRow={(index) => setConfig((current) => ({ ...current, accountRows: applyEvenWeights(current.accountRows.filter((_, rowIndex) => rowIndex !== index)) }))} onAddRow={addAccountRow} hideRunAdsToggle hideTemplateSelect showPlacements instagramOnly={instagramOnlyAds} hasInstagram={selectedPagesHaveInstagram} hasFacebook={hasFacebook} />}
               {runsAds && config.accountRows.length > 0 && <div className="space-y-2 rounded-xl border bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
                 <p className="font-semibold">Dự kiến phân Ads</p>
                 {config.accountRows.map((row) => {
@@ -458,7 +472,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                 })}
               </div>}
 
-              <section className="overflow-hidden rounded-2xl border">
+              {!existingSources && <section className="overflow-hidden rounded-2xl border">
                 <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Nâng cao <ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} /></button>
                 {advancedOpen && <div className="space-y-4 p-4">
                   {!hasFacebook ? <p className="rounded-xl border border-pink-100 bg-pink-50 px-3 py-2 text-xs text-pink-700">Instagram không hỗ trợ chạy ẩn, comment hoặc Story trong phiên bản này. Bài Instagram luôn được đăng organic.</p> : <>
@@ -466,7 +480,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
                     <div className="rounded-xl border p-3"><div className="flex items-center justify-between"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Tự động đăng Story</span><button type="button" onClick={() => patch({ engagement: { ...config.engagement, storyEnabled: !config.engagement.storyEnabled } })} className={`relative h-5 w-9 rounded-full ${config.engagement.storyEnabled ? "bg-violet-600" : "bg-slate-200"}`}><span className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${config.engagement.storyEnabled ? "translate-x-4" : "translate-x-0"}`} /></button></div>{config.engagement.storyEnabled && <label className="mt-3 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">Số bài đầu mỗi ngày<input type="number" min={0} value={config.engagement.storyCount} onChange={(event) => patch({ engagement: { ...config.engagement, storyCount: event.target.value } })} className="w-16 rounded-lg border px-2 py-1.5 text-center dark:bg-slate-800" /></label>}</div>
                   </>}
                 </div>}
-              </section>
+              </section>}
             </div>
           </div>
         </div>

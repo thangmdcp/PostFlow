@@ -6,6 +6,7 @@ import { readDownloadSnapshot } from "@/lib/fetchDownloadSnapshot";
 
 /** No source download inside a publish invocation, and no Meta quota yet. */
 export async function preparePublishMedia(post: Post, publishToPage?: boolean): Promise<boolean> {
+  if (post.sourceKind === "existing_facebook_post") throw new Error("Bài có sẵn không được tải media hoặc đăng lại.");
   const needsVideo = ["video", "reel"].includes(post.mediaType ?? "")
     && ((post.publishToFacebook && !post.fbPostId) || (post.publishToInstagram && !post.igPostId));
   if (!needsVideo) return true;

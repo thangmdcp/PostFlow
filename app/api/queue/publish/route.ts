@@ -21,6 +21,7 @@ export async function POST(request: Request) {
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
 
   let post = await prisma.post.findUnique({ where: { id: postId } });
+  if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ status: "skipped", reason: "existing_post_ads_only" });
   if (!post) return NextResponse.json({ status: "missing" });
   if (post.status === "done") return NextResponse.json({ status: "done" });
   if (!["pending", "queued", "publishing", "partial", "failed"].includes(post.status)) {

@@ -11,7 +11,7 @@ const DELIVERY_GRACE_MS = 5 * 60_000;
  * conditional lease claim in processFetchPost allows only one provider call.
  */
 export async function recoverFetchJobs(batchId?: string): Promise<number> {
-  const scope = batchId ? { batchId } : {};
+  const scope = { sourceKind: "source_link", ...(batchId ? { batchId } : {}) };
   const now = new Date();
   const staleBefore = new Date(now.getTime() - DELIVERY_GRACE_MS);
 

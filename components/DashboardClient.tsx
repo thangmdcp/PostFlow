@@ -1222,7 +1222,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
 
                     {col.key === "status" && (
                       <td className="px-3 py-2.5 border-l border-slate-100 dark:border-slate-700/50 overflow-hidden" style={{ maxWidth: 0 }}>
-                        <StatusBadge status={post.status} />
+                        {post.sourceKind === "existing_facebook_post" ? <a href={`/posts/new?batchId=${post.batchId}`} className="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">Bài có sẵn · mở batch Ads</a> : <StatusBadge status={post.status} />}
                         <PlatformPublishStatus post={post} />
                         <FetchStatusDetail status={post.status} errorMsg={post.errorMsg} fetchAttempt={post.fetchAttempt}
                           fetchNextAttemptAt={post.fetchNextAttemptAt} fetchProvider={post.fetchProvider}

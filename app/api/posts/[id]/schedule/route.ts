@@ -42,6 +42,7 @@ export async function PATCH(
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn phải dùng luồng Ads trên bài có sẵn." }, { status: 409 });
 
     if (!post) {
       return NextResponse.json({ error: "Post not found" }, { status: 404 });

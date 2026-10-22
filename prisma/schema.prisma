@@ -9,10 +9,53 @@ datasource db {
 
 model Batch {
   id        String   @id @default(cuid())
+  sourceKind String @default("source_link")
   requestKey String? @unique
   requestHash String?
   createdAt DateTime @default(now())
   posts     Post[]
+  campaignImport CampaignImport?
+}
+
+model CampaignImport {
+  id String @id @default(cuid())
+  requestKey String @unique
+  requestHash String
+  batchId String? @unique
+  batch Batch? @relation(fields: [batchId], references: [id])
+  selectionHash String?
+  sources CampaignImportSource[]
+  createdAt DateTime @default(now())
+}
+
+model CampaignImportSource {
+  id String @id @default(cuid())
+  importId String
+  import CampaignImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  campaignId String
+  campaignName String?
+  accountId String?
+  accountName String?
+  tokenAccountId String?
+  tokenCursor Int @default(0)
+  cursor String?
+  candidates Json @default("[]")
+  issues Json @default("[]")
+  status String @default("pending")
+  attempt Int @default(0)
+  nextAttemptAt DateTime?
+  leaseUntil DateTime?
+  errorMsg String?
+  updatedAt DateTime @updatedAt
+  @@unique([importId, campaignId])
+  @@index([status, nextAttemptAt])
+}
+
+model ExistingAdsAction {
+  id String @id @default(cuid())
+  requestKey String @unique
+  requestHash String
+  createdAt DateTime @default(now())
 }
 
 model Post {
@@ -21,6 +64,9 @@ model Post {
   batch          Batch?          @relation(fields: [batchId], references: [id])
   order          Int             @default(0)
   sourceUrl      String
+  sourceKind     String @default("source_link")
+  adSourceSnapshot Json?
+  sourceStoryId String?
   linkBankEntryId String?
   linkBankEntry LinkBankEntry? @relation(fields: [linkBankEntryId], references: [id], onDelete: SetNull)
   title          String?
@@ -107,6 +153,7 @@ model Post {
   errorMsg       String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+  @@unique([batchId, sourceStoryId])
 }
 
 model LinkBankList {

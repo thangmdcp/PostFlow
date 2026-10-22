@@ -38,6 +38,7 @@ async function availableCommentImage(url: string | null): Promise<string | undef
 // fbPostId is necessarily known yet. Idempotent: safe to call again if the
 // user re-schedules/re-publishes before anything has actually run.
 export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Promise<void> {
+  if ((await prisma.post.findUnique({ where: { id: postId }, select: { sourceKind: true } }))?.sourceKind === "existing_facebook_post") throw new Error("Bài dùng lại chỉ tạo Ads, không thêm bình luận.");
   await prisma.postComment.deleteMany({ where: { postId, status: null } });
   if (jobs.length === 0) return;
   // jobs.length is the TOTAL target count, not "how many more to add" — if
@@ -57,6 +58,7 @@ export async function persistCommentJobs(postId: string, jobs: CommentJob[]): Pr
 // Call this once fbPostId is known. Cloudflare Queue owns both the delayed
 // delivery and retry; Supabase only records durable state for the UI/audit.
 export async function scheduleCommentJobs(postId: string): Promise<void> {
+  if ((await prisma.post.findUnique({ where: { id: postId }, select: { sourceKind: true } }))?.sourceKind === "existing_facebook_post") return;
   const queued = await prisma.postComment.findMany({ where: { postId, status: null }, orderBy: { createdAt: "asc" } });
   if (queued.length === 0) return;
 
@@ -88,6 +90,7 @@ export async function attemptComment(commentRowId: string): Promise<{ retry: boo
   // since it never sees the count go up. Bumping it up-front means a stuck
   // row hits MAX_ATTEMPTS and gets marked failed instead of looping.
   const existing = await prisma.postComment.findUnique({ where: { id: commentRowId }, include: { post: true } });
+  if (existing?.post.sourceKind === "existing_facebook_post") return { retry: false };
   if (!existing || existing.status === "done" || existing.status === "failed") return { retry: false };
   if (existing.status === "creating") {
     if (existing.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };

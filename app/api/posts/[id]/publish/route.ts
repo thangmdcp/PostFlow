@@ -34,6 +34,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   try {
     const body = await req.json() as PublishBody;
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn không được đăng lại." }, { status: 409 });
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
     if (!post.finalCaption) return NextResponse.json({ error: "Chưa có caption. Hãy lưu link aff trước." }, { status: 400 });
     if (post.extractedLinks.some((link) => !link.myUrl || post.finalCaption!.includes(link.competitorUrl))) {

@@ -10,7 +10,8 @@ export async function POST(request: Request) {
   }
   const { postId } = await request.json() as { postId?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
-  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, storyStatus: true } });
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { pageId: true, storyStatus: true, sourceKind: true } });
+  if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ ok: true });
   if (!post || post.storyStatus === "done" || post.storyStatus === "failed") return NextResponse.json({ ok: true });
   const gate = await reserveMetaJob("story", scopesForPost(post.pageId), postId);
   if (!gate.allowed) {

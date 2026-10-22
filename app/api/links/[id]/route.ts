@@ -8,6 +8,8 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
+    const source = await prisma.extractedLink.findUnique({ where: { id: params.id }, include: { post: { select: { sourceKind: true } } } });
+    if (source?.post.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Không sửa link trên bài dùng lại." }, { status: 409 });
     const { myUrl, campaignName: explicitCampaignName } = (await req.json()) as {
       myUrl: string;
       campaignName?: string;

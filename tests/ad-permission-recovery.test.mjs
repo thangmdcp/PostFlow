@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 import { recheckAdPermissionForRetry } from "../lib/adPermissionRecovery.ts";
 import { metaErrorDisplay } from "../lib/metaErrorDisplay.ts";
+import { EXISTING_FACEBOOK_SOURCE, assertSourceStory } from "../lib/campaignSource.ts";
 
 const source = await readFile(new URL("../lib/autoAdsRunner.ts", import.meta.url), "utf8");
 const start = source.indexOf("export async function attemptAutoAds(");
@@ -30,6 +31,7 @@ function fixture({ platform = "facebook", fail = new MetaApiError("permission"),
     updateMany: async ({ data }) => { Object.assign(row, data); return { count: 1 }; },
   }, fbConnection: { findUnique: async () => ({ accessToken: "fake-page-token", instagramUserId: "ig" }) } };
   const dependencies = { prisma, MetaApiError, AdTemplateConfigurationError, BudgetPolicyError, AdSourceNotReadyError,
+    EXISTING_FACEBOOK_SOURCE, assertSourceStory,
     recheckAdPermissionForRetry,
     preflightPostAdPermission: async (post, fresh) => { probes.push({ post, fresh }); if (probeError) throw probeError; },
     createAdCampaignForPost: async (params) => { creations.push(params); if (failure) throw failure; return { campaignId: row.adCampaignId, adAccountId: row.adAccountUsed }; },
@@ -41,8 +43,15 @@ function fixture({ platform = "facebook", fail = new MetaApiError("permission"),
   };
   const exports = {};
   new Function("exports", ...Object.keys(dependencies), code)(exports, ...Object.values(dependencies));
-  return { row, updates, probes, creations, run: () => exports.attemptAutoAds("post"), succeed: () => { failure = null; } };
+  return { row, updates, probes, creations, run: () => { row.adNextAttemptAt = null; return exports.attemptAutoAds("post"); }, early: () => exports.attemptAutoAds("post"), succeed: () => { failure = null; } };
 }
+
+test("early duplicate ads delivery waits without creating or consuming an attempt", async () => {
+  const f = fixture(); f.row.adNextAttemptAt = new Date(Date.now() + 300_000);
+  const result = await f.early();
+  assert.equal(result.retry, true); assert.ok(result.retryAfterSeconds >= 299);
+  assert.equal(f.creations.length, 0); assert.equal(f.row.adAttempt, 0);
+});
 
 test("permission failure with fresh valid access automatically queues and completes without manual Retry", async () => {
   for (const platform of ["facebook", "instagram"]) {

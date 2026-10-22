@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { EXISTING_FACEBOOK_SOURCE, assertSourceStory } from "@/lib/campaignSource";
 import type { Post } from "@prisma/client";
 import {
   AdTemplateConfigurationError,
@@ -176,6 +177,7 @@ async function attemptFacebookOriginalCta(
   pageAccessToken: string,
   ctaType: AdCtaType,
 ): Promise<FacebookCtaAttemptResult> {
+  if (post.sourceKind === EXISTING_FACEBOOK_SOURCE) return { retry: false };
   if (resolveAdCtaScope(post.adCtaScope) !== "AD_AND_FACEBOOK_POST" || ctaType === "NO_BUTTON") {
     return { retry: false };
   }
@@ -293,6 +295,14 @@ async function attemptFacebookOriginalCta(
 export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post) return { retry: false };
+  if (post.adNextAttemptAt && post.adNextAttemptAt.getTime() > Date.now()) return { retry: true, retryAfterSeconds: Math.max(1, Math.ceil((post.adNextAttemptAt.getTime() - Date.now()) / 1000)) };
+  if (post.sourceKind === EXISTING_FACEBOOK_SOURCE) {
+    try { assertSourceStory(post.adSourceSnapshot, post.pageId, post.fbObjectStoryId); }
+    catch {
+      await prisma.post.update({ where: { id: postId }, data: { adStatus: "failed", errorMsg: "Snapshot bài nguồn không khớp; Ads vẫn bị chặn.", adNextAttemptAt: null } });
+      return { retry: false };
+    }
+  }
   const adsNeedWork = ["pending", "queued", "creating"].includes(post.adStatus ?? "");
   const facebookCtaNeedsWork = resolveAdCtaScope(post.adCtaScope) === "AD_AND_FACEBOOK_POST"
     && ["pending", "verifying"].includes(post.fbCtaStatus ?? "");
@@ -352,8 +362,8 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     ...(post.adGender != null ? { gender: post.adGender } : {}),
     ...(post.adBudgetMinor != null ? { budgetMinor: post.adBudgetMinor } : {}),
     ...(post.adBudgetCurrency != null ? { budgetCurrency: post.adBudgetCurrency } : {}),
-    adStatus: (post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
-    adStartAt: post.adStartAt ?? undefined,
+    adStatus: (post.sourceKind === EXISTING_FACEBOOK_SOURCE ? post.adPublishStatus as "ACTIVE" | "PAUSED" | null : post.adStartAt ? "ACTIVE" : post.adPublishStatus as "ACTIVE" | "PAUSED" | null) ?? undefined,
+    adStartAt: post.sourceKind === EXISTING_FACEBOOK_SOURCE && post.adStartAt && post.adStartAt.getTime() <= Date.now() ? undefined : post.adStartAt ?? undefined,
     adPlacements: parseAdPlacementConfig(post.adPlacementConfig) ?? undefined,
     adAdvantage: parseAdAdvantageConfig(post.adAdvantageConfig) ?? undefined,
   };
@@ -535,6 +545,7 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     where: { id: p.postId },
     include: { extractedLinks: { orderBy: { order: "asc" } } },
   });
+  if (postFull?.sourceKind === EXISTING_FACEBOOK_SOURCE) assertSourceStory(postFull.adSourceSnapshot, p.pageId, p.fbPostId ?? null);
   // Post.campaignName is persisted at link-save time (either an explicit
   // Sub_id-derived name from the file-import flow, or auto-detected from a
   // manually-pasted long-form link's ?utm_content=). Most real affiliate
@@ -624,7 +635,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
           destinationUrl: p.destinationUrl!,
           ctaType: p.ctaType,
         }
-      : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId, destinationUrl: p.destinationUrl, ctaType: p.ctaType },
+      : { platform: "facebook", fbPostId: p.fbPostId!, instagramUserId: p.instagramUserId, destinationUrl: p.destinationUrl, ctaType: p.ctaType,
+          preserveOriginal: postFull?.sourceKind === EXISTING_FACEBOOK_SOURCE },
     rawAdAccountId,
     adsAccessToken,
     dailyBudgetMinor,

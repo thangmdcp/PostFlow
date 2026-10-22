@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { isFacebookOriginalCtaVerified, shouldProbeFacebookCtaReadiness } from "../lib/facebookOriginalCta.ts";
+import { EXISTING_FACEBOOK_SOURCE } from "../lib/campaignSource.ts";
 
 class MetaApiError extends Error {
   constructor(code, category = "permission") { super(`Meta code=${code}`); this.code = code; this.category = category; }
@@ -18,6 +19,7 @@ function fixture({ probeError, mutationError, attempt = 0 } = {}) {
     fbCtaStatus: "pending", fbCtaAttempt: attempt, adId: "existing-ad", adCampaignId: "existing-campaign" };
   let ready = false, probes = 0, writes = 0;
   const dependencies = {
+    EXISTING_FACEBOOK_SOURCE,
     prisma: { post: { update: async ({ data }) => Object.assign(row, data) } },
     resolveAdCtaScope: value => value, MetaApiError, isFacebookOriginalCtaVerified, shouldProbeFacebookCtaReadiness,
     FACEBOOK_CTA_RETRY_DELAYS_MS: [10000, 30000, 120000, 300000, 900000],
@@ -44,6 +46,11 @@ test("fresh story code 10 automatically waits then verifies CTA without recreati
   assert.ok(f.row.fbCtaVerifiedAt);
   assert.equal(f.row.adId, "existing-ad");
   assert.equal(f.row.adCampaignId, "existing-campaign");
+});
+test("reused posts never update original CTA even if a stale job requests the Page scope", async () => {
+  const f = fixture(); f.row.sourceKind = EXISTING_FACEBOOK_SOURCE;
+  assert.deepEqual(await f.run(), { retry: false });
+  assert.deepEqual(f.counts(), { probes: 0, writes: 0 });
 });
 test("true permission and token denial stop; transient Page probe waits", async () => {
   for (const error of [new MetaApiError(10), new MetaApiError(190, "token")]) {

@@ -37,6 +37,7 @@ async function handoffFetch(postId: string, stage: FetchStage): Promise<FetchPos
 export async function processFetchPost(postId: string, stage: FetchStage | "legacy" = "download"): Promise<FetchPostJobResult> {
   const now = new Date();
   const post = await prisma.post.findUnique({ where: { id: postId } });
+  if (post?.sourceKind === "existing_facebook_post") return { status: "skipped" };
   if (!post || !["queued", "fetching"].includes(post.status)) {
     return { status: "skipped" };
   }

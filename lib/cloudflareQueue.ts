@@ -3,6 +3,7 @@ import type { FetchStage } from "@/lib/fetchDownloadSnapshot";
 const QUEUE_PATH = "/enqueue";
 
 export type PostflowQueueJob =
+  | { type: "campaign-source"; sourceId: string }
   | { type: "publish"; postId: string; publishToPage?: boolean }
   | { type: "ads"; postId: string }
   | { type: "comment"; commentId: string }

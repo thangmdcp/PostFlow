@@ -48,6 +48,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       include: { extractedLinks: true },
     });
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
+    if (post.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn không được đưa vào queue đăng bài." }, { status: 409 });
     if (!["ready", "failed", "partial", "pending"].includes(post.status)) {
       return NextResponse.json({ error: "Bài đang được xử lý hoặc đã đăng" }, { status: 409 });
     }

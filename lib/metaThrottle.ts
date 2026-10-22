@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { usageLevel } from "@/lib/metaUsage";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { spacingFor } from "@/lib/metaThrottlePolicy";
 
-export type MetaJobKind = "publish" | "ads" | "comment" | "story";
+export type MetaJobKind = "publish" | "ads" | "comment" | "story" | "campaign_read";
 
 export interface MetaJobScope {
   scopeKey: string;
@@ -23,7 +24,7 @@ export async function reserveMetaJob(
   jobId: string,
   now = new Date(),
 ): Promise<{ allowed: boolean; retryAfterSeconds: number; reason?: string }> {
-  const businessScopes = kind === "ads"
+  const businessScopes = kind === "ads" || kind === "campaign_read"
     ? await prisma.metaThrottleState.findMany({
         where: { scopeType: "business_use_case" },
         select: { scopeKey: true, scopeType: true, scopeId: true },
@@ -71,26 +72,25 @@ export async function reserveMetaJob(
           };
         }
 
-        for (const scope of unique) {
+        const reservations = unique.map((scope) => {
           const state = byKey.get(scope.scopeKey);
           const usage = state ? usageLevel(state) : 0;
           const spacing = spacingFor(kind, usage, state?.accessTier);
-          await tx.metaThrottleState.upsert({
-            where: { scopeKey: scope.scopeKey },
-            create: {
-              scopeKey: scope.scopeKey,
-              scopeType: scope.scopeType,
-              scopeId: scope.scopeId,
-              nextAvailableAt: new Date(now.getTime() + spacing * 1000),
-            },
-            update: { nextAvailableAt: new Date(now.getTime() + spacing * 1000) },
-          });
-        }
+          return Prisma.sql`(${randomUUID()}, ${scope.scopeKey}, ${scope.scopeType}, ${scope.scopeId}, 0, 0, 0, ${new Date(now.getTime() + spacing * 1000)}, ${now})`;
+        });
+        // All business quota scopes must be reserved atomically. One UPSERT
+        // avoids N database round trips inside an interactive transaction
+        // (live accounts can have dozens of business-use-case scopes).
+        await tx.$executeRaw(Prisma.sql`
+          INSERT INTO "MetaThrottleState" ("id", "scopeKey", "scopeType", "scopeId", "callCount", "totalCpuTime", "totalTime", "nextAvailableAt", "updatedAt")
+          VALUES ${Prisma.join(reservations)}
+          ON CONFLICT ("scopeKey") DO UPDATE SET "nextAvailableAt" = EXCLUDED."nextAvailableAt", "updatedAt" = EXCLUDED."updatedAt"
+        `);
         return { allowed: true, retryAfterSeconds: 0 };
-      }, { isolationLevel: "Serializable" });
+      }, { isolationLevel: "Serializable", maxWait: 5_000, timeout: 30_000 });
     } catch (error) {
       const code = (error as Prisma.PrismaClientKnownRequestError | undefined)?.code;
-      if (code !== "P2034" || attempt === 2) throw error;
+      if (code !== "P2034") throw error;
     }
   }
   return { allowed: false, retryAfterSeconds: 5 + stableJitter(jobId), reason: "Đang đồng bộ quota Meta" };

@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { enqueuePublish } from "@/lib/cloudflareQueue";
 import { recoverFetchJobs } from "@/lib/fetchRecovery";
 import { recoverRateLimitedAds } from "@/lib/autoAdsRunner";
+import { recoverCampaignImports } from "@/lib/campaignImport";
+import { recoverExistingPostAds } from "@/lib/existingPostAds";
 
 // Covers: publishing whatever posts are due, the ~1 min first-attempt ads
 // wait (via scheduleAutoAds' waitUntil) for however many just published, and
@@ -36,8 +38,10 @@ export async function GET(req: Request) {
   });
 
   const now = new Date();
+  await recoverCampaignImports();
+  await recoverExistingPostAds();
   const posts = await prisma.post.findMany({
-    where: { status: "pending", OR: [
+    where: { sourceKind: "source_link", status: "pending", OR: [
       { scheduledAt: { lte: now } },
       // Immediate-publish jobs may have no scheduledAt. Resume only media
       // refreshes that were explicitly requested by an earlier publish job.

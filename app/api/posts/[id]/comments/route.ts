@@ -14,6 +14,7 @@ export async function POST(
     if (!comments?.length) return NextResponse.json({ ok: true });
 
     const post = await prisma.post.findUnique({ where: { id: params.id } });
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn không thêm bình luận." }, { status: 409 });
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
     if (!post.fbPostId || !post.pageId) {
       return NextResponse.json({ error: "Bài chưa đăng lên Facebook" }, { status: 400 });

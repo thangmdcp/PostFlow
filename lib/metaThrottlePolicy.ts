@@ -1,6 +1,7 @@
-export type MetaThrottleJobKind = "publish" | "ads" | "comment" | "story";
+export type MetaThrottleJobKind = "publish" | "ads" | "comment" | "story" | "campaign_read";
 
 const BASE_SPACING_SECONDS: Record<MetaThrottleJobKind, number> = {
+  campaign_read: 3,
   publish: 2,
   ads: 20,
   comment: 3,

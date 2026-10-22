@@ -39,7 +39,7 @@ export async function topUpPageStories(pageId: string, storyCount: number, prefe
   // non-null storyStatus forever, so it's naturally excluded from re-pick,
   // even after its story has expired.
   let candidates = await prisma.post.findMany({
-    where: { pageId, status: "done", fbMediaId: { not: null }, storyStatus: null },
+    where: { sourceKind: "source_link", pageId, status: "done", fbMediaId: { not: null }, storyStatus: null },
     select: { id: true },
   });
 
@@ -67,6 +67,7 @@ export async function topUpPageStories(pageId: string, storyCount: number, prefe
 
 export async function attemptStory(postId: string): Promise<{ retry: boolean; retryAfterSeconds?: number }> {
   const existing = await prisma.post.findUnique({ where: { id: postId } });
+  if (existing?.sourceKind === "existing_facebook_post") return { retry: false };
   if (!existing || existing.storyStatus === "done" || existing.storyStatus === "failed") return { retry: false };
   if (existing.storyStatus === "creating") {
     if (existing.updatedAt.getTime() > Date.now() - 10 * 60_000) return { retry: true, retryAfterSeconds: 60 };

@@ -33,6 +33,7 @@ export async function POST(req: Request) {
       include: { extractedLinks: { orderBy: { order: "asc" } } },
     });
 
+    if (post?.sourceKind === "existing_facebook_post") return NextResponse.json({ error: "Bài có sẵn phải dùng API Ads trên bài có sẵn để giữ nguyên Story ID/CTA." }, { status: 409 });
     if (!post || post.status !== "done" || !post.pageId) {
       return NextResponse.json(
         { error: "Post must be published before creating an ad" },
