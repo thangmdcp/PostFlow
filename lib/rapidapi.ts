@@ -15,7 +15,7 @@ export interface RapidApiPostData {
   title?: string;
   caption: string;
   media: RapidApiMedia[];
-  provider?: "autodown" | "flully" | "rapidapi";
+  provider?: "autodown" | "flully" | "render" | "rapidapi";
   expiresAt?: string;
   extractor?: string;
   diagnostics?: SourceFetchDiagnostic[];
@@ -224,7 +224,8 @@ async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<Rap
   return { title: data.title as string | undefined, caption, media };
 }
 
-export async function fetchPostData(url: string, options: { skipAutoDown?: boolean } = {}): Promise<RapidApiPostData> {
+export async function fetchPostData(url: string, options: { skipAutoDown?: boolean; renderPostId?: string } = {}): Promise<RapidApiPostData> {
+  if (options.renderPostId) return (await import("@/lib/renderDownload")).renderDownload(url, options.renderPostId);
   const isFb = isFacebookUrl(url);
   let autodownDiagnostic: SourceFetchDiagnostic | null = null;
   if (!options.skipAutoDown && (isFb || isTikTokUrl(url))) {

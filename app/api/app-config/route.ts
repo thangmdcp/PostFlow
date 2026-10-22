@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-const SECRET_CONFIG_KEYS = new Set(["flullyAutoDownApiKey", "autodownApiKey", "rapidApiKeys"]);
+const SECRET_CONFIG_KEYS = new Set(["flullyAutoDownApiKey", "autodownApiKey", "renderDownloadApiKey", "rapidApiKeys"]);
 
 export async function GET() {
   try {

@@ -47,6 +47,7 @@ export function enqueueAds(postId: string, delaySeconds: number): Promise<boolea
   return enqueueQueueJob({ type: "ads", postId }, delaySeconds);
 }
 
-export function enqueueFetch(postId: string, stage: FetchStage = "download"): Promise<boolean> {
+export async function enqueueFetch(postId: string, stage: FetchStage = "download"): Promise<boolean> {
+  if (stage === "download") stage = await (await import("@/lib/fetchDispatch")).assignFetchStage(postId);
   return enqueueQueueJob({ type: "fetch", postId, stage });
 }

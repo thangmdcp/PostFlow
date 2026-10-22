@@ -12,9 +12,11 @@
       { "binding": "POSTFLOW_ENGAGEMENT_QUEUE", "queue": "postflow-engagement" },
       { "binding": "POSTFLOW_FETCH_QUEUE", "queue": "postflow-fetch" },
       { "binding": "POSTFLOW_DOWNLOAD_QUEUE", "queue": "postflow-download" },
-      { "binding": "POSTFLOW_UPLOAD_QUEUE", "queue": "postflow-upload" }
+      { "binding": "POSTFLOW_UPLOAD_QUEUE", "queue": "postflow-upload" },
+      { "binding": "POSTFLOW_RENDER_QUEUE", "queue": "postflow-render" }
     ],
     "consumers": [
+      { "queue": "postflow-render", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 20, "max_concurrency": 1, "dead_letter_queue": "postflow-render-dlq" },
       {
         "queue": "postflow-publish",
         "max_batch_size": 1,

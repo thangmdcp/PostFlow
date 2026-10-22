@@ -13,7 +13,7 @@ export async function assertFetchProviderAvailable(provider: Exclude<SourceFetch
   throw new SourceFetchError({
     provider,
     code: "PROVIDER_CIRCUIT_OPEN",
-    message: `${provider === "flully" ? "Flully" : provider === "cloudinary" ? "Cloudinary" : provider === "autodown" ? "AutoDown cũ" : "Nguồn Facebook dự phòng"} đang tạm nghỉ sau nhiều lỗi liên tiếp.`,
+    message: `${provider === "render" ? "Render" : provider === "flully" ? "Flully" : provider === "cloudinary" ? "Cloudinary" : provider === "autodown" ? "AutoDown cũ" : "Nguồn Facebook dự phòng"} đang tạm nghỉ sau nhiều lỗi liên tiếp.`,
     httpStatus: 503,
     retryable: true,
     retryAfterSeconds: Math.max(1, Math.ceil((state.blockedUntil.getTime() - Date.now()) / 1000)),
@@ -38,7 +38,7 @@ export async function recordFetchProviderSuccess(provider: Exclude<SourceFetchPr
 
 export async function recordFetchProviderFailure(error: SourceFetchError): Promise<void> {
   if (!error.retryable || error.provider === "queue" || error.code === "PROVIDER_CIRCUIT_OPEN"
-    || (error.provider === "flully" && error.code === "MEDIA_BUSY")) return;
+    || (["flully", "render"].includes(error.provider) && error.code === "MEDIA_BUSY")) return;
   const now = new Date();
   const current = await prisma.fetchProviderState.findUnique({ where: { provider: error.provider } });
   const insideWindow = !(error.provider === "flully" && current?.lastErrorCode === "MEDIA_BUSY") && !!current?.failureWindowStartedAt

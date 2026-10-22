@@ -27,11 +27,12 @@ export async function fetchPostFields(sourceUrl: string, options: {
   downloadSnapshot?: unknown;
   separateDownload?: boolean;
   stage?: FetchStage;
+  renderPostId?: string;
 } = {}): Promise<FetchedPostFields> {
   const snapshot = readDownloadSnapshot(options.downloadSnapshot, sourceUrl);
   const cached = reusableDownload(snapshot);
   if (options.stage === "upload" && !cached) throw new FetchStageChanged("download");
-  if (options.stage === "download" && cached) throw new FetchStageChanged("upload");
+  if ((options.stage === "download" || options.stage === "render") && cached) throw new FetchStageChanged("upload");
   const data = cached ?? await fetchPostData(sourceUrl, options);
   if (!cached && options.separateDownload && data.media.length) {
     const next: FetchDownloadSnapshot = { version: 1, sourceUrl, purpose: snapshot?.purpose ?? "fetch",

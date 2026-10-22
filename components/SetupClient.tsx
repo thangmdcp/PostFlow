@@ -274,6 +274,9 @@ const FIELDS = [
     required: false,
     storage: "db" as const,
   },
+  { key: "RENDER_DOWNLOAD_ENABLED", configKey: "renderDownloadEnabled", label: "Render tải song song (true / false)", placeholder: "false", hint: "Nhập true để bật Render Free độc lập với Flully. Không tự nâng gói khi hết quota.", secret: false, required: false, storage: "db" as const },
+  { key: "RENDER_DOWNLOAD_URL", configKey: "renderDownloadUrl", label: "Render AutoDown URL", placeholder: "https://ten-service.onrender.com", hint: "Chỉ nhận HTTPS onrender.com; chỉ server gọi API.", secret: false, required: false, storage: "db" as const },
+  { key: "RENDER_DOWNLOAD_API_KEY", configKey: "renderDownloadApiKey", label: "Render API key", placeholder: "Khóa riêng của Render", hint: "Không dùng chung khóa Flully; luôn được che trong phản hồi cấu hình.", secret: true, required: false, storage: "db" as const },
 ];
 
 export function SetupClient() {
@@ -485,7 +488,13 @@ export function SetupClient() {
                 </p>
               )}
               <div className="relative">
-                {field.multiline ? (
+                {field.key === "RENDER_DOWNLOAD_ENABLED" ? (
+                  <button id={field.key} type="button" role="switch" aria-checked={val === "true"}
+                    onClick={() => setValues(s => ({...s,[field.key]:val === "true" ? "false" : "true"}))}
+                    className={`rounded-md border px-4 py-2 text-sm font-semibold ${val === "true" ? "bg-blue-600 text-white" : "bg-muted"}`}>
+                    {val === "true" ? "Bật tải song song Render" : "Tắt Render · chỉ dùng Flully"}
+                  </button>
+                ) : field.multiline ? (
                   <textarea
                     id={field.key}
                     value={val}

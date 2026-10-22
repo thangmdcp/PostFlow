@@ -8,6 +8,7 @@ export interface FetchDownloadSnapshot {
   prepared?: boolean;
   data?: RapidApiPostData;
   expiresAt?: string;
+  downloadProvider?: "flully" | "render";
 }
 
 export function readDownloadSnapshot(value: unknown, sourceUrl: string): FetchDownloadSnapshot | null {
@@ -23,10 +24,11 @@ export function reusableDownload(snapshot: FetchDownloadSnapshot | null, now = D
   return snapshot.data;
 }
 
-export type FetchStage = "download" | "upload";
+export type FetchStage = "download" | "upload" | "render";
 
 export function fetchStageFor(sourceUrl: string, value: unknown, now = Date.now()): FetchStage {
-  return reusableDownload(readDownloadSnapshot(value, sourceUrl), now) ? "upload" : "download";
+  const snapshot = readDownloadSnapshot(value, sourceUrl);
+  return reusableDownload(snapshot, now) ? "upload" : snapshot?.downloadProvider === "render" ? "render" : "download";
 }
 
 // Successful stage transition, not an upstream failure or consumed retry.

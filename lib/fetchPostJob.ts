@@ -16,7 +16,7 @@ function isStoredDiagnostic(value: Prisma.JsonValue): value is Prisma.JsonObject
   return !!value
     && typeof value === "object"
     && !Array.isArray(value)
-    && ["autodown", "flully", "cloudinary", "rapidapi", "queue"].includes(String(value.provider))
+    && ["autodown", "flully", "render", "cloudinary", "rapidapi", "queue"].includes(String(value.provider))
     && typeof value.code === "string"
     && typeof value.message === "string";
 }
@@ -24,7 +24,7 @@ function isStoredDiagnostic(value: Prisma.JsonValue): value is Prisma.JsonObject
 function waitingMessage(error: SourceFetchError): string {
   const autoDownCouldNotParse = error.diagnostics.some((item) => item.code === "FACEBOOK_PARSE_FAILED");
   if (error.code === "PROVIDER_CIRCUIT_OPEN") return `${error.message} Đang chờ tự tiếp tục…`;
-  if (error.provider === "flully" && error.code === "MEDIA_BUSY") return "Flully đang tải video khác · chờ tới lượt, không tính lỗi…";
+  if (["flully", "render"].includes(error.provider) && error.code === "MEDIA_BUSY") return `${error.provider === "render" ? "Render" : "Flully"} đang tải video khác · chờ tới lượt, không tính lỗi…`;
   if (autoDownCouldNotParse) return "Flully không đọc được Reel · nguồn Facebook dự phòng tạm bận · đang tự thử lại…";
   return `${error.message} Đang tự thử lại…`;
 }
@@ -78,6 +78,7 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
     const fields = await fetchPostFieldsWithRetry(post.sourceUrl, {
       skipAutoDown: post.fetchProvider === "rapidapi", manifest: post.fetchMediaManifest, postId: post.id,
       separateDownload: true, downloadSnapshot: post.fetchDownloadSnapshot, stage,
+      ...(stage === "render" ? {renderPostId:post.id}:{}),
       checkpoint: async (assets) => {
         const saved = await prisma.post.updateMany({ where: owned, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
         if (!saved.count) throw new Error("Fetch lease lost");
@@ -159,7 +160,16 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
       retryAfterSeconds: rawError.retryAfterSeconds,
       diagnostics,
     });
-    const busy = error.provider === "flully" && error.code === "MEDIA_BUSY";
+    const busy = ["flully", "render"].includes(error.provider) && error.code === "MEDIA_BUSY";
+    // Only an explicit unavailable/not-started response permits a handoff.
+    // A lost response stays pinned until Render can check its deterministic asset.
+    if (error.provider === "render" && ["RENDER_UNAVAILABLE", "RENDER_NOT_CONFIGURED"].includes(error.code)
+      && post.fetchErrorCode !== "RENDER_UNCERTAIN") {
+      const saved = await prisma.post.updateMany({where:owned,data:{status:"queued",fetchLeaseUntil:null,fetchNextAttemptAt:null,
+        fetchDownloadSnapshot:{...(snapshot ?? {version:1,sourceUrl:post.sourceUrl,purpose:"fetch"}),downloadProvider:"flully"} as unknown as Prisma.InputJsonValue,
+        fetchDiagnostics:error.diagnostics as unknown as Prisma.InputJsonValue,errorMsg:"Render chưa sẵn sàng · chuyển sang Flully…"}});
+      return saved.count ? handoffFetch(post.id,"download") : {status:"skipped"};
+    }
     const consumesAttempt = !busy && error.code !== "PROVIDER_CIRCUIT_OPEN";
     const attempt = (post.fetchAttempt ?? 0) + (consumesAttempt ? 1 : 0);
     const canRetry = error.retryable && (!consumesAttempt || attempt <= FETCH_RETRY_DELAYS_SECONDS.length);

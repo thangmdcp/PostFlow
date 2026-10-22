@@ -1,4 +1,4 @@
-export type SourceFetchProvider = "autodown" | "flully" | "cloudinary" | "rapidapi" | "queue";
+export type SourceFetchProvider = "autodown" | "flully" | "render" | "cloudinary" | "rapidapi" | "queue";
 
 export interface SourceFetchDiagnostic {
   provider: SourceFetchProvider;

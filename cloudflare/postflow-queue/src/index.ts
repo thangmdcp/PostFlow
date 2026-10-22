@@ -4,7 +4,7 @@ type QueueJob =
   | { type: "ads"; postId: string }
   | { type: "comment"; commentId: string }
   | { type: "story"; postId: string }
-  | { type: "fetch"; postId: string; stage?: "download" | "upload" | "legacy" };
+  | { type: "fetch"; postId: string; stage?: "download" | "upload" | "render" | "legacy" };
 type EnqueueBody = QueueJob & { delaySeconds?: number };
 interface QueueMessage { body: QueueJob; ack(): void; retry(options?: { delaySeconds?: number }): void; }
 interface QueueBatch { queue?: string; messages: QueueMessage[]; }
@@ -15,6 +15,7 @@ interface Env {
   POSTFLOW_FETCH_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_DOWNLOAD_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_UPLOAD_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
+  POSTFLOW_RENDER_QUEUE: { send(message: QueueJob, options?: { delaySeconds?: number }): Promise<void> };
   POSTFLOW_QUEUE_SECRET: string;
   POSTFLOW_API_URL: string;
   POSTFLOW_WORKER_SECRET: string;
@@ -37,11 +38,11 @@ export default {
       (body.type === "ads" && !!body.postId) ||
       (body.type === "comment" && !!body.commentId) ||
       (body.type === "story" && !!body.postId) ||
-      (body.type === "fetch" && !!body.postId && (body.stage === undefined || body.stage === "download" || body.stage === "upload"));
+      (body.type === "fetch" && !!body.postId && (body.stage === undefined || body.stage === "download" || body.stage === "upload" || body.stage === "render"));
     if (!valid) return Response.json({ error: "Invalid queue job" }, { status: 400 });
     const { delaySeconds, ...job } = body;
     const queue = job.type === "campaign-source" ? env.POSTFLOW_FETCH_QUEUE : job.type === "fetch"
-      ? job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE
+      ? job.stage === "render" ? env.POSTFLOW_RENDER_QUEUE : job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE
       : job.type === "ads"
         ? env.POSTFLOW_ADS_QUEUE
         : job.type === "comment" || job.type === "story"
@@ -58,7 +59,7 @@ export default {
       // a source download inside the parallel upload pool.
       const job = message.body.type === "fetch" ? { ...message.body,
         stage: batch.queue === "postflow-download" ? "download" as const
-          : batch.queue === "postflow-upload" ? "upload" as const : "legacy" as const } : message.body;
+          : batch.queue === "postflow-render" ? "render" as const : batch.queue === "postflow-upload" ? "upload" as const : "legacy" as const } : message.body;
       const endpoint = message.body.type === "publish" ? "publish" : message.body.type;
       const response = await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/, "")}/api/queue/${endpoint}`, {
         method: "POST",
@@ -74,8 +75,8 @@ export default {
           if (payload?.fetchStatus === "waiting") {
             // Resource contention is not a failure: delayed replacement, then
             // ack only after send succeeds. It consumes neither retry budget.
-            const queue = job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE;
-            await queue.send({ ...job, stage: job.stage === "upload" ? "upload" : "download" },
+            const queue = job.stage === "render" ? env.POSTFLOW_RENDER_QUEUE : job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE;
+            await queue.send({ ...job, stage: job.stage === "render" ? "render" : job.stage === "upload" ? "upload" : "download" },
               { delaySeconds: Math.max(5, Math.min(300, Math.ceil(payload.retryAfterSeconds ?? 10))) });
           }
         }

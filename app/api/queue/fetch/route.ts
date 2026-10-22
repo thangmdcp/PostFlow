@@ -11,8 +11,8 @@ export async function POST(request: Request) {
   if (!workerSecret || request.headers.get("x-postflow-worker-secret") !== workerSecret) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { postId, stage } = await request.json() as { postId?: string; stage?: string };
   if (!postId) return NextResponse.json({ error: "postId is required" }, { status: 400 });
-  if (stage !== undefined && !["legacy", "download", "upload"].includes(stage)) return NextResponse.json({ error: "Invalid Fetch stage" }, { status: 400 });
-  const deliveryStage = stage === "download" || stage === "upload" ? stage : "legacy";
+  if (stage !== undefined && !["legacy", "download", "upload", "render"].includes(stage)) return NextResponse.json({ error: "Invalid Fetch stage" }, { status: 400 });
+  const deliveryStage = stage === "download" || stage === "upload" || stage === "render" ? stage : "legacy";
   const started = Date.now();
   const result = await processFetchPost(postId, deliveryStage);
   console.info("[fetch]", { postId, stage: deliveryStage, result: result.status, durationMs: Date.now() - started });
