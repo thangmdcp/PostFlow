@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { enqueueFetch } from "@/lib/cloudflareQueue";
-import { fetchStageFor } from "@/lib/fetchDownloadSnapshot";
+import { enqueueRecoveredFetches } from "@/lib/cloudflareQueue";
 
 const RECOVERING_MESSAGE = "Đang khôi phục Fetch Worker…";
 const DELIVERY_GRACE_MS = 5 * 60_000;
@@ -62,6 +61,5 @@ export async function recoverFetchJobs(batchId?: string): Promise<number> {
   });
   const current = await prisma.post.findMany({ where: { id: { in: ids }, status: "queued" },
     select: { id: true, sourceUrl: true, fetchDownloadSnapshot: true } });
-  const results = await Promise.all(current.map(post => enqueueFetch(post.id, fetchStageFor(post.sourceUrl, post.fetchDownloadSnapshot))));
-  return results.filter(Boolean).length;
+  return enqueueRecoveredFetches(current);
 }

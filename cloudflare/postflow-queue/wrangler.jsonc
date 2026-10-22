@@ -16,7 +16,7 @@
       { "binding": "POSTFLOW_RENDER_QUEUE", "queue": "postflow-render" }
     ],
     "consumers": [
-      { "queue": "postflow-render", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 20, "max_concurrency": 1, "dead_letter_queue": "postflow-render-dlq" },
+      { "queue": "postflow-render", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 20, "max_concurrency": 2, "dead_letter_queue": "postflow-render-dlq" },
       {
         "queue": "postflow-publish",
         "max_batch_size": 1,

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
 import { SourceFetchError } from "@/lib/sourceFetchError";
 import { withFlullyDownloadLease } from "@/lib/flullyDownloadLease";
+import type { DownloadReservation } from "@/lib/flullyDownloadLease";
 
 export interface AutoDownDownloadResult {
   success: true;
@@ -100,10 +101,10 @@ export function normalizeFlullyDownload(value: unknown): AutoDownDownloadResult 
     media: data.media.map((item) => ({ type: "video", url: item.url, thumbnail: item.thumbnail ?? null })), expiresAt: data.expiresAt };
 }
 
-export async function autodownDownload(url: string): Promise<AutoDownDownloadResult> {
+export async function autodownDownload(url: string, reservation?: DownloadReservation): Promise<AutoDownDownloadResult> {
   await assertFetchProviderAvailable("flully");
   try {
-    const data = await withFlullyDownloadLease(async () => normalizeFlullyDownload(await flullyRequest("download", url)));
+    const data = await withFlullyDownloadLease(async () => normalizeFlullyDownload(await flullyRequest("download", url)),reservation);
     await recordFetchProviderSuccess("flully");
     return data;
   } catch (cause) {

@@ -4,6 +4,7 @@ import { fetchPostFieldsWithRetry } from "@/lib/postProcessing";
 import { FETCH_RETRY_DELAYS_SECONDS, fetchRetryDelaySeconds, SourceFetchError, sourceDiagnostic, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
 import { FetchDownloadReady, FetchStageChanged, fetchStageFor, readDownloadSnapshot, type FetchStage } from "@/lib/fetchDownloadSnapshot";
 import { enqueuePublish, enqueueFetch } from "@/lib/cloudflareQueue";
+import type { PoolClaim } from "@/lib/downloadPool";
 
 const FETCH_LEASE_MS = 7 * 60_000;
 
@@ -34,7 +35,7 @@ async function handoffFetch(postId: string, stage: FetchStage): Promise<FetchPos
 }
 
 /** Explicit stages never run each other's work. Legacy messages only hand off. */
-export async function processFetchPost(postId: string, stage: FetchStage | "legacy" = "download"): Promise<FetchPostJobResult> {
+export async function processFetchPost(postId: string, stage: FetchStage | "legacy" = "download", reservation?: PoolClaim): Promise<FetchPostJobResult> {
   const now = new Date();
   const post = await prisma.post.findUnique({ where: { id: postId } });
   if (post?.sourceKind === "existing_facebook_post") return { status: "skipped" };
@@ -46,7 +47,9 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
   if (snapshot?.prepared) return { status: "skipped" };
   // A stale Fetch message must never re-fetch/rebuild a scheduled caption.
   if (post.finalCaption && post.pageId && !refreshing) return { status: "skipped" };
-  if (post.fetchLeaseUntil && post.fetchLeaseUntil.getTime() > now.getTime()) return { status: "skipped" };
+  const reserved = !!reservation && post.status === "fetching" && post.fetchLeaseUntil?.getTime() === reservation.leaseUntil.getTime()
+    && snapshot?.pool?.owner === JSON.parse(reservation.reservation.value).owner;
+  if (post.fetchLeaseUntil && post.fetchLeaseUntil.getTime() > now.getTime() && !reserved) return { status: "skipped" };
   const requiredStage = fetchStageFor(post.sourceUrl, post.fetchDownloadSnapshot, now.getTime());
   if (stage !== requiredStage) return handoffFetch(post.id, requiredStage);
   if (post.fetchNextAttemptAt && post.fetchNextAttemptAt.getTime() > now.getTime()) {
@@ -56,9 +59,9 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
     };
   }
 
-  const leaseUntil = new Date(now.getTime() + FETCH_LEASE_MS);
+  const leaseUntil = reserved ? reservation!.leaseUntil : new Date(now.getTime() + FETCH_LEASE_MS);
   const owned = { id: postId, status: "fetching", fetchLeaseUntil: leaseUntil };
-  const claim = await prisma.post.updateMany({
+  const claim = reserved ? {count:1} : await prisma.post.updateMany({
     where: {
       id: postId,
       updatedAt: post.updatedAt,
@@ -79,6 +82,7 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
       skipAutoDown: post.fetchProvider === "rapidapi", manifest: post.fetchMediaManifest, postId: post.id,
       separateDownload: true, downloadSnapshot: post.fetchDownloadSnapshot, stage,
       ...(stage === "render" ? {renderPostId:post.id}:{}),
+      ...(reserved ? {downloadReservation:reservation!.reservation}:{}),
       checkpoint: async (assets) => {
         const saved = await prisma.post.updateMany({ where: owned, data: { fetchMediaManifest: assets as unknown as Prisma.InputJsonValue } });
         if (!saved.count) throw new Error("Fetch lease lost");
@@ -189,6 +193,7 @@ export async function processFetchPost(postId: string, stage: FetchStage | "lega
           fetchHttpStatus: error.httpStatus ?? null,
           fetchLeaseUntil: null,
           fetchDiagnostics: error.diagnostics as unknown as Prisma.InputJsonValue,
+          ...(reserved && busy ? {fetchDownloadSnapshot:{...(snapshot ?? {version:1,purpose:"fetch",sourceUrl:post.sourceUrl}),started:false,pool:undefined} as unknown as Prisma.InputJsonValue}:{}),
         },
       });
       return { status: busy ? "waiting" : "deferred", retryAfterSeconds };

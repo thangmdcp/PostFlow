@@ -18,7 +18,7 @@ function queueFixture({ reply = { fetchStatus: "handed_off" }, httpStatus = 200,
   const queue = type => ({ send: async (body, options) => { if (sendFailure) throw new Error("Queue unavailable"); sent.push({ type, body, options }); } });
   const env = { POSTFLOW_QUEUE_SECRET: "secret", POSTFLOW_API_URL: "https://postflow.example",
     POSTFLOW_PUBLISH_QUEUE: queue("publish"), POSTFLOW_ADS_QUEUE: queue("ads"), POSTFLOW_ENGAGEMENT_QUEUE: queue("engagement"),
-    POSTFLOW_FETCH_QUEUE: queue("legacy"), POSTFLOW_DOWNLOAD_QUEUE: queue("download"), POSTFLOW_UPLOAD_QUEUE: queue("upload") };
+    POSTFLOW_FETCH_QUEUE: queue("legacy"), POSTFLOW_DOWNLOAD_QUEUE: queue("download"), POSTFLOW_UPLOAD_QUEUE: queue("upload"), POSTFLOW_RENDER_QUEUE: queue("render") };
   const api = load("cloudflare/postflow-queue/src/index.ts", {}, { fetch: async (url, init) => { requests.push({ url, body: JSON.parse(init.body) });
     return new Response(JSON.stringify(reply), { status: httpStatus }); } }).default;
   return { api, env, sent, requests, acks, retries,
@@ -54,6 +54,23 @@ test("failed replacement enqueue does not ACK or lose the waiting message", asyn
   await assert.rejects(f.api.queue({ queue: "postflow-download", messages: [f.message({ type: "fetch", postId: "p" })] }, f.env));
   assert.equal(f.acks.length, 0);
 });
+test("idle-source pump immediately pulls next work; busy waits; empty pool stops", async () => {
+  for (const [status,delay] of [["done",0],["handed_off",0],["failed",0],["waiting",10],["skipped",null]]) {
+    const f=queueFixture({reply:{fetchStatus:status,retryAfterSeconds:10}});
+    await f.api.queue({queue:"postflow-render",messages:[f.message({type:"fetch-pump",provider:"flully"})]},f.env);
+    assert.equal(f.requests[0].body.provider,"render");
+    assert.equal(f.acks.length,1);
+    if(delay===null)assert.equal(f.sent.length,0);
+    else {assert.equal(f.sent[0].type,"render");assert.equal(f.sent[0].options.delaySeconds,delay);}
+  }
+});
+test("pump enqueue failure or malformed response does not lose delivery", async () => {
+  for(const options of [{reply:{fetchStatus:"done"},sendFailure:true},{reply:{}}]){
+    const f=queueFixture(options);
+    await assert.rejects(f.api.queue({queue:"postflow-download",messages:[f.message({type:"fetch-pump",provider:"flully"})]},f.env));
+    assert.equal(f.acks.length,0);
+  }
+});
 test("real upload/network errors retain Queue retry/backoff and never move into download pool", async () => {
   const f = queueFixture({ reply: { retryAfterSeconds: 120 }, httpStatus: 503 });
   await f.api.queue({ queue: "postflow-upload", messages: [f.message({ type: "fetch", postId: "p" })] }, f.env);
@@ -68,7 +85,7 @@ test("download concurrency is one, upload concurrency is two, legacy consumer is
 });
 function leaseFixture() {
   let row = null, chain = Promise.resolve(), counter = 0;
-  const config = { findUnique: async () => row && { ...row },
+  const config = { findUnique: async () => row && { ...row }, findMany: async () => [],
     upsert: async ({ create, update }) => { row = row ? { ...row, ...update } : { ...create }; },
     updateMany: async ({ where, data }) => { if (row?.value !== where.value) return { count: 0 }; Object.assign(row, data); return { count: 1 }; } };
   const api = load("lib/flullyDownloadLease.ts", { "node:crypto": { randomUUID: () => `owner-${++counter}` },

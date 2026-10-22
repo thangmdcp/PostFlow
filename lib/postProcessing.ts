@@ -2,6 +2,7 @@ import { fetchPostData } from "@/lib/rapidapi";
 import { extractLinks } from "@/lib/extractLinks";
 import { uploadFromUrl, uploadFetchedVideo, cloudinaryFetchError } from "@/lib/cloudinary";
 import { SourceFetchError, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
+import type { DownloadReservation } from "@/lib/flullyDownloadLease";
 import { readFetchMediaManifest, type FetchMediaAsset } from "@/lib/fetchMediaManifest";
 import { createHash } from "node:crypto";
 import { readDownloadSnapshot, reusableDownload, FetchDownloadReady, FetchStageChanged, type FetchDownloadSnapshot, type FetchStage } from "@/lib/fetchDownloadSnapshot";
@@ -28,6 +29,7 @@ export async function fetchPostFields(sourceUrl: string, options: {
   separateDownload?: boolean;
   stage?: FetchStage;
   renderPostId?: string;
+  downloadReservation?: DownloadReservation;
 } = {}): Promise<FetchedPostFields> {
   const snapshot = readDownloadSnapshot(options.downloadSnapshot, sourceUrl);
   const cached = reusableDownload(snapshot);

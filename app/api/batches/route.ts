@@ -3,12 +3,13 @@ import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { topUpPageStories } from "@/lib/autoStoryRunner";
 import { processFetchPost } from "@/lib/fetchPostJob";
-import { enqueueFetch } from "@/lib/cloudflareQueue";
+import { enqueueFetch, wakeDownloadPool } from "@/lib/cloudflareQueue";
 import { BatchInputError, createFetchBatch } from "@/lib/createFetchBatch";
 
 export const maxDuration = 60;
 
 async function enqueueFetchBatch(ids: string[]): Promise<boolean[]> {
+  if(ids.length && await (await import("@/lib/downloadPoolConfig")).downloadPoolEnabled())return Array(ids.length).fill(await wakeDownloadPool());
   const results: boolean[] = [];
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(10, ids.length) }, async () => {

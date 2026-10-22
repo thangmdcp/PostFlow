@@ -12,6 +12,9 @@ interface FetchStatusDetailProps {
   fetchErrorCode?: string | null;
   fetchHttpStatus?: number | null;
   fetchDiagnostics?: unknown;
+  fetchPhase?: string | null;
+  fetchAssignedProvider?: string | null;
+  fetchSlot?: number | null;
 }
 
 export function FetchStatusDetail(props: FetchStatusDetailProps) {
@@ -26,7 +29,11 @@ export function FetchStatusDetail(props: FetchStatusDetailProps) {
   }, [props.status, nextAt]);
 
   const showSource = props.status === "ready" && !!props.fetchProvider;
-  if (!showSource && !props.fetchErrorCode && !(["queued", "fetching"].includes(props.status) && props.errorMsg)) return null;
+  if (!showSource && !props.fetchErrorCode && !["queued", "fetching"].includes(props.status)) return null;
+  const providerLabel = (value?: string | null) => value === "render-yt-dlp" ? "Render (yt-dlp)" : value === "render" ? "Render" : value === "flully" ? "Flully" : value;
+  const phaseLabel = props.fetchPhase === "upload" ? "Đang lưu/xác minh media" : props.fetchPhase === "download"
+    ? `Đang tải · ${providerLabel(props.fetchAssignedProvider || props.fetchProvider) || "nguồn"}${props.fetchSlot ? ` #${props.fetchSlot}` : ""}`
+    : "Chờ nguồn tải";
   const remaining = now !== null && nextAt ? Math.max(0, Math.ceil((nextAt - now) / 1000)) : null;
   const countdown = remaining === null ? "" : ` · ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
   const diagnostics = Array.isArray(props.fetchDiagnostics)
@@ -49,7 +56,7 @@ export function FetchStatusDetail(props: FetchStatusDetailProps) {
       title={title || props.errorMsg || undefined}
     >
       {props.status === "queued" && <Clock size={9} className="shrink-0" />}
-      <span className="line-clamp-2">{showSource ? `Nguồn: ${props.fetchProvider}` : props.errorMsg || "Đang chờ nguồn Facebook"}{countdown}</span>
+      <span className="line-clamp-2">{showSource ? `Nguồn: ${providerLabel(props.fetchProvider)}` : props.fetchErrorCode ? props.errorMsg || phaseLabel : props.fetchPhase ? phaseLabel : props.errorMsg || phaseLabel}{countdown}</span>
       {(props.fetchAttempt ?? 0) > 0 && <span className="shrink-0">· lần {props.fetchAttempt}</span>}
     </p>
   );

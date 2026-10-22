@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { SourceFetchError } from "@/lib/sourceFetchError";
 import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
 import type { RapidApiPostData } from "@/lib/rapidapi";
-import { withDownloadLease } from "@/lib/flullyDownloadLease";
+import { withDownloadLease, type DownloadReservation } from "@/lib/flullyDownloadLease";
 
 export async function renderConfig() {
   const rows = await prisma.appConfig.findMany({ where: { key: { in: ["renderDownloadEnabled", "renderDownloadUrl", "renderDownloadApiKey", "renderDownloadPlatforms"] } } });
@@ -13,8 +13,8 @@ export async function renderConfig() {
   return { origin: url.origin, key: c.renderDownloadApiKey, platforms: (c.renderDownloadPlatforms || "facebook").split(",") };
 }
 
-export async function renderDownload(url: string, postId: string): Promise<RapidApiPostData> {
-  return withDownloadLease("render", () => download(url, postId));
+export async function renderDownload(url: string, postId: string, reservation?: DownloadReservation): Promise<RapidApiPostData> {
+  return withDownloadLease("render", () => download(url, postId), reservation);
 }
 
 async function download(url: string, postId: string): Promise<RapidApiPostData> {

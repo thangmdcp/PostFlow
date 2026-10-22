@@ -1,4 +1,5 @@
 type QueueJob =
+  | { type: "fetch-pump"; provider:"flully"|"render" }
   | { type: "campaign-source"; sourceId: string }
   | { type: "publish"; postId: string; publishToPage?: boolean }
   | { type: "ads"; postId: string }
@@ -33,6 +34,7 @@ export default {
     if (!validBearer(request, env.POSTFLOW_QUEUE_SECRET)) return new Response("Unauthorized", { status: 401 });
     const body = await request.json() as EnqueueBody;
     const valid =
+      (body.type === "fetch-pump" && (body.provider === "flully" || body.provider === "render")) ||
       (body.type === "campaign-source" && !!body.sourceId) ||
       (body.type === "publish" && !!body.postId) ||
       (body.type === "ads" && !!body.postId) ||
@@ -41,7 +43,7 @@ export default {
       (body.type === "fetch" && !!body.postId && (body.stage === undefined || body.stage === "download" || body.stage === "upload" || body.stage === "render"));
     if (!valid) return Response.json({ error: "Invalid queue job" }, { status: 400 });
     const { delaySeconds, ...job } = body;
-    const queue = job.type === "campaign-source" ? env.POSTFLOW_FETCH_QUEUE : job.type === "fetch"
+    const queue = job.type === "fetch-pump" ? job.provider === "render" ? env.POSTFLOW_RENDER_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE : job.type === "campaign-source" ? env.POSTFLOW_FETCH_QUEUE : job.type === "fetch"
       ? job.stage === "render" ? env.POSTFLOW_RENDER_QUEUE : job.stage === "upload" ? env.POSTFLOW_UPLOAD_QUEUE : env.POSTFLOW_DOWNLOAD_QUEUE
       : job.type === "ads"
         ? env.POSTFLOW_ADS_QUEUE
@@ -57,10 +59,10 @@ export default {
     for (const message of batch.messages) {
       // Queue name is authoritative; stale/cross-queue deliveries cannot run
       // a source download inside the parallel upload pool.
-      const job = message.body.type === "fetch" ? { ...message.body,
+      const job = message.body.type === "fetch-pump" ? {...message.body,provider:batch.queue === "postflow-render"?"render" as const:"flully" as const} : message.body.type === "fetch" ? { ...message.body,
         stage: batch.queue === "postflow-download" ? "download" as const
           : batch.queue === "postflow-render" ? "render" as const : batch.queue === "postflow-upload" ? "upload" as const : "legacy" as const } : message.body;
-      const endpoint = message.body.type === "publish" ? "publish" : message.body.type;
+      const endpoint = message.body.type === "fetch-pump" ? "fetch" : message.body.type === "publish" ? "publish" : message.body.type;
       const response = await fetch(`${env.POSTFLOW_API_URL.replace(/\/$/, "")}/api/queue/${endpoint}`, {
         method: "POST",
         // POSTFLOW_QUEUE_SECRET is already proven to match Vercel's
@@ -70,6 +72,14 @@ export default {
         body: JSON.stringify(job),
       });
       if (response.ok) {
+        if(job.type === "fetch-pump"){
+          const result=await response.json().catch(()=>null) as {fetchStatus?:string;retryAfterSeconds?:number}|null;
+          if(!result?.fetchStatus)throw new Error("Invalid fetch pump response; keep delivery retryable");
+          if(result && result.fetchStatus !== "skipped"){
+            const queue=job.provider === "render"?env.POSTFLOW_RENDER_QUEUE:env.POSTFLOW_DOWNLOAD_QUEUE;
+            await queue.send(job,{delaySeconds:result.fetchStatus === "waiting" ? Math.max(5,Math.min(300,result.retryAfterSeconds||10)):0});
+          }
+        }
         if (job.type === "fetch") {
           const payload = await response.json().catch(() => null) as { fetchStatus?: string; retryAfterSeconds?: number } | null;
           if (payload?.fetchStatus === "waiting") {

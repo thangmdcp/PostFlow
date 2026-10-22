@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { BatchImportClient } from "@/components/BatchImportClient";
 import { publicFbConnectionSelect } from "@/lib/publicFacebook";
+import { publicFetchState } from "@/lib/publicFetchState";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export default async function NewPostPage({ searchParams }: Props) {
           },
         },
       });
-      if (initialBatch) initialBatch.posts = initialBatch.posts.map(post => ({ ...post, fetchDownloadSnapshot: null }));
+      if (initialBatch) initialBatch.posts = initialBatch.posts.map(post => ({ ...post, ...publicFetchState(post) }));
     }
 
     return <BatchImportClient connections={connections} initialBatch={initialBatch} />;

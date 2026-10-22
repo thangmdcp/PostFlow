@@ -1,4 +1,5 @@
 import { autodownDownload } from "@/lib/autodown";
+import type { DownloadReservation } from "@/lib/flullyDownloadLease";
 import { assertFetchProviderAvailable, recordFetchProviderFailure, recordFetchProviderSuccess } from "@/lib/fetchProviderCircuit";
 import { prisma } from "@/lib/prisma";
 import { classifyRapidApiStatus, parseRetryAfter, sourceDiagnostic, SourceFetchError, type SourceFetchDiagnostic } from "@/lib/sourceFetchError";
@@ -86,8 +87,8 @@ async function throughRapidApiGate<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // One Flully download call; URLs stay temporary until our upload stage.
-async function fetchViaAutoDown(url: string): Promise<RapidApiPostData> {
-  const downloaded = await autodownDownload(url);
+async function fetchViaAutoDown(url: string, reservation?: DownloadReservation): Promise<RapidApiPostData> {
+  const downloaded = await autodownDownload(url,reservation);
   if (!downloaded?.media?.length) throw new SourceFetchError({
     provider: "flully", code: "FLULLY_EMPTY_MEDIA",
     message: "Flully không trả về media.", retryable: true, httpStatus: 502, retryAfterSeconds: 30,
@@ -224,13 +225,13 @@ async function fetchGenericPostWithKey(url: string, apiKey: string): Promise<Rap
   return { title: data.title as string | undefined, caption, media };
 }
 
-export async function fetchPostData(url: string, options: { skipAutoDown?: boolean; renderPostId?: string } = {}): Promise<RapidApiPostData> {
-  if (options.renderPostId) return (await import("@/lib/renderDownload")).renderDownload(url, options.renderPostId);
+export async function fetchPostData(url: string, options: { skipAutoDown?: boolean; renderPostId?: string; downloadReservation?: DownloadReservation } = {}): Promise<RapidApiPostData> {
+  if (options.renderPostId) return (await import("@/lib/renderDownload")).renderDownload(url, options.renderPostId,options.downloadReservation);
   const isFb = isFacebookUrl(url);
   let autodownDiagnostic: SourceFetchDiagnostic | null = null;
   if (!options.skipAutoDown && (isFb || isTikTokUrl(url))) {
     try {
-      return await fetchViaAutoDown(url);
+      return await fetchViaAutoDown(url,options.downloadReservation);
     } catch (error) {
       // Don't hide auth/config errors or overrun the 300s route with another
       // provider after a long Flully timeout. Photos/unsupported sources fall back.

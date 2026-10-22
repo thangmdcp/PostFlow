@@ -3,6 +3,7 @@ import type { FetchStage } from "@/lib/fetchDownloadSnapshot";
 const QUEUE_PATH = "/enqueue";
 
 export type PostflowQueueJob =
+  | { type: "fetch-pump"; provider: "flully" | "render" }
   | { type: "campaign-source"; sourceId: string }
   | { type: "publish"; postId: string; publishToPage?: boolean }
   | { type: "ads"; postId: string }
@@ -48,6 +49,33 @@ export function enqueueAds(postId: string, delaySeconds: number): Promise<boolea
 }
 
 export async function enqueueFetch(postId: string, stage: FetchStage = "download"): Promise<boolean> {
+  if(stage !== "upload" && await (await import("@/lib/downloadPoolConfig")).downloadPoolEnabled()){
+    const {prisma}=await import("@/lib/prisma");
+    const post=await prisma.post.findUnique({where:{id:postId}});
+    if(post && (await import("@/lib/downloadPool")).poolEligible(post))return wakeDownloadPool();
+  }
   if (stage === "download") stage = await (await import("@/lib/fetchDispatch")).assignFetchStage(postId);
   return enqueueQueueJob({ type: "fetch", postId, stage });
+}
+
+/** Recovery calls this once for a whole group, not three messages per Post. */
+export async function enqueueRecoveredFetches(posts: {id:string;sourceUrl:string;fetchDownloadSnapshot:unknown}[]): Promise<number> {
+  const pooled=await (await import("@/lib/downloadPoolConfig")).downloadPoolEnabled();
+  const {fetchStageFor}=await import("@/lib/fetchDownloadSnapshot");
+  if(!pooled)return (await Promise.all(posts.map(post=>enqueueFetch(post.id,fetchStageFor(post.sourceUrl,post.fetchDownloadSnapshot))))).filter(Boolean).length;
+  const {prisma}=await import("@/lib/prisma");
+  const {poolEligible}=await import("@/lib/downloadPool");
+  const rows=await prisma.post.findMany({where:{id:{in:posts.map(post=>post.id)}}});
+  const common=rows.filter(poolEligible);
+  const standalone=rows.filter(post=>!poolEligible(post));
+  const woke=common.length?await wakeDownloadPool():false;
+  const results=await Promise.all(standalone.map(post=>enqueueFetch(post.id,fetchStageFor(post.sourceUrl,post.fetchDownloadSnapshot))));
+  return (woke?common.length:0)+results.filter(Boolean).length;
+}
+
+export async function wakeDownloadPool(): Promise<boolean> {
+  const config=await (await import("@/lib/renderDownload")).renderConfig();
+  const jobs:PostflowQueueJob[]=[{type:"fetch-pump",provider:"flully"},...(config?[{type:"fetch-pump" as const,provider:"render" as const},{type:"fetch-pump" as const,provider:"render" as const}]:[])];
+  const results=await Promise.all(jobs.map(job=>enqueueQueueJob(job)));
+  return results.every(Boolean);
 }

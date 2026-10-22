@@ -9,6 +9,8 @@ export interface FetchDownloadSnapshot {
   data?: RapidApiPostData;
   expiresAt?: string;
   downloadProvider?: "flully" | "render";
+  started?: boolean;
+  pool?: {slot:number;owner:string;until:string};
 }
 
 export function readDownloadSnapshot(value: unknown, sourceUrl: string): FetchDownloadSnapshot | null {

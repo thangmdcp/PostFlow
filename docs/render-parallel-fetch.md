@@ -9,10 +9,25 @@ Server AppConfig: `renderDownloadEnabled` (`true`/`false`), `renderDownloadUrl`
 (HTTPS onrender.com origin), `renderDownloadApiKey` (masked) and
 `renderDownloadPlatforms` (internal rollout allowlist, initially facebook).
 Do not reuse the old Render key or Flully key. Existing Flully snapshots are
-unchanged. New eligible video jobs receive a persisted round-robin assignment;
-private AppConfig leases fence each provider separately. Cloudflare Render
-Queue concurrency is 1, Flully is 1, Cloudinary upload is 2. Duplicate Post
+unchanged. With `_internal_fetch_pool_enabled=true`, idle-source pump messages
+claim the oldest eligible queued Post from a shared database FIFO. The Post CAS
+and numbered provider slot are reserved in one advisory-locked transaction.
+Slot owner tokens fence release; leases expire after seven minutes. A source
+immediately enqueues its next pump after finishing, with cron as recovery only.
+Private AppConfig leases fence legacy single-slot calls during rollout: those
+must finish/expire before new slots open. Cloudflare Render
+Queue concurrency is 2, Flully is 1, Cloudinary upload is 2. Duplicate Post
 deliveries remain fenced by the existing 7-minute CAS lease.
+
+Render API also admits at most two children, checking cgroup available RAM
+(minimum 160 MiB) and temporary disk (minimum 200 MiB) before each start.
+Authenticated `/api/health` reports capacity/resource pauses; public `/healthz`
+stays minimal. PostFlow fails closed on missing/invalid capacity and caches it
+for ten seconds. Render remains one Free instance, one worker, four threads.
+Only never-started source jobs can rebalance; started, uncertain and media
+checkpoint jobs keep their source. Existing scheduled/published rows are not
+changed. Batch UI shows safe global active counts and source/upload phases;
+the authenticated status API never returns tokens or temporary media URLs.
 
 Render downloads and uploads to deterministic `postflow-fetch/video-<postId>`;
 source hash context prevents reusing another source under the same ID. Retry
@@ -30,7 +45,8 @@ they are not silently rerouted or considered successful.
 
 Rollout: deploy/test Render API, create `postflow-render` and
 `postflow-render-dlq`, deploy Worker (keep vars/secrets), then deploy PostFlow,
-configure disabled initially, enable only verified platforms. No migrations.
+verify private health advertises capacity 2, then enable the pool flag. Enable
+only verified platforms. No migrations.
 No old failed-batch retries, publishing, Ads, account upgrades or billing changes.
 Do not fetch flagged source `facebook.com/reel/3662651097215819`.
 

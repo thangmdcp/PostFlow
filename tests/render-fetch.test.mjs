@@ -42,9 +42,9 @@ test('Render checkpoint routes only to Render until upload checkpoint exists',()
  assert.equal(fetchStageFor('different',snapshot),'download');
  assert.equal(fetchStageFor('source',{...snapshot,data:{media:[{type:'video',url:'https://res.cloudinary.com/demo/video/upload/x.mp4'}]},expiresAt:new Date(Date.now()+3600000).toISOString()}),'upload');
 });
-test('Worker binds Render with concurrency one and keeps authoritative stage on delayed busy replacement',async()=>{
+test('Worker binds Render with concurrency two and keeps authoritative stage on delayed busy replacement',async()=>{
  const source=readFileSync(new URL('../cloudflare/postflow-queue/wrangler.jsonc',import.meta.url),'utf8');const config=JSON.parse(source);
- assert.equal(config.queues.consumers.find(c=>c.queue==='postflow-render').max_concurrency,1);
+ assert.equal(config.queues.consumers.find(c=>c.queue==='postflow-render').max_concurrency,2);
  const calls=[];const queue={send:async(...args)=>calls.push(args)};
  const worker=load('cloudflare/postflow-queue/src/index.ts',{}, {fetch:async(_url,options)=>{assert.equal(JSON.parse(options.body).stage,'render');return new Response(JSON.stringify({fetchStatus:'waiting',retryAfterSeconds:10}));}}).default;
  let ack=0; await worker.queue({queue:'postflow-render',messages:[{body:{type:'fetch',postId:'p',stage:'upload'},ack:()=>ack++,retry:()=>assert.fail('must not consume retry')}]},{POSTFLOW_API_URL:'https://test.example',POSTFLOW_RENDER_QUEUE:queue});

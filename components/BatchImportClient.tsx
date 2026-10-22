@@ -47,6 +47,7 @@ import { buildBatchActionAllocation, type BatchActionKind } from "@/lib/batchAct
 import { metaErrorDisplay } from "@/lib/metaErrorDisplay";
 import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { FetchStatusDetail } from "@/components/FetchStatusDetail";
+import { DownloadPoolStatus } from "@/components/DownloadPoolStatus";
 import { CampaignImportComposer, ExistingCampaignBatch } from "@/components/CampaignReuse";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import {
@@ -63,7 +64,7 @@ import {
   type BatchDraft,
 } from "@/lib/batchDraft";
 
-type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
+type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[]; fetchPhase?: string | null; fetchAssignedProvider?: string | null; fetchSlot?: number | null };
 type BatchData = { id: string; sourceKind?: string; posts: PostWithLinks[] };
 
 function needsFacebookCtaRetry(post: PostWithLinks): boolean {
@@ -1814,6 +1815,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           </button>
 
           <span className="hidden text-xs text-slate-400 sm:inline">Tick bài rồi chọn hành động</span>
+          <DownloadPoolStatus running={batch.posts.some(post => ["queued", "fetching"].includes(post.status))} />
         </div>
 
         {/* Sub_id1..5 — dùng cho xuất/nhập Batch Custom Links */}
@@ -2390,13 +2392,11 @@ function PostRow({ post, connections, scheduledTime, onToast, adConfig, checked,
         <div className="space-y-1">
           <StatusBadge status={status} />
           <PlatformPublishStatus post={post} />
-          {status === "fetching" && post.errorMsg && !post.fetchErrorCode && (
-            <span className="block text-[9px] leading-tight text-blue-500">{post.errorMsg}</span>
-          )}
           <FetchStatusDetail status={status} errorMsg={post.errorMsg} fetchAttempt={post.fetchAttempt}
             fetchNextAttemptAt={post.fetchNextAttemptAt} fetchProvider={post.fetchProvider}
             fetchErrorCode={post.fetchErrorCode} fetchHttpStatus={post.fetchHttpStatus}
-            fetchDiagnostics={post.fetchDiagnostics} />
+            fetchDiagnostics={post.fetchDiagnostics} fetchPhase={post.fetchPhase}
+            fetchAssignedProvider={post.fetchAssignedProvider} fetchSlot={post.fetchSlot} />
           {(status === "failed" || status === "partial") && post.errorMsg && !post.fetchErrorCode && (
             <div className="flex items-center gap-1">
               <span className="text-[9px] text-red-500 leading-tight line-clamp-2">{post.errorMsg}</span>
