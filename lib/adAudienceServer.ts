@@ -24,6 +24,7 @@ async function account(accountId:string) {
   return row.accessToken;
 }
 function keyFor(...values:unknown[]){return createHash("sha256").update(JSON.stringify(values)).digest("hex");}
+function searchText(value:string){return value.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLocaleLowerCase("vi").replace(/đ/g,"d");}
 async function read<T>(accountId:string,token:string,path:string,query:Record<string,string>):Promise<T>{
   const url=new URL(`${META_GRAPH_API}/${path}`);Object.entries(query).forEach(([k,v])=>url.searchParams.set(k,v));
   try {return (await metaRequestJson<T>(url.toString(),{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15_000),cache:"no-store"},{adAccountId:accountId.replace(/^act_/,"")})).data;}
@@ -38,6 +39,32 @@ export async function audienceOptionsForAccount(input:{accountId:string;kind:str
   const query=(input.query??"").trim();const cursor=input.cursor??"";
   if(query.length>100 || cursor.length>2048)throw new AdAudienceConfigurationError("Từ khóa hoặc trang tìm kiếm quá dài.");
   if(kind!=="custom" && !query)return {options:[],nextCursor:null};
+  if(kind==="behavior"){
+    if(cursor && !/^\d{1,5}$/.test(cursor))throw new AdAudienceConfigurationError("Trang hành vi không hợp lệ.");
+    const catalog=await cached(keyFor("behavior-catalog",accountId,token),async()=>{
+      // Meta ignores q for behaviors. Read the complete taxonomy in both
+      // languages, then perform deterministic search/pagination ourselves.
+      const language=async(locale:string)=>{
+        const rows:NonNullable<MetaList["data"]>=[];let after="";
+        for(let page=0;page<20;page++){
+          const result=await read<MetaList>(accountId,token,`${accountId}/targetingsearch`,{limit_type:"behaviors",q:"a",limit:"1000",locale,...(after?{after}:{})});
+          rows.push(...(result.data??[]));
+          const next=result.paging?.next?result.paging.cursors?.after:undefined;
+          if(!next)return rows;
+          if(next===after)throw new AdAudienceConfigurationError("Meta trả vòng lặp phân trang hành vi.");
+          after=next;
+        }
+        throw new AdAudienceConfigurationError("Danh mục hành vi vượt giới hạn; không trả danh sách bị cắt.");
+      };
+      const [vi,en]=await Promise.all([language("vi_VN"),language("en_US")]);
+      const names=new Map(en.filter(row=>row.id&&row.name).map(row=>[row.id!,row.name!]));
+      const merged=new Map([...vi,...en].filter(row=>row.id&&row.name&&row.valid!==false).map(row=>[row.id!,row]));
+      for(const row of vi)if(row.id&&row.name&&row.valid!==false)merged.set(row.id,row);
+      return [...merged.values()].map(row=>({id:row.id!,name:row.name!,alias:names.get(row.id!)??""}));
+    });
+    const filtered=catalog.filter(row=>searchText(`${row.name} ${row.alias}`).includes(searchText(query))),offset=Number(cursor||0);
+    return {options:filtered.slice(offset,offset+25).map(row=>({id:row.id,name:row.name})),nextCursor:offset+25<filtered.length?String(offset+25):null};
+  }
   if(kind==="custom") {
     if(cursor && !/^\d{1,5}$/.test(cursor))throw new AdAudienceConfigurationError("Trang tệp đối tượng không hợp lệ.");
     // Meta does not expose name search on this edge. Cache the account's catalog
@@ -54,8 +81,8 @@ export async function audienceOptionsForAccount(input:{accountId:string;kind:str
       }
       throw new AdAudienceConfigurationError("Danh sách tệp vượt giới hạn truy vấn an toàn; không trả danh sách bị cắt.");
     });
-    const term=query.toLocaleLowerCase("vi"),offset=Number(cursor||0);
-    const filtered=all.filter(row=>row.id&&row.name&&row.valid!==false&&(!term||row.name.toLocaleLowerCase("vi").includes(term)));
+    const term=searchText(query),offset=Number(cursor||0);
+    const filtered=all.filter(row=>row.id&&row.name&&row.valid!==false&&(!term||searchText(row.name).includes(term)));
     return {options:filtered.slice(offset,offset+25).map(row=>({id:row.id!,name:row.name!,...(row.subtype?{subtype:row.subtype}:{}),
       ...(row.delivery_status?.code!=null && row.delivery_status.code!==200?{disabled:true,reason:row.delivery_status.description||"Meta chưa cho phép phân phối"}:{})})),nextCursor:offset+25<filtered.length?String(offset+25):null};
   }

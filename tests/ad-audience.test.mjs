@@ -124,6 +124,13 @@ test("custom audience search includes later Meta pages and paginates the filtere
   const more=await f.audienceOptionsForAccount({accountId:"act_1",kind:"custom",cursor:page.nextCursor});assert.equal(more.options.length,6);
   const found=await f.audienceOptionsForAccount({accountId:"act_1",kind:"custom",query:"lookalike"});assert.equal(found.options[0].id,"99");assert.equal(f.calls.length,2);
 });
+test("behavior search filters the full bilingual catalog instead of trusting ignored Meta q",async()=>{
+  const f=serverFixture({graph:url=>({data:url.searchParams.get("locale")==="en_US"?[{id:"1",name:"Mobile users"},{id:"99",name:"Engaged Shoppers"}]:[{id:"1",name:"Người dùng di động"},{id:"99",name:"Người mua hàng đã tương tác"}]})});
+  const en=await f.audienceOptionsForAccount({accountId:"act_1",kind:"behavior",query:"Engaged"});
+  assert.deepEqual(en.options,[{id:"99",name:"Người mua hàng đã tương tác"}]);
+  const vi=await f.audienceOptionsForAccount({accountId:"act_1",kind:"behavior",query:"mua hang da tuong tac"});
+  assert.deepEqual(vi.options,en.options);assert.equal(f.calls.length,2);
+});
 test("snapshot mode stays correct when custom-empty and none produce identical targeting", async()=>{
   const f=serverFixture({targeting:{geo_locations:{countries:["VN"]}},graph:()=>({data:[]})});
   assert.equal((await f.resolvePostAdAudience("t","act_1",{...defaults,mode:"none"},true,18)).mode,"none");
