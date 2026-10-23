@@ -105,6 +105,8 @@ test("legacy absent config and disabled Audience make no lookup; wrong hard min 
   assert.equal(await f.resolvePostAdAudience("t","act_1",undefined,true,18),null);
   assert.equal(await f.resolvePostAdAudience("t","act_1",defaults,false,18),null);
   await assert.rejects(f.resolvePostAdAudience("t","act_1",defaults,true,30),/18 đến 25/);assert.equal(f.calls.length,0);
+  assert.deepEqual(await f.audienceOptionsForAccount({accountId:"act_1",kind:"interest",query:""}),{options:[],nextCursor:null});
+  assert.equal(f.calls.length,0,"empty remote search must not send a q-required error to Meta");
 });
 test("options pagination stays server-side, quota is retryable, permission errors are explicit", async()=>{
   const f=serverFixture({graph:()=>({data:[option("1")],paging:{next:"https://evil.invalid/?access_token=secret",cursors:{after:"page2"}}})});

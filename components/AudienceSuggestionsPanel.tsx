@@ -24,6 +24,7 @@ function AudiencePicker({accountId,kind,value,onChange,label}:{accountId:string;
   };
   useEffect(()=>{const timer=setTimeout(()=>load(query),300);return()=>{clearTimeout(timer);generation.current++;abort.current?.abort();};},[accountId,kind,query]); // eslint-disable-line react-hooks/exhaustive-deps
   return <div className="space-y-1.5"><p className="text-[10px] font-medium text-slate-500">{label}</p>
+    {kind!=="custom" && <p className="text-[10px] text-slate-400">Nhập từ khóa để tìm trên Meta.</p>}
     <CustomSelect ariaLabel={label} value="" placeholder={`Tìm/chọn ${label.toLowerCase()}`} options={options.filter(row=>!value.some(x=>x.id===row.id)).map(row=>({value:row.id,label:`${row.subtype==="LOOKALIKE"?"Lookalike · ":""}${row.name}${row.reason?` · ${row.reason}`:""}`,disabled:row.disabled}))}
       onSearchChange={setQuery} loading={busy} onLoadMore={cursor?()=>load(query,cursor):undefined}
       onChange={id=>{const option=options.find(row=>row.id===id);if(option && !option.disabled && value.length<50)onChange([...value,{id:option.id,name:option.name}]);}} />

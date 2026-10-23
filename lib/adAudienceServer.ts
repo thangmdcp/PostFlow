@@ -37,6 +37,7 @@ export async function audienceOptionsForAccount(input:{accountId:string;kind:str
   if(!["interest","behavior","custom"].includes(kind))throw new AdAudienceConfigurationError("Loại đối tượng không hợp lệ.");
   const query=(input.query??"").trim();const cursor=input.cursor??"";
   if(query.length>100 || cursor.length>2048)throw new AdAudienceConfigurationError("Từ khóa hoặc trang tìm kiếm quá dài.");
+  if(kind!=="custom" && !query)return {options:[],nextCursor:null};
   if(kind==="custom") {
     if(cursor && !/^\d{1,5}$/.test(cursor))throw new AdAudienceConfigurationError("Trang tệp đối tượng không hợp lệ.");
     // Meta does not expose name search on this edge. Cache the account's catalog
