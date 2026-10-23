@@ -110,9 +110,9 @@ test("legacy absent config and disabled Audience make no lookup; wrong hard min 
 });
 test("options pagination stays server-side, quota is retryable, permission errors are explicit", async()=>{
   const f=serverFixture({graph:()=>({data:[option("1")],paging:{next:"https://evil.invalid/?access_token=secret",cursors:{after:"page2"}}})});
-  const result=await f.audienceOptionsForAccount({accountId:"act_1",kind:"interest",cursor:"page1"});
+  const result=await f.audienceOptionsForAccount({accountId:"act_1",kind:"interest",query:"shopping",cursor:"page1"});
   assert.deepEqual(result,{options:[option("1")],nextCursor:"page2"});assert.equal(f.calls[0].searchParams.get("after"),"page1");
-  await f.audienceOptionsForAccount({accountId:"act_1",kind:"interest",cursor:"page1"});assert.equal(f.calls.length,1);
+  await f.audienceOptionsForAccount({accountId:"act_1",kind:"interest",query:"shopping",cursor:"page1"});assert.equal(f.calls.length,1);
   for(const category of ["rate_limit","transient","permission","token"]){
     const error=new MetaApiError(category);const broken=serverFixture({graph:()=>{throw error;}});
     await assert.rejects(broken.audienceOptionsForAccount({accountId:"act_1",kind:"interest",query:"mua sắm"}),cause=>["rate_limit","transient"].includes(category)?cause===error:cause instanceof audience.AdAudienceConfigurationError);
