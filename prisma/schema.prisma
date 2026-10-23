@@ -122,6 +122,7 @@ model Post {
   adPlacementConfig Json?
   adInstagramIdentity Json?
   adAdvantageConfig Json?
+  adAudienceSnapshot Json?
   adCtaType      String?
   adCtaScope     String?
   fbCtaStatus    String?

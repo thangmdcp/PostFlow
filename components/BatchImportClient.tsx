@@ -35,6 +35,7 @@ import { PublishTargetsSelector } from "@/components/PublishTargetsSelector";
 import type { PublishTarget } from "@/lib/publishTargets";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 import { DEFAULT_BATCH_ADVANTAGE, parseBatchAdvantageConfig, parseStoredBatchAdvantage } from "@/lib/adAdvantage";
+import { DEFAULT_AUDIENCE_SUGGESTIONS, storedAudienceSuggestions } from "@/lib/adAudience";
 import { BatchActionDialog, type BatchActionConfig, type BatchEngagementConfig } from "@/components/BatchActionDialog";
 import { SubIdPresetPicker } from "@/components/SubIdPresetPicker";
 import {
@@ -215,12 +216,13 @@ const DEFAULT_ADS_CONFIG: BatchAdConfig = {
   ctaType: "LEARN_MORE",
   ctaScope: "AD_ONLY",
   advantage: { ...DEFAULT_BATCH_ADVANTAGE },
+  audienceSuggestions: DEFAULT_AUDIENCE_SUGGESTIONS,
 };
 
 function loadSavedAdsConfig(): BatchAdConfig {
   try {
     const saved = JSON.parse(localStorage.getItem(ADS_CONFIG_KEY) ?? "{}");
-    return { ...DEFAULT_ADS_CONFIG, ...saved, advantage: parseBatchAdvantageConfig(saved.advantage) };
+    return { ...DEFAULT_ADS_CONFIG, ...saved, advantage: parseBatchAdvantageConfig(saved.advantage), audienceSuggestions: storedAudienceSuggestions(saved.audienceSuggestions) };
   } catch { return DEFAULT_ADS_CONFIG; }
 }
 
@@ -395,6 +397,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
           batchCtaType: adConfig.ctaType,
           batchCtaScope: adConfig.ctaScope,
           batchAdvantageConfig: JSON.stringify(adConfig.advantage),
+          batchAudienceSuggestions: JSON.stringify(adConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS),
           batchDefaultPageIds: JSON.stringify(defaultPageIds),
           batchScheduleMode: defaultScheduleMode, batchStepMinutes: defaultStepMinutes,
           batchPostsPerDay: defaultPostsPerDay, batchBaseTime: defaultBaseTime, batchEndTime: defaultEndTime,
@@ -440,6 +443,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
         ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? saved.ctaType ?? "LEARN_MORE",
         ctaScope: (cfg.batchCtaScope as BatchAdConfig["ctaScope"]) ?? saved.ctaScope ?? "AD_ONLY",
         advantage: parseStoredBatchAdvantage(cfg.batchAdvantageConfig, saved.advantage),
+        audienceSuggestions: storedAudienceSuggestions(cfg.batchAudienceSuggestions ?? saved.audienceSuggestions),
       });
       if (cfg.batchDefaultPageIds) { try { setDefaultPageIds(JSON.parse(cfg.batchDefaultPageIds)); } catch { /* ignore */ } }
       if (cfg.batchScheduleMode) setDefaultScheduleMode(cfg.batchScheduleMode as ScheduleMode);
@@ -516,6 +520,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
       ...(patch.ctaScope !== undefined ? { batchCtaScope: patch.ctaScope } : {}),
       ...(patch.advantage !== undefined ? { batchAdvantageConfig: JSON.stringify(patch.advantage) } : {}),
+      ...(patch.audienceSuggestions !== undefined ? { batchAudienceSuggestions: JSON.stringify(patch.audienceSuggestions) } : {}),
     });
   }
 
@@ -565,6 +570,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       batchCtaType: adConfig.ctaType,
       batchCtaScope: adConfig.ctaScope,
       batchAdvantageConfig: adConfig.advantage,
+      batchAudienceSuggestions: adConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
       commentEnabled: defaultCommentEnabled, commentUseCaption: defaultCommentUseCaption,
       commentCaptionAttachImage: defaultCommentCaptionAttachImage, commentCaptionImageUrls: defaultCommentCaptionImageUrls,
       commentCustomEntries: defaultCommentCustomEntries,
@@ -610,6 +616,7 @@ export function BatchImportClient({ connections, initialBatch }: Props) {
       ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
       ...(d.batchCtaScope ? { ctaScope: d.batchCtaScope } : {}),
       ...(d.batchAdvantageConfig ? { advantage: parseBatchAdvantageConfig(d.batchAdvantageConfig) } : {}),
+      audienceSuggestions: storedAudienceSuggestions(d.batchAudienceSuggestions),
     });
   }
 
@@ -1492,6 +1499,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
           ...(runAdsForRow ? { adCtaScope: adConfig.ctaScope } : {}),
           ...(runAdsForRow ? {
             adAdvantage: adConfig.advantage,
+            adAudienceSuggestions: adConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
             adPlacements: adConfig.advantage.placementsEnabled ? undefined : adConfig.placements,
             ageMinFrom: String(rp.ageMin), ageMinTo: String(rp.ageMin),
             ageMaxFrom: String(rp.ageMax), ageMaxTo: String(rp.ageMax),
@@ -1610,6 +1618,7 @@ function BatchView({ batch, connections, adConfig, templates, adAccounts, accoun
         ...(runsAds ? {
           adPlacements: config.adConfig.advantage.placementsEnabled ? undefined : config.adConfig.placements,
           adAdvantage: config.adConfig.advantage,
+          adAudienceSuggestions: config.adConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
         } : {}),
         ...(runsAds && accountId ? { adAccountId: accountId } : {}),
         ...(runsAds ? { adCtaType: config.adConfig.ctaType } : {}),

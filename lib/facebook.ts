@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { META_GRAPH_API as FB_API, META_GRAPH_VIDEO_API as FB_VIDEO_API } from "@/lib/meta";
+import { applyAudienceSnapshot, type AdAudienceSnapshot } from "@/lib/adAudience";
 import { applyAdvantageAudience, applyAdvantagePlacements, type AdAdvantageConfig } from "@/lib/adAdvantage";
 import {
   buildFacebookExistingPostCreative,
@@ -519,7 +520,8 @@ export async function cloneAdCampaign(
   placementOverride?: AdPlacementConfig,
   advantageOverride?: AdAdvantageConfig,
   existing: AdCreationState = {},
-  onProgress?: (progress: AdCreationProgress) => Promise<void>
+  onProgress?: (progress: AdCreationProgress) => Promise<void>,
+  audienceSnapshot?: AdAudienceSnapshot | null,
 ): Promise<{ campaignId: string; adSetId: string; creativeId: string; adId: string }> {
   const preserveOriginal = source.platform === "facebook" && source.preserveOriginal === true;
   const creationStatus = preserveOriginal ? "PAUSED" : adStatus;
@@ -584,6 +586,10 @@ export async function cloneAdCampaign(
   targeting = advantageOverride
     ? applyAdvantageAudience(targeting, advantageOverride.audienceEnabled)
     : { ...targeting, targeting_automation: template.targetingAutomation };
+  if(audienceSnapshot){
+    if(!advantageOverride?.audienceEnabled)throw new AdTemplateConfigurationError("Snapshot gợi ý yêu cầu Advantage+ Audience bật.");
+    targeting=applyAudienceSnapshot(targeting,audienceSnapshot,adAccountId);
+  }
 
   // Detect if template uses CBO (campaign-level budget)
   const useCBO = advantageOverride?.campaignBudgetEnabled ?? template.useCampaignBudget;

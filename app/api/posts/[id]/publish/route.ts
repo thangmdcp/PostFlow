@@ -8,6 +8,12 @@ import { resolveAdBudgetSnapshot, type AdBudgetInput } from "@/lib/adBudgetReque
 import { BudgetPolicyError } from "@/lib/adBudgetPolicy";
 import { validateAdCta, validateAdCtaScope, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
+import { Prisma } from "@prisma/client";
+import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
+import { AdTemplateConfigurationError } from "@/lib/facebook";
+import { resolvePostAdAudience } from "@/lib/adAudienceServer";
+import { AdAudienceConfigurationError } from "@/lib/adAudience";
+import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 
 export const maxDuration = 90;
 
@@ -28,6 +34,8 @@ interface PublishBody {
   comments?: { text: string; imageUrl?: string }[];
   storyEnabled?: boolean;
   storyCount?: number;
+  adAdvantage?: BatchAdvantageConfig;
+  adAudienceSuggestions?: unknown;
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -70,6 +78,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       publishedToPage: body.publishToPage === true || templatePostType !== "dark",
     });
     if (body.templateId && ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
+    const advantageSnapshot = body.adAdvantage === undefined ? null : await resolvePostAdAdvantage(body.templateId, body.adAccountId, body.adAdvantage);
+    const audienceSnapshot = await resolvePostAdAudience(body.templateId, body.adAccountId, body.adAudienceSuggestions, advantageSnapshot?.audienceEnabled===true, body.ageMinFrom!==undefined?Number(body.ageMinFrom):undefined);
 
     const queued = await prisma.post.update({ where: { id: post.id }, data: {
       pageId: body.pageId,
@@ -97,10 +107,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       fbPublishStatus: targets.includes("facebook") ? "pending" : null,
       igPublishStatus: targets.includes("instagram") ? "pending" : null,
       adTemplateId: body.templateId ?? null,
+      adAdvantageConfig: advantageSnapshot ? advantageSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+      adAudienceSnapshot: audienceSnapshot ? audienceSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
       adAccountUsed: body.adAccountId ?? null,
       adAgeMin: body.ageMinFrom ? Number(body.ageMinFrom) : null,
-      adAgeMax: body.ageMaxFrom ? Number(body.ageMaxFrom) : null,
-      adGender: body.gender ?? null,
+      adAgeMax: advantageSnapshot?.audienceEnabled ? null : body.ageMaxFrom ? Number(body.ageMaxFrom) : null,
+      adGender: advantageSnapshot?.audienceEnabled ? null : body.gender ?? null,
       adBudget: budgetSnapshot?.amountMajor ?? null,
       adBudgetMinor: budgetSnapshot?.amountMinor ?? null,
       adBudgetCurrency: budgetSnapshot?.currency ?? null,
@@ -116,7 +128,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Không thể đăng bài", ...(error instanceof BudgetPolicyError ? { code: error.code } : {}) },
-      { status: error instanceof BudgetPolicyError ? error.status : 500 },
+      { status: error instanceof BudgetPolicyError ? error.status : error instanceof AdAudienceConfigurationError || error instanceof AdTemplateConfigurationError ? 400 : 500 },
     );
   }
 }

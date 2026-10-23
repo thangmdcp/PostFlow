@@ -20,6 +20,7 @@ import { MetaApiError } from "@/lib/metaApiClient";
 import { BudgetPolicyError, getVerifiedAdAccountPolicy, validateMinorBudgetForAccount } from "@/lib/adBudgetPolicy";
 import { parseAdCtaType, resolveAdCtaScope, validateAdCta, type AdCtaScope, type AdCtaType } from "@/lib/adCta";
 import { parseAdAdvantageConfig, type AdAdvantageConfig } from "@/lib/adAdvantage";
+import { AdAudienceConfigurationError, parseAudienceSnapshot } from "@/lib/adAudience";
 import { isFacebookOriginalCtaVerified, shouldProbeFacebookCtaReadiness } from "@/lib/facebookOriginalCta";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 import { recheckAdPermissionForRetry } from "@/lib/adPermissionRecovery";
@@ -408,7 +409,7 @@ export async function attemptAutoAds(postId: string): Promise<{ retry: boolean; 
     // A template without an Ad Set cannot become valid by waiting. Retrying
     // that error was both misleading in the UI and could leave users with
     // repeated empty campaign drafts in Ads Manager.
-    const isConfigurationError = err instanceof AdTemplateConfigurationError || err instanceof BudgetPolicyError || (err instanceof MetaApiError && err.subcode === 3858293) || /targeting_optimization|1870189|1870197|1870227|3858504|3858293|advantage_audience|placement_soft_opt_out|degrees_of_freedom_spec|creative_features_spec|standard_enhancements|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
+    const isConfigurationError = err instanceof AdTemplateConfigurationError || err instanceof AdAudienceConfigurationError || err instanceof BudgetPolicyError || (err instanceof MetaApiError && err.subcode === 3858293) || /targeting_optimization|1870189|1870197|1870227|3858504|3858293|advantage_audience|age_range|genders|flexible_spec|custom_audiences|placement_soft_opt_out|degrees_of_freedom_spec|creative_features_spec|standard_enhancements|Cần có cờ đối tượng Advantage|trường .* đã bị gỡ|field .* removed|publisher_platforms|device_platforms|facebook_positions|instagram_positions|messenger_positions|audience_network_positions|threads_positions|invalid placement/i.test(msg);
     const isPermanentInstagramError = params.adPlatform === "instagram" && /not eligible|cannot be advertised|can't be advertised|not authorized|permission|does not have access|invalid.*(?:media|post)|unsupported|copyright|music|access token.*(?:expired|invalid)|OAuthException[^\n]*190/i.test(msg);
     const rateLimited = (err instanceof MetaApiError && err.category === "rate_limit") || isMetaRateLimited(msg);
     const permanentMetaError = err instanceof MetaApiError && ["permission", "token", "configuration", "media"].includes(err.category);
@@ -545,6 +546,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
     where: { id: p.postId },
     include: { extractedLinks: { orderBy: { order: "asc" } } },
   });
+  const audienceSnapshot = parseAudienceSnapshot(postFull?.adAudienceSnapshot);
+  if (audienceSnapshot && postFull?.adAgeMin == null) throw new AdAudienceConfigurationError("Snapshot thiếu tuổi tối thiểu bắt buộc; không được random lại khi retry.");
   if (postFull?.sourceKind === EXISTING_FACEBOOK_SOURCE) assertSourceStory(postFull.adSourceSnapshot, p.pageId, p.fbPostId ?? null);
   // Post.campaignName is persisted at link-save time (either an explicit
   // Sub_id-derived name from the file-import flow, or auto-detected from a
@@ -580,9 +583,9 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
   const ageMinTo   = Number(p.ageMinTo   ?? cfg[`${pfx}AgeMinTo`]   ?? cfg.autoAdsAgeMinTo   ?? 25);
   const ageMaxFrom = Number(p.ageMaxFrom ?? cfg[`${pfx}AgeMaxFrom`] ?? cfg.autoAdsAgeMaxFrom ?? 45);
   const ageMaxTo   = Number(p.ageMaxTo   ?? cfg[`${pfx}AgeMaxTo`]   ?? cfg.autoAdsAgeMaxTo   ?? 65);
-  const ageMin = randomInteger(ageMinFrom, ageMinTo);
-  const ageMax = randomInteger(Math.max(ageMinTo, ageMaxFrom), ageMaxTo);
-  const effGender = p.gender ?? cfg[`${pfx}Gender`] ?? cfg.autoAdsGender ?? "";
+  const ageMin = audienceSnapshot ? postFull!.adAgeMin! : randomInteger(ageMinFrom, ageMinTo);
+  const ageMax = p.adAdvantage?.audienceEnabled ? undefined : randomInteger(Math.max(ageMinTo, ageMaxFrom), ageMaxTo);
+  const effGender = p.adAdvantage?.audienceEnabled ? undefined : p.gender ?? cfg[`${pfx}Gender`] ?? cfg.autoAdsGender ?? "";
 
   const finalTemplateId = p.templateId ?? pickedTemplateId;
   if (!finalTemplateId) throw new Error("Không xác định được template quảng cáo");
@@ -615,8 +618,8 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
       adBudgetMinor: dailyBudgetMinor,
       adBudgetCurrency: budgetCurrency,
       adAgeMin: ageMin,
-      adAgeMax: ageMax,
-      adGender: effGender,
+      adAgeMax: ageMax ?? null,
+      adGender: effGender ?? null,
       adPlatform: p.adPlatform,
       adCtaType: p.ctaType,
       adCtaScope: p.ctaScope ?? "AD_ONLY",
@@ -669,12 +672,13 @@ async function createAdCampaignForPost(p: AutoAdsRunParams): Promise<{ campaignI
           ...(progress.instagramIdentity ? { adInstagramIdentity: progress.instagramIdentity } : {}),
         },
       });
-    }
+    },
+    audienceSnapshot,
   );
 
   await prisma.$executeRawUnsafe(
     `UPDATE "Post" SET "adBudget" = $1, "adBudgetMinor" = $2, "adBudgetCurrency" = $3, "adAgeMin" = $4, "adAgeMax" = $5, "adGender" = $6 WHERE "id" = $7`,
-    dailyBudget, dailyBudgetMinor, budgetCurrency, ageMin, ageMax, effGender, p.postId
+    dailyBudget, dailyBudgetMinor, budgetCurrency, ageMin, ageMax ?? null, effGender ?? null, p.postId
   );
 
   if (pickedRowId) {

@@ -9,6 +9,8 @@ import type { BatchActionKind } from "@/lib/batchAction";
 import { validateAdSelection } from "@/lib/adSelection";
 import { resolveAdBudgetSnapshot } from "@/lib/adBudgetRequest";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
+import { resolvePostAdAudience } from "@/lib/adAudienceServer";
+import { validateAudienceMinimum } from "@/lib/adAudience";
 import { parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
 import { preflightPostAdPermission } from "@/lib/adPermissionPreflight";
 import { randomMajorStep, majorToMinor } from "@/lib/adMoney";
@@ -35,7 +37,7 @@ export async function configureExistingAds(input: { requestKey: string; postIds:
   const times = existingAdsTimes({ ...config, ids: input.postIds, kind: input.kind });
   const allocation = allocateByPercentage(config.accountRows.map(r => ({ id: r.accountId, weight: r.weight })), posts.length);
   const checkedPairs = new Set<string>();
-  const contexts = new Map<string, { budget: NonNullable<Awaited<ReturnType<typeof resolveAdBudgetSnapshot>>>; advantage: Awaited<ReturnType<typeof resolvePostAdAdvantage>>; placements: ReturnType<typeof parseAdPlacementConfig> }>();
+  const contexts = new Map<string, { budget: NonNullable<Awaited<ReturnType<typeof resolveAdBudgetSnapshot>>>; advantage: Awaited<ReturnType<typeof resolvePostAdAdvantage>>; audience: Awaited<ReturnType<typeof resolvePostAdAudience>>; placements: ReturnType<typeof parseAdPlacementConfig> }>();
   const pages = new Map<string, { instagramUserId: string | null }>();
   const plans: Array<{ post: (typeof posts)[number]; data: Prisma.PostUpdateManyMutationInput }> = [];
   for (let i = 0; i < input.postIds.length; i++) {
@@ -54,7 +56,12 @@ export async function configureExistingAds(input: { requestKey: string; postIds:
       // Validate the entire requested range, not merely the randomly selected sample.
       for (const bound of [row.budgetMin, row.budgetMax]) validateMinorBudgetForAccount({ account: budget.account, currency: row.budgetCurrency, amountMinor: majorToMinor(bound, row.budgetCurrency) });
       const advantage = await resolvePostAdAdvantage(row.templateId, row.accountId, { ...ad.advantage, creativeEnabled: false });
-      context = { budget, advantage, placements: advantage?.placementsEnabled ? null : parseAdPlacementConfig(ad.placements) };
+      if (ad.audienceSuggestions !== undefined && advantage?.audienceEnabled) {
+        validateAudienceMinimum(numbers[0]);
+        validateAudienceMinimum(numbers[1]);
+      }
+      const audience = await resolvePostAdAudience(row.templateId, row.accountId, ad.audienceSuggestions, !!advantage?.audienceEnabled, numbers[0]);
+      context = { budget, advantage, audience, placements: advantage?.placementsEnabled ? null : parseAdPlacementConfig(ad.placements) };
       contexts.set(row.accountId, context);
     }
     const { advantage, placements } = context;
@@ -77,6 +84,7 @@ export async function configureExistingAds(input: { requestKey: string; postIds:
       adBudget: budget.amountMajor, adBudgetMinor: budget.amountMinor, adBudgetCurrency: budget.currency,
       adAgeMin: ageMin, adAgeMax: advantage?.audienceEnabled ? null : randomInteger(Math.max(numbers[1], numbers[2]), numbers[3]), adGender: advantage?.audienceEnabled ? null : ad.gender,
       adAdvantageConfig: advantage as unknown as Prisma.InputJsonValue, adPlacementConfig: placements ? placements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+      adAudienceSnapshot: context.audience ? context.audience as unknown as Prisma.InputJsonValue : Prisma.DbNull,
       adPublishStatus: ad.adStatus, scheduledAt: times[i].createAt, adNextAttemptAt: times[i].createAt, adStartAt: times[i].startAt,
       adStatus: "scheduled", adAttempt: 0, adPlatform: "facebook", adCtaType: "NO_BUTTON", adCtaScope: "AD_ONLY", fbCtaStatus: null,
       commentStatus: null, storyEnabled: false, storyStatus: null, errorMsg: null,
@@ -112,6 +120,6 @@ export async function recoverExistingPostAds() {
 
 export async function cancelExistingAds(postIds: unknown) {
   if (!Array.isArray(postIds) || !postIds.length || postIds.length > 200 || postIds.some(id => typeof id !== "string")) throw new Error("Danh sách bài không hợp lệ.");
-  const cancelled = await prisma.post.updateMany({ where: { id: { in: postIds }, sourceKind: EXISTING_FACEBOOK_SOURCE, adStatus: { in: ["scheduled", "pending", "queued"] }, adCampaignId: null, adSetId: null, adCreativeId: null, adId: null }, data: { adStatus: null, adNextAttemptAt: null, adStartAt: null, scheduledAt: null, adTemplateId: null, adAccountUsed: null, adBudget: null, adBudgetMinor: null, adBudgetCurrency: null, adAttempt: 0, errorMsg: null } });
+  const cancelled = await prisma.post.updateMany({ where: { id: { in: postIds }, sourceKind: EXISTING_FACEBOOK_SOURCE, adStatus: { in: ["scheduled", "pending", "queued"] }, adCampaignId: null, adSetId: null, adCreativeId: null, adId: null }, data: { adStatus: null, adNextAttemptAt: null, adStartAt: null, scheduledAt: null, adTemplateId: null, adAccountUsed: null, adBudget: null, adBudgetMinor: null, adBudgetCurrency: null, adAudienceSnapshot: Prisma.DbNull, adAdvantageConfig: Prisma.DbNull, adPlacementConfig: Prisma.DbNull, adAgeMin: null, adAgeMax: null, adGender: null, adAttempt: 0, errorMsg: null } });
   return cancelled.count;
 }

@@ -13,13 +13,15 @@ import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
 import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
+import { resolvePostAdAudience } from "@/lib/adAudienceServer";
+import { AdAudienceConfigurationError } from "@/lib/adAudience";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { pageId, scheduledAt, templateId, publishToPage, ctaHeadline, adCtaType, adCtaScope, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements, adAdvantage } = (await req.json()) as {
+    const { pageId, scheduledAt, templateId, publishToPage, ctaHeadline, adCtaType, adCtaScope, adStatus, adStartAt, adAccountId, adAgeMin, adAgeMax, adGender, budget, comments, storyEnabled, storyCount, publishTargets, adPlacements, adAdvantage, adAudienceSuggestions } = (await req.json()) as {
       pageId: string;
       scheduledAt: string;
       templateId?: string;
@@ -39,6 +41,7 @@ export async function PATCH(
       publishTargets?: PublishTarget[];
       adPlacements?: AdPlacementConfig;
       adAdvantage?: BatchAdvantageConfig;
+      adAudienceSuggestions?: unknown;
     };
 
     const post = await prisma.post.findUnique({ where: { id: params.id }, include: { extractedLinks: true } });
@@ -82,6 +85,7 @@ export async function PATCH(
     const ctaScope = validateAdCtaScope({ scope: adCtaScope, ctaType: cta.ctaType, publishToFacebook: targets.includes("facebook"), publishedToPage: publishToPage === true || templatePostType !== "dark" });
     if (templateId && ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
     const advantageSnapshot = await resolvePostAdAdvantage(templateId, adAccountId, adAdvantage);
+    const audienceSnapshot = await resolvePostAdAudience(templateId, adAccountId, adAudienceSuggestions, advantageSnapshot?.audienceEnabled===true, adAgeMin);
     const parsedPlacements = templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(adPlacements) : null;
     if (templateId && !advantageSnapshot?.placementsEnabled) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -124,6 +128,7 @@ export async function PATCH(
         adTemplateId: templateId ?? null,
         adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         adAdvantageConfig: advantageSnapshot ? advantageSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+        adAudienceSnapshot: audienceSnapshot ? audienceSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(ctaHeadline ? { ctaHeadline } : {}),
         ...(adStatus ? { adPublishStatus: adStatus } : {}),
         // A normal re-schedule intentionally clears preparation mode.
@@ -166,7 +171,7 @@ export async function PATCH(
     console.error("PATCH /api/posts/[id]/schedule error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal server error", ...(err instanceof BudgetPolicyError ? { code: err.code } : {}) },
-      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError ? 400 : 500 },
+      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError || err instanceof AdAudienceConfigurationError ? 400 : 500 },
     );
   }
 }

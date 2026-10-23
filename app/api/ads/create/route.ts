@@ -9,11 +9,13 @@ import { validateAdCta, validateAdCtaScope, type AdCtaScope, type AdCtaType } fr
 import { parseAdAdvantageConfig, resolveAdAdvantageConfig, type BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { Prisma } from "@prisma/client";
 import { enqueueAds } from "@/lib/cloudflareQueue";
+import { resolvePostAdAudience } from "@/lib/adAudienceServer";
+import { AdAudienceConfigurationError, parseAudienceSnapshot } from "@/lib/adAudience";
 
 export async function POST(req: Request) {
 
   try {
-    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType, adCtaScope, adAdvantage, adPlacements } = (await req.json()) as {
+    const { postId, templateCampaignId, adAccountId, budget, ageMin, ageMax, gender, adStatus, adCtaType, adCtaScope, adAdvantage, adPlacements, adAudienceSuggestions } = (await req.json()) as {
       postId: string;
       templateCampaignId: string;
       adAccountId?: string;
@@ -26,6 +28,7 @@ export async function POST(req: Request) {
       adCtaScope?: AdCtaScope;
       adAdvantage?: BatchAdvantageConfig;
       adPlacements?: AdPlacementConfig;
+      adAudienceSuggestions?: unknown;
     };
 
     const post = await prisma.post.findUnique({
@@ -89,6 +92,9 @@ export async function POST(req: Request) {
     const portableTemplate = portableTemplateBlueprint(blueprint, crossAccount);
     const advantageSnapshot = parseAdAdvantageConfig(post.adAdvantageConfig)
       ?? resolveAdAdvantageConfig(adAdvantage, portableTemplate.blueprint.useCampaignBudget);
+    const audienceSnapshot = post.adCampaignId || post.adSetId || post.adCreativeId || post.adId
+      ? parseAudienceSnapshot(post.adAudienceSnapshot)
+      : await resolvePostAdAudience(templateCampaignId, resolvedAdAccountId, adAudienceSuggestions, advantageSnapshot.audienceEnabled, ageMin);
     const placementSnapshot = advantageSnapshot.placementsEnabled
       ? null
       : parseAdPlacementConfig(adPlacements) ?? parseAdPlacementConfig(post.adPlacementConfig);
@@ -123,6 +129,13 @@ export async function POST(req: Request) {
       campaignName = decodeURIComponent(parsed.searchParams.get("utm_content") ?? "").trim().replace(/[-_]+$/, "");
     } catch { /* ignore */ }
 
+    if(!post.adCampaignId && !post.adSetId && !post.adCreativeId && !post.adId)await prisma.post.update({where:{id:postId},data:{
+      adAudienceSnapshot:audienceSnapshot?audienceSnapshot as unknown as Prisma.InputJsonValue:Prisma.DbNull,
+      adAdvantageConfig:advantageSnapshot as unknown as Prisma.InputJsonValue,
+      adTemplateId:templateCampaignId,adAccountUsed:resolvedAdAccountId,adAgeMin:ageMin??null,
+      adAgeMax:advantageSnapshot.audienceEnabled?null:ageMax??null,adGender:advantageSnapshot.audienceEnabled?null:gender??null,
+      adBudgetMinor:verifiedBudget.amountMinor,adBudgetCurrency:verifiedBudget.currency,
+    }});
     const result = await cloneAdCampaign(
       portableTemplate.blueprint,
       post.pageId,
@@ -159,7 +172,8 @@ export async function POST(req: Request) {
             ...(progress.adId ? { adId: progress.adId } : {}),
           },
         });
-      }
+      },
+      audienceSnapshot,
     );
 
     // Save campaign ID + ad params back to post so dashboard can show them
@@ -175,8 +189,8 @@ export async function POST(req: Request) {
       verifiedBudget.amountMinor,
       verifiedBudget.currency,
       ageMin ?? null,
-      ageMax ?? null,
-      gender ?? "",
+      advantageSnapshot.audienceEnabled ? null : ageMax ?? null,
+      advantageSnapshot.audienceEnabled ? null : gender ?? "",
       resolvedAdAccountId,
       cta.ctaType,
       postId,
@@ -208,7 +222,7 @@ export async function POST(req: Request) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
       { error: msg, ...(err instanceof BudgetPolicyError ? { code: err.code } : {}) },
-      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError ? 400 : 500 },
+      { status: err instanceof BudgetPolicyError ? err.status : err instanceof AdTemplateConfigurationError || err instanceof AdAudienceConfigurationError ? 400 : 500 },
     );
   }
 }

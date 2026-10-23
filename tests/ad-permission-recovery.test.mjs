@@ -5,6 +5,7 @@ import ts from "typescript";
 import { recheckAdPermissionForRetry } from "../lib/adPermissionRecovery.ts";
 import { metaErrorDisplay } from "../lib/metaErrorDisplay.ts";
 import { EXISTING_FACEBOOK_SOURCE, assertSourceStory } from "../lib/campaignSource.ts";
+import { AdAudienceConfigurationError } from "../lib/adAudience.ts";
 
 const source = await readFile(new URL("../lib/autoAdsRunner.ts", import.meta.url), "utf8");
 const start = source.indexOf("export async function attemptAutoAds(");
@@ -30,7 +31,7 @@ function fixture({ platform = "facebook", fail = new MetaApiError("permission"),
     update: async ({ data }) => { updates.push(data); Object.assign(row, data); },
     updateMany: async ({ data }) => { Object.assign(row, data); return { count: 1 }; },
   }, fbConnection: { findUnique: async () => ({ accessToken: "fake-page-token", instagramUserId: "ig" }) } };
-  const dependencies = { prisma, MetaApiError, AdTemplateConfigurationError, BudgetPolicyError, AdSourceNotReadyError,
+  const dependencies = { prisma, MetaApiError, AdTemplateConfigurationError, AdAudienceConfigurationError, BudgetPolicyError, AdSourceNotReadyError,
     EXISTING_FACEBOOK_SOURCE, assertSourceStory,
     recheckAdPermissionForRetry,
     preflightPostAdPermission: async (post, fresh) => { probes.push({ post, fresh }); if (probeError) throw probeError; },

@@ -12,6 +12,8 @@ import type { AdPlacementConfig } from "@/lib/adPlacements";
 import type { AdCtaScope, AdCtaType } from "@/lib/adCta";
 import { facebookPostCtaEligibility } from "@/lib/adCta";
 import { DEFAULT_BATCH_ADVANTAGE, type BatchAdvantageConfig, type CampaignBudgetMode } from "@/lib/adAdvantage";
+import { DEFAULT_AUDIENCE_SUGGESTIONS, type BatchAudienceSuggestions } from "@/lib/adAudience";
+import { AudienceSuggestionsPanel } from "@/components/AudienceSuggestionsPanel";
 
 export interface CampaignTemplate { id: string; templateName: string; campaignId: string; adAccountId?: string; settings?: Record<string, unknown>; }
 
@@ -32,6 +34,7 @@ export interface BatchAdConfig {
   ctaScope: AdCtaScope;
   placements?: AdPlacementConfig;
   advantage: BatchAdvantageConfig;
+  audienceSuggestions?: BatchAudienceSuggestions;
 }
 
 export interface RowAdParams { ageMin: number; ageMax: number; budget: number; gender: string; ctaHeadline: string; }
@@ -108,6 +111,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
   const resetAdvantage = () => onPatch({
     advantage: { ...DEFAULT_BATCH_ADVANTAGE },
     placements: undefined,
+    audienceSuggestions: { ...DEFAULT_AUDIENCE_SUGGESTIONS },
   });
   return (
     <div className={`${adsPanel} p-4 space-y-3`}>
@@ -227,6 +231,7 @@ export function AdsConfigPanel({ adConfig, templates, adAccounts, accountRows, o
           </div>
 
           <AdvantageToggle title="Advantage+ Audience" description="Cho Meta mở rộng ngoài gợi ý đối tượng." checked={adConfig.advantage.audienceEnabled} onChange={(audienceEnabled) => patchAdvantage({ audienceEnabled })} />
+          <AudienceSuggestionsPanel value={adConfig.audienceSuggestions} onChange={audienceSuggestions=>onPatch({audienceSuggestions})} enabled={adConfig.advantage.audienceEnabled} accounts={adAccounts} templates={templates} rows={accountRows} templateId={adConfig.templateId}/>
           <AdvantageToggle title="Advantage+ Placements" description="Meta tự chọn mọi nền tảng, thiết bị và vị trí hợp lệ." checked={adConfig.advantage.placementsEnabled} onChange={(placementsEnabled) => patchAdvantage({ placementsEnabled, ...(placementsEnabled ? { limitedSpendEnabled: false } : {}) })} />
           {!adConfig.advantage.placementsEnabled && (
             <AdvantageToggle

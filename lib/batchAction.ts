@@ -16,8 +16,8 @@ export interface BatchActionAllocation {
 export const BATCH_ACTION_STORAGE_VERSION = 1 as const;
 export const BATCH_ACTION_STORAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export function batchActionStorageKey(kind: BatchActionKind): string {
-  return `postflow_batch_action_v1_${kind}`;
+export function batchActionStorageKey(kind: BatchActionKind, existing = false): string {
+  return `postflow_batch_action_v1_${kind}${existing ? "_existing" : ""}`;
 }
 
 export function weightTotal(rows: readonly WeightedDestination[]): number {
@@ -88,8 +88,8 @@ export interface StorageLike {
   removeItem(key: string): void;
 }
 
-export function readLastBatchAction<T>(storage: StorageLike, kind: BatchActionKind, now = Date.now()): T | null {
-  const key = batchActionStorageKey(kind);
+export function readLastBatchAction<T>(storage: StorageLike, kind: BatchActionKind, now = Date.now(), existing = false): T | null {
+  const key = batchActionStorageKey(kind, existing);
   const raw = storage.getItem(key);
   if (!raw) return null;
   try {
@@ -105,8 +105,8 @@ export function readLastBatchAction<T>(storage: StorageLike, kind: BatchActionKi
   }
 }
 
-export function writeLastBatchAction<T>(storage: StorageLike, kind: BatchActionKind, config: T, now = Date.now()): void {
-  storage.setItem(batchActionStorageKey(kind), JSON.stringify({
+export function writeLastBatchAction<T>(storage: StorageLike, kind: BatchActionKind, config: T, now = Date.now(), existing = false): void {
+  storage.setItem(batchActionStorageKey(kind, existing), JSON.stringify({
     version: BATCH_ACTION_STORAGE_VERSION,
     updatedAt: now,
     config,

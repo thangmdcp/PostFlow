@@ -40,6 +40,7 @@ import type { PublishTarget } from "@/lib/publishTargets";
 import { currencyMajorInputStep, formatMajorCurrency, randomMajorStep } from "@/lib/adMoney";
 import { PlatformPublishStatus } from "@/components/PlatformPublishStatus";
 import { DEFAULT_BATCH_ADVANTAGE, parseBatchAdvantageConfig, parseStoredBatchAdvantage } from "@/lib/adAdvantage";
+import { DEFAULT_AUDIENCE_SUGGESTIONS, storedAudienceSuggestions } from "@/lib/adAudience";
 
 type PostWithLinks = Post & { extractedLinks: ExtractedLink[]; comments: PostComment[] };
 
@@ -48,6 +49,7 @@ const EMPTY_AD_CONFIG: BatchAdConfig = {
   ageMinFrom: "18", ageMinTo: "25", ageMaxFrom: "45", ageMaxTo: "65", gender: "",
   budgetMin: "", budgetMax: "", budgetStep: "", adStatus: "PAUSED", ctaType: "LEARN_MORE", ctaScope: "AD_ONLY",
   advantage: { ...DEFAULT_BATCH_ADVANTAGE },
+  audienceSuggestions: DEFAULT_AUDIENCE_SUGGESTIONS,
 };
 
 // Same "Cài đặt Ads" server config (/api/app-config, batch* + comment* keys) that
@@ -70,6 +72,7 @@ function buildAdConfigFromCfg(cfg: Record<string, string>, tpl?: CampaignTemplat
     ctaType: (cfg.batchCtaType as BatchAdConfig["ctaType"]) ?? EMPTY_AD_CONFIG.ctaType,
     ctaScope: (cfg.batchCtaScope as BatchAdConfig["ctaScope"]) ?? EMPTY_AD_CONFIG.ctaScope,
     advantage: parseStoredBatchAdvantage(cfg.batchAdvantageConfig, DEFAULT_BATCH_ADVANTAGE),
+    audienceSuggestions: storedAudienceSuggestions(cfg.batchAudienceSuggestions),
   };
 }
 
@@ -258,6 +261,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
           batchCtaType: drawerAdConfig.ctaType,
           batchCtaScope: drawerAdConfig.ctaScope,
           batchAdvantageConfig: JSON.stringify(drawerAdConfig.advantage),
+          batchAudienceSuggestions: JSON.stringify(drawerAdConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS),
           batchDefaultPageIds: JSON.stringify(selectedPageIds),
           commentEnabled: String(drawerCommentEnabled), commentUseCaption: String(drawerCommentUseCaption),
           commentCaptionAttachImage: String(drawerCommentCaptionAttachImage),
@@ -299,6 +303,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
               adCtaType: drawerAdConfig.ctaType,
               adCtaScope: drawerAdConfig.ctaScope,
               adAdvantage: drawerAdConfig.advantage,
+              adAudienceSuggestions: drawerAdConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
               adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
             } : {}),
             ...(comments.length ? { comments } : {}),
@@ -342,6 +347,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
       ...(patch.ctaType !== undefined ? { batchCtaType: patch.ctaType } : {}),
       ...(patch.ctaScope !== undefined ? { batchCtaScope: patch.ctaScope } : {}),
       ...(patch.advantage !== undefined ? { batchAdvantageConfig: JSON.stringify(patch.advantage) } : {}),
+      ...(patch.audienceSuggestions !== undefined ? { batchAudienceSuggestions: JSON.stringify(patch.audienceSuggestions) } : {}),
     });
   }
   // Adding/removing a row re-splits % evenly across all rows (1→100%,
@@ -422,6 +428,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
       batchCtaType: drawerAdConfig.ctaType,
       batchCtaScope: drawerAdConfig.ctaScope,
       batchAdvantageConfig: drawerAdConfig.advantage,
+      batchAudienceSuggestions: drawerAdConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
       commentEnabled: drawerCommentEnabled, commentUseCaption: drawerCommentUseCaption,
       commentCaptionAttachImage: drawerCommentCaptionAttachImage, commentCaptionImageUrls: drawerCommentCaptionImageUrls,
       commentCustomEntries: drawerCommentEntries, commentSharedImageUrls: drawerCommentSharedImageUrls,
@@ -460,6 +467,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
       ...(d.batchCtaType ? { ctaType: d.batchCtaType } : {}),
       ...(d.batchCtaScope ? { ctaScope: d.batchCtaScope } : {}),
       ...(d.batchAdvantageConfig ? { advantage: parseBatchAdvantageConfig(d.batchAdvantageConfig) } : {}),
+      audienceSuggestions: storedAudienceSuggestions(d.batchAudienceSuggestions),
     });
   }
 
@@ -540,6 +548,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
               adCtaType: drawerAdConfig.ctaType,
               adCtaScope: drawerAdConfig.ctaScope,
               adAdvantage: drawerAdConfig.advantage,
+              adAudienceSuggestions: drawerAdConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
               adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
               comments: comments.length ? comments : undefined,
               storyEnabled: drawerStoryEnabled, storyCount: Number(drawerStoryCount) || 0,
@@ -564,6 +573,7 @@ export function DashboardClient({ initialDashboard, connections, adAccounts }: P
                 templateCampaignId: drawerAdConfig.templateId,
                 adAccountId: accountId,
                 budget: { amount: String(budget), currency: row?.budgetCurrency }, ageMin, ageMax, gender: drawerAdConfig.gender, adStatus: drawerAdConfig.adStatus, adCtaType: drawerAdConfig.ctaType, adCtaScope: drawerAdConfig.ctaScope, adAdvantage: drawerAdConfig.advantage,
+                adAudienceSuggestions: drawerAdConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS,
                 adPlacements: drawerAdConfig.advantage.placementsEnabled ? undefined : drawerAdConfig.placements,
               }),
             });

@@ -7,6 +7,7 @@ import * as campaignSource from "../lib/campaignSource.ts";
 import { existingAdsTimes } from "../lib/existingAdsPlan.ts";
 import * as batchAction from "../lib/batchAction.ts";
 import * as adMoney from "../lib/adMoney.ts";
+import * as adAudience from "../lib/adAudience.ts";
 import { AdSourceNotReadyError, facebookObjectStoryIdCandidate, facebookPromotableStoryId } from "../lib/adSourceReadiness.ts";
 import { sanitizeMetaTargeting } from "../lib/instagramAds.ts";
 
@@ -166,6 +167,7 @@ test("twenty-post action freezes account/currency/budget once and does not re-ro
       checks.push({ accountId, ...budget }); const currency = accountId === "act_1" ? "VND" : "USD";
       assert.equal(budget.currency, currency); return { account: { currency }, amountMajor: budget.amount, amountMinor: adMoney.majorToMinor(budget.amount, currency), currency };
     } }, "@/lib/adAdvantageServer": { resolvePostAdAdvantage: async () => ({ audienceEnabled: false, placementsEnabled: true }) },
+    "@/lib/adAudienceServer": { resolvePostAdAudience: async () => null }, "@/lib/adAudience": adAudience,
     "@/lib/adPlacements": { parseAdPlacementConfig: () => null }, "@/lib/adPermissionPreflight": { preflightPostAdPermission: async () => {} }, "@/lib/adMoney": adMoney,
     "@/lib/adSettings": { randomInteger: min => min }, "@/lib/cloudflareQueue": {},
     "@/lib/adBudgetPolicy": { validateMinorBudgetForAccount: ({ account, currency, amountMinor }) => {
@@ -242,9 +244,10 @@ test("cancel clears only unstarted paid work and leaves immutable source and exi
     const eligible = posts.filter(p => where.id.in.includes(p.id) && where.adStatus.in.includes(p.adStatus) && !p.adCampaignId && !p.adCreativeId);
     eligible.forEach(p => Object.assign(p, data)); return { count: eligible.length };
   } } };
-  const api = guardedModule("lib/existingPostAds.ts", prisma, { "@/lib/campaignSource": campaignSource });
+  const api = guardedModule("lib/existingPostAds.ts", prisma, { "@/lib/campaignSource": campaignSource, "@prisma/client": { Prisma: { DbNull: null } } });
   assert.equal(await api.cancelExistingAds(["a", "b", "c"]), 1);
   assert.equal(posts[0].adStatus, null); assert.equal(posts[0].fbPostId, "123_456"); assert.equal(posts[0].adSourceSnapshot.storyId, "123_456");
+  assert.equal(posts[0].adAudienceSnapshot, null);
   assert.equal(posts[1].adStatus, "creating"); assert.equal(posts[2].adCreativeId, "new-creative");
 });
 

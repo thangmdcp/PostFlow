@@ -13,6 +13,8 @@ import type { BatchAdvantageConfig } from "@/lib/adAdvantage";
 import { resolvePostAdAdvantage } from "@/lib/adAdvantageServer";
 import { AdTemplateConfigurationError } from "@/lib/facebook";
 import { ensureSponsoredContentHashtag } from "@/lib/sponsoredContent";
+import { resolvePostAdAudience } from "@/lib/adAudienceServer";
+import { AdAudienceConfigurationError } from "@/lib/adAudience";
 
 type QueuePublishBody = {
   pageId: string;
@@ -33,6 +35,7 @@ type QueuePublishBody = {
   adCtaType?: AdCtaType;
   adCtaScope?: AdCtaScope;
   adAdvantage?: BatchAdvantageConfig;
+  adAudienceSuggestions?: unknown;
 };
 
 // The browser only records the user's choices and asks the trusted Vercel
@@ -90,6 +93,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     });
     if (body.templateId && ctaScope.error) return NextResponse.json({ error: ctaScope.error }, { status: 400 });
     const advantageSnapshot = await resolvePostAdAdvantage(body.templateId, body.adAccountId, body.adAdvantage);
+    const audienceSnapshot = await resolvePostAdAudience(body.templateId, body.adAccountId, body.adAudienceSuggestions, advantageSnapshot?.audienceEnabled===true, body.ageMinFrom!==undefined?Number(body.ageMinFrom):undefined);
     const parsedPlacements = body.templateId && !advantageSnapshot?.placementsEnabled ? parseAdPlacementConfig(body.adPlacements) : null;
     if (body.templateId && !advantageSnapshot?.placementsEnabled) {
       const placementError = validateAdPlacements(parsedPlacements, {
@@ -132,6 +136,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         adTemplateId: body.templateId ?? null,
         adPlacementConfig: parsedPlacements ? parsedPlacements as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         adAdvantageConfig: advantageSnapshot ? advantageSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
+        adAudienceSnapshot: audienceSnapshot ? audienceSnapshot as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         ...(body.ctaHeadline ? { ctaHeadline: body.ctaHeadline } : {}),
         ...(body.adStatus ? { adPublishStatus: body.adStatus } : {}),
         ...(body.ageMinFrom !== undefined ? { adAgeMin: Number(body.ageMinFrom) } : {}),
@@ -168,7 +173,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     console.error("POST /api/posts/[id]/queue-publish error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Không thể xếp hàng đăng bài", ...(error instanceof BudgetPolicyError ? { code: error.code } : {}) },
-      { status: error instanceof BudgetPolicyError ? error.status : error instanceof AdTemplateConfigurationError ? 400 : 500 },
+      { status: error instanceof BudgetPolicyError ? error.status : error instanceof AdTemplateConfigurationError || error instanceof AdAudienceConfigurationError ? 400 : 500 },
     );
   }
 }

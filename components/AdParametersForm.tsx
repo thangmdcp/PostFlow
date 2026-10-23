@@ -36,10 +36,10 @@ export function AdParametersForm({
       {/* Age */}
       <div className="space-y-1.5">
         <div className="flex items-center gap-1 min-w-0">
-          <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">Tuổi min</span>
-          <input type="number" value={ageMinFrom} min={13} max={65} onChange={e => onAgeMinFromChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
+          <span className="text-[10px] text-slate-400 shrink-0 w-[60px]">{advantageAudience ? "Min bắt buộc" : "Tuổi min"}</span>
+          <input type="number" value={ageMinFrom} min={advantageAudience ? 18 : 13} max={advantageAudience ? 25 : 65} onChange={e => onAgeMinFromChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
           <span className="text-slate-300 text-[10px] shrink-0">–</span>
-          <input type="number" value={ageMinTo} min={13} max={65} onChange={e => onAgeMinToChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
+          <input type="number" value={ageMinTo} min={advantageAudience ? 18 : 13} max={advantageAudience ? 25 : 65} onChange={e => onAgeMinToChange(e.target.value)} className={inp + " w-0 flex-1 text-center"} />
         </div>
         {advantageAudience ? (
           <div className="flex items-center gap-1 min-w-0">

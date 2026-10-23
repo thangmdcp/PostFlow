@@ -54,3 +54,11 @@ test("last action config is versioned and expires", () => {
   assert.equal(readLastBatchAction(storage, "schedule", BATCH_ACTION_STORAGE_TTL_MS + 1001), null);
   assert.equal(storage.getItem(batchActionStorageKey("schedule")), null);
 });
+test("existing-post drafts survive F5 without overwriting organic-action settings", () => {
+  const storage = memoryStorage();
+  writeLastBatchAction(storage,"prepare",{adConfig:{audienceSuggestions:{mode:"none"}}},1000);
+  const value={adConfig:{audienceSuggestions:{mode:"custom",gender:"2",ageRange:[25,45],customAudiencesByAccount:{act_1:[{id:"99",name:"shared"}]}}}};
+  writeLastBatchAction(storage,"prepare",value,1000,true);
+  assert.deepEqual(readLastBatchAction(storage,"prepare",2000,true),value);
+  assert.equal(readLastBatchAction(storage,"prepare",2000).adConfig.audienceSuggestions.mode,"none");
+});

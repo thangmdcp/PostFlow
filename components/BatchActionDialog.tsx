@@ -29,6 +29,7 @@ import { templatePortability } from "@/lib/adTemplateBlueprint";
 import { EMPTY_AD_PLACEMENTS, parseAdPlacementConfig, validateAdPlacements } from "@/lib/adPlacements";
 import { currencyMajorInputStep } from "@/lib/adMoney";
 import { parseBatchAdvantageConfig } from "@/lib/adAdvantage";
+import { DEFAULT_AUDIENCE_SUGGESTIONS, parseAudienceSuggestions, storedAudienceSuggestions, validateAudienceMinimum } from "@/lib/adAudience";
 import { facebookPostCtaEligibility } from "@/lib/adCta";
 
 export interface BatchPageRow {
@@ -98,6 +99,7 @@ function mergeSaved(defaults: BatchActionConfig, saved: Partial<BatchActionConfi
       ...(saved.adConfig ?? {}),
       placements: parseAdPlacementConfig(saved.adConfig?.placements) ?? defaults.adConfig.placements ?? EMPTY_AD_PLACEMENTS,
       advantage: parseBatchAdvantageConfig(saved.adConfig?.advantage ?? defaults.adConfig.advantage),
+      audienceSuggestions: storedAudienceSuggestions(saved.adConfig?.audienceSuggestions ?? defaults.adConfig.audienceSuggestions),
     },
     accountRows: Array.isArray(saved.accountRows) ? saved.accountRows : defaults.accountRows,
     engagement: { ...defaults.engagement, ...(saved.engagement ?? {}) },
@@ -143,8 +145,7 @@ function quickScheduleTime(kind: "now" | "midnight") {
 export function BatchActionDialog({ kind, count, connections, templates, adAccounts, defaults, onClose, onConfirm, existingSources }: Props) {
   const [storedConfig, setConfig] = useState<BatchActionConfig>(() => {
     if (typeof window === "undefined") return cloneConfig(defaults);
-    if (existingSources) return cloneConfig(defaults);
-    const saved = readLastBatchAction<Partial<BatchActionConfig>>(localStorage, kind);
+    const saved = readLastBatchAction<Partial<BatchActionConfig>>(localStorage, kind, Date.now(), !!existingSources);
     const merged = mergeSaved(defaults, saved);
     if (kind === "prepare") merged.runMode = "publish_and_ads";
     return merged;
@@ -198,22 +199,20 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
   }, [adAccounts, templates]);
 
   useEffect(() => {
-    if (existingSources) return;
     if (skipNextStorageWrite.current) {
       skipNextStorageWrite.current = false;
       return;
     }
     try {
       const updatedAt = Math.max(Date.now(), latestStorageTimestamp.current + 1);
-      writeLastBatchAction(localStorage, kind, config, updatedAt);
+      writeLastBatchAction(localStorage, kind, config, updatedAt, !!existingSources);
       latestStorageTimestamp.current = updatedAt;
     } catch { /* storage unavailable */ }
   }, [kind, config]);
 
   useEffect(() => {
-    if (existingSources) return;
     const handler = (event: StorageEvent) => {
-      if (event.storageArea !== localStorage || event.key !== batchActionStorageKey(kind) || !event.newValue) return;
+      if (event.storageArea !== localStorage || event.key !== batchActionStorageKey(kind, !!existingSources) || !event.newValue) return;
       try {
         const value = JSON.parse(event.newValue) as { updatedAt?: number; config?: Partial<BatchActionConfig> };
         if (typeof value.updatedAt !== "number" || value.updatedAt <= latestStorageTimestamp.current || !value.config) return;
@@ -335,6 +334,7 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
         ageMaxTo: String(legacy.batchAgeMaxTo ?? current.adConfig.ageMaxTo),
         gender: String(legacy.batchGender ?? current.adConfig.gender),
         adStatus: (legacy.adStatus as "ACTIVE" | "PAUSED") ?? current.adConfig.adStatus,
+        audienceSuggestions: storedAudienceSuggestions(legacy.batchAudienceSuggestions),
       },
     }));
   }
@@ -363,7 +363,14 @@ export function BatchActionDialog({ kind, count, connections, templates, adAccou
     if (runsAds && new Set(config.accountRows.map((row) => row.accountId)).size !== config.accountRows.length) return "Mỗi TKQC chỉ được chọn một lần.";
     if (runsAds && config.accountRows.some((row) => !row.budgetCurrency)) return "Mỗi TKQC phải xác nhận currency và trần ngân sách trước.";
     if (runsAds && config.accountRows.some((row) => Number(row.budgetMin) <= 0 || Number(row.budgetMax) < Number(row.budgetMin) || Number(row.budgetStep) <= 0)) return "Kiểm tra lại dải ngân sách của TKQC.";
-    if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom))) return "Kiểm tra lại dải độ tuổi Ads.";
+    if (runsAds && (Number(config.adConfig.ageMinFrom) < 13 || Number(config.adConfig.ageMinTo) < Number(config.adConfig.ageMinFrom) || (!config.adConfig.advantage.audienceEnabled && Number(config.adConfig.ageMaxTo) < Number(config.adConfig.ageMaxFrom)))) return "Kiểm tra lại dải độ tuổi Ads.";
+    if (runsAds && config.adConfig.advantage.audienceEnabled) {
+      try {
+        validateAudienceMinimum(Number(config.adConfig.ageMinFrom));
+        validateAudienceMinimum(Number(config.adConfig.ageMinTo));
+        parseAudienceSuggestions(config.adConfig.audienceSuggestions ?? DEFAULT_AUDIENCE_SUGGESTIONS);
+      } catch (error) { return error instanceof Error ? error.message : "Gợi ý đối tượng không hợp lệ."; }
+    }
     if (runsAds && !config.adConfig.advantage.placementsEnabled) {
       const placementError = validateAdPlacements(config.adConfig.placements, { instagramOnly: instagramOnlyAds, hasInstagram: selectedPagesHaveInstagram });
       if (placementError) return placementError;

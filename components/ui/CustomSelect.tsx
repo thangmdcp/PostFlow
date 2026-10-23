@@ -15,9 +15,12 @@ interface CustomSelectProps {
   className?: string;
   disabled?: boolean;
   ariaLabel?: string;
+  onSearchChange?: (query: string) => void;
+  loading?: boolean;
+  onLoadMore?: () => void;
 }
 
-export function CustomSelect({ value, onChange, options, placeholder = "-- Chọn --", className, disabled, ariaLabel }: CustomSelectProps) {
+export function CustomSelect({ value, onChange, options, placeholder = "-- Chọn --", className, disabled, ariaLabel, onSearchChange, loading, onLoadMore }: CustomSelectProps) {
   const menuId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -27,11 +30,16 @@ export function CustomSelect({ value, onChange, options, placeholder = "-- Chọ
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const selected = options.find((option) => option.value === value);
-  const searchable = options.length > 8;
+  const searchable = !!onSearchChange || options.length > 8;
   const filtered = useMemo(() => {
     const term = query.trim().toLocaleLowerCase("vi");
-    return term ? options.filter((option) => option.label.toLocaleLowerCase("vi").includes(term)) : options;
-  }, [options, query]);
+    return term && !onSearchChange ? options.filter((option) => option.label.toLocaleLowerCase("vi").includes(term)) : options;
+  }, [options, query, onSearchChange]);
+  const searchCallback=useRef(onSearchChange);
+  searchCallback.current=onSearchChange;
+  useEffect(()=>{if(open){setQuery("");searchCallback.current?.("");}},[open]);
+  useEffect(()=>{if(disabled)setOpen(false);},[disabled]);
+  useEffect(()=>{setActive(current=>Math.max(0,Math.min(current,filtered.length-1)));},[filtered.length]);
 
   function place() {
     const element = triggerRef.current;
@@ -51,7 +59,6 @@ export function CustomSelect({ value, onChange, options, placeholder = "-- Chọ
   useEffect(() => {
     if (!open) return;
     place();
-    setQuery("");
     setActive(Math.max(0, options.findIndex((option) => option.value === value)));
     const closeOutside = (event: MouseEvent) => {
       const node = event.target as Node;
@@ -68,7 +75,7 @@ export function CustomSelect({ value, onChange, options, placeholder = "-- Chọ
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [open, options, searchable, value]);
+  }, [open, searchable, value]);
 
   function choose(option: SelectOption) {
     if (option.disabled) return;
@@ -93,9 +100,11 @@ export function CustomSelect({ value, onChange, options, placeholder = "-- Chọ
 
   const menu = open && typeof document !== "undefined" ? createPortal(
     <div id={menuId} ref={menuRef} role="listbox" aria-label={ariaLabel} tabIndex={-1} onKeyDown={onKeyDown} className="fixed z-[200] overflow-hidden rounded-xl border bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" style={{ left: position.left, top: position.above ? undefined : position.top, bottom: position.above ? window.innerHeight - position.top : undefined, width: position.width, maxHeight: position.maxHeight }}>
-      {searchable && <div className="sticky top-0 border-b bg-white p-2 dark:border-slate-700 dark:bg-slate-900"><div className="flex items-center gap-2 rounded-lg border bg-slate-50 px-2.5 dark:bg-slate-800"><Search size={13} className="text-slate-400" /><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} onKeyDown={onKeyDown} placeholder="Tìm kiếm..." className="min-w-0 flex-1 bg-transparent py-2 text-xs outline-none" /></div></div>}
+      {searchable && <div className="sticky top-0 border-b bg-white p-2 dark:border-slate-700 dark:bg-slate-900"><div className="flex items-center gap-2 rounded-lg border bg-slate-50 px-2.5 dark:bg-slate-800"><Search size={13} className="text-slate-400" /><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); onSearchChange?.(event.target.value); }} onKeyDown={onKeyDown} placeholder="Tìm kiếm..." className="min-w-0 flex-1 bg-transparent py-2 text-xs outline-none" /></div></div>}
       <div className="overscroll-contain p-1" style={{ maxHeight: position.maxHeight - (searchable ? 53 : 0), overflowY: "auto" }}>
         {filtered.length ? filtered.map((option, index) => <button key={option.value} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${option.disabled ? "cursor-not-allowed text-slate-300 dark:text-slate-600" : index === active ? "bg-slate-100 dark:bg-slate-800" : "text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"} ${option.value === value ? "font-semibold text-blue-700 dark:text-blue-300" : ""}`}><Check size={12} className={option.value === value ? "text-blue-600" : "invisible"} />{option.pageAvatar && <PageAvatar page={option.pageAvatar} className="h-6 w-6" />}<span className="truncate">{option.label}</span></button>) : <p className="px-3 py-5 text-center text-xs text-slate-400">Không tìm thấy</p>}
+        {loading && <p className="px-3 py-2 text-xs text-slate-400" role="status">Đang tải…</p>}
+        {onLoadMore && <button type="button" disabled={loading} onClick={onLoadMore} className="w-full px-3 py-2 text-xs text-blue-600 disabled:opacity-50">Tải thêm</button>}
       </div>
     </div>, document.body
   ) : null;
